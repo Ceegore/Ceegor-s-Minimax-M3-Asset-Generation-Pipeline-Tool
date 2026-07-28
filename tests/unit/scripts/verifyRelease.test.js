@@ -7,7 +7,7 @@ const os = require('node:os');
 const path = require('node:path');
 const test = require('node:test');
 
-const { archiveFiles, releasePaths, validateArchiveSequence } = require('../../../scripts/releaseArtifacts');
+const { archiveFiles, infoFor, releasePaths, validateArchiveSequence } = require('../../../scripts/releaseArtifacts');
 const { evaluate } = require('../../../scripts/verify-release');
 
 function fixtureRoot() {
@@ -174,12 +174,34 @@ test('evaluate PASSES on a complete, consistent single-archive release', () => {
     fs.mkdirSync(paths.output, { recursive: true });
     makeExe(root);
     makeRealZip(paths.archive);
+    const easyInstaller = path.join(paths.output, 'Install MiniMax Asset Tool.cmd');
+    fs.writeFileSync(easyInstaller, '@echo off\r\n', 'utf8');
+    fs.writeFileSync(paths.manifest, `${infoFor(easyInstaller).sha256}  ${path.basename(easyInstaller)}\n`, 'utf8');
     // QA-025: provenance is now required.
     fs.writeFileSync(paths.provenance, JSON.stringify({
       version: '9.8.7', electronVersion: '99.0.0', asarSha256: null,
+      commit: '0123456789ab', commitDirty: false,
     }), 'utf8');
     const report = evaluate(root, { requireArchive: true });
     assert.equal(report.errors.length, 0, 'errors: ' + report.errors.join('; '));
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('evaluate FAILS when provenance records a dirty Git tree', () => {
+  const root = fixtureRoot();
+  try {
+    const paths = releasePaths(root);
+    fs.mkdirSync(paths.output, { recursive: true });
+    makeExe(root);
+    makeRealZip(paths.archive);
+    fs.writeFileSync(paths.provenance, JSON.stringify({
+      version: '9.8.7', electronVersion: '99.0.0', asarSha256: null,
+      commit: '0123456789ab', commitDirty: true,
+    }), 'utf8');
+    const report = evaluate(root, { requireArchive: true });
+    assert.match(report.errors.join(' '), /dirty/i);
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }

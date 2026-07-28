@@ -1,6 +1,6 @@
 # Architecture
 
-> **Release version:** v1.0.1. `package.json` is the sole release-version
+> **Release version:** v1.0.0. `package.json` is the sole release-version
 > source of truth. The historical phase label below is not an artifact version.
 
 > **Stand:** v1.2.0+ (Atomic-Architecture-Refactoring abgeschlossen, Phase 0–7).
@@ -12,7 +12,7 @@ A short tour of the codebase. The whole project is small enough to read end-to-e
 
 ## Process model
 
-The app is a standard Electron 32 setup with two processes. Both processes
+The app is a standard Electron 43 setup with two processes. Both processes
 now have an **Atomic Architecture** — small, single-purpose modules in
 strict DAG order (no cross-tier imports, no `Manager` / `Controller` files).
 

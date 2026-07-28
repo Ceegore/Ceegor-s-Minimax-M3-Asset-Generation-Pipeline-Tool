@@ -19,7 +19,7 @@ function releasePaths(root, pkg = readPackage(root)) {
     baseName,
     executable: path.join(output, 'win-unpacked', `${productName}.exe`),
     archive: path.join(output, `${baseName}.zip`),
-    manifest: path.join(output, `${baseName}.sha256`),
+    manifest: path.join(output, `${baseName}.zip.sha256`),
     provenance: path.join(output, `${baseName}.provenance.json`),
   };
 }

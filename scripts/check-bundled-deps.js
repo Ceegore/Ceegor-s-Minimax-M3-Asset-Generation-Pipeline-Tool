@@ -20,8 +20,11 @@
 
 const fs = require('fs');
 const path = require('path');
+const { verifyRuntimeAssets } = require('./lib/runtimeAssets');
 
 const ROOT = path.resolve(__dirname, '..');
+const releaseArg = process.argv.find((arg) => arg.startsWith('--release-dir='));
+const RELEASE_DIR = releaseArg ? path.resolve(releaseArg.slice('--release-dir='.length)) : null;
 
 function log(m) { process.stdout.write(`[check-bundled-deps] ${m}\n`); }
 
@@ -53,40 +56,27 @@ function checkDependencies() {
 
 function checkBinaries() {
   const binDir = path.join(ROOT, 'bin');
-  const requiredBins = [
-    // QA-030 fix: populate with known required binaries so the check
-    // actually catches missing executables.
-    'realesrgan-ncnn-vulkan.exe',
-  ];
 
   if (!fs.existsSync(binDir)) {
-    log('WARN: bin/ directory not found (optional for dev builds)');
-    return true; // bin/ is optional in dev
+    log('WARN: bin/ directory not found; CI may omit the 2.5 GiB release payload');
+    return true;
   }
 
-  const missing = [];
-  for (const bin of requiredBins) {
-    if (!fs.existsSync(path.join(binDir, bin))) {
-      missing.push(bin);
-    }
+  const result = verifyRuntimeAssets(binDir);
+  if (!result.ok) {
+    log(`FAIL: ${result.issues.length} offline runtime issue(s):`);
+    for (const issue of result.issues) log(`  - ${issue}`);
+    return false;
   }
-
-  if (missing.length > 0) {
-    log(`FAIL: ${missing.length} binaries missing from bin/:`);
-    for (const m of missing) log(`  - ${m}`);
-  } else {
-    log('All required binaries present');
-  }
-
-  // QA-030 fix: missing required binaries is a failure, not a warning.
-  return missing.length === 0;
+  log(`All ${result.count} offline runtime assets match the release manifest`);
+  return true;
 }
 
 function checkNativeModules() {
   const nativeModules = [
     { name: 'sharp', check: 'lib/index.js' },
     { name: 'ffmpeg-static', check: 'ffmpeg.exe' },
-    { name: 'onnxruntime-node', check: 'bin/napi-v3/win32/x64/onnxruntime_binding.node' },
+    { name: 'onnxruntime-node', check: 'bin/napi-v6/win32/x64/onnxruntime_binding.node' },
   ];
 
   const nmDir = path.join(ROOT, 'node_modules');
@@ -132,10 +122,10 @@ function checkNativeModules() {
   return issues.length === 0;
 }
 
-function checkAsarContents() {
+function checkAsarContents(releaseDir = path.join(ROOT, 'dist-out', 'win-unpacked')) {
   // If an asar exists, verify it contains the expected files.
   const asarPaths = [
-    path.join(ROOT, 'dist-out', 'win-unpacked', 'resources', 'app.asar'),
+    path.join(releaseDir, 'resources', 'app.asar'),
   ];
 
   for (const asarPath of asarPaths) {
@@ -148,7 +138,18 @@ function checkAsarContents() {
       const asar = require('@electron/asar');
       const files = asar.listPackage(asarPath);
 
-      const required = ['main.js', 'preload.js', 'package.json', 'main/index.js', 'renderer/index.html', 'IMAGE_STYLE_PRESETS_ENGLISH_v2.0.md'];
+      const required = [
+        'main.js',
+        'preload.js',
+        'package.json',
+        'main/index.js',
+        'renderer/index.html',
+        'IMAGE_STYLE_PRESETS_ENGLISH_v2.0.md',
+        'node_modules/mmx-cli/dist/mmx.mjs',
+        'node_modules/ffmpeg-static/index.js',
+        'node_modules/onnxruntime-node/dist/index.js',
+        'node_modules/sharp/dist/index.cjs',
+      ];
       // asar.listPackage returns paths with leading / or \ depending on OS.
       const normalized = files.map(f => f.replace(/^[\/\\]/, '').replace(/\\/g, '/'));
       const missing = required.filter(f => !normalized.includes(f));
@@ -169,6 +170,62 @@ function checkAsarContents() {
   return true;
 }
 
+function findFile(directory, fileName) {
+  let entries;
+  try { entries = fs.readdirSync(directory, { withFileTypes: true }); } catch (_) { return false; }
+  for (const entry of entries) {
+    const filePath = path.join(directory, entry.name);
+    if (entry.isFile() && (fileName instanceof RegExp ? fileName.test(entry.name) : entry.name.toLowerCase() === fileName.toLowerCase())) return true;
+    if (entry.isDirectory() && findFile(filePath, fileName)) return true;
+  }
+  return false;
+}
+
+function checkReleaseDirectory(releaseDir) {
+  if (!releaseDir) return true;
+  log(`Checking exact release directory: ${releaseDir}`);
+  const required = [
+    'MiniMaxAssetTool.exe',
+    'START HERE.txt',
+    'Install MiniMax Asset Tool.cmd',
+    'README.md',
+    'LICENSE',
+    'THIRD_PARTY_NOTICES.md',
+    'OFFLINE_RUNTIME_MANIFEST.json',
+    path.join('resources', 'app.asar'),
+  ];
+  const issues = required.filter((item) => !fs.existsSync(path.join(releaseDir, item)))
+    .map((item) => `${item}: missing`);
+
+  const runtime = verifyRuntimeAssets(path.join(releaseDir, 'resources', 'bin'));
+  issues.push(...runtime.issues.map((issue) => `resources/bin/${issue}`));
+
+  const unpacked = path.join(releaseDir, 'resources', 'app.asar.unpacked');
+  const nativeFiles = [
+    ['ffmpeg.exe', 'ffmpeg.exe'],
+    ['onnxruntime_binding.node', 'onnxruntime_binding.node'],
+    ['onnxruntime.dll', 'onnxruntime.dll'],
+    ['Sharp native binding', /^sharp-win32-x64(?:-[0-9.]+)?\.node$/i],
+    ['libvips-42.dll', 'libvips-42.dll'],
+  ];
+  for (const [label, match] of nativeFiles) {
+    if (!findFile(unpacked, match)) issues.push(`resources/app.asar.unpacked: ${label} missing`);
+  }
+
+  const foreignOnnx = path.join(unpacked, 'node_modules', 'onnxruntime-node', 'bin', 'napi-v6');
+  for (const foreignPath of ['darwin', 'linux', path.join('win32', 'arm64')]) {
+    if (fs.existsSync(path.join(foreignOnnx, foreignPath))) issues.push(`unused ONNX runtime shipped: ${foreignPath}`);
+  }
+
+  if (issues.length) {
+    log(`FAIL: ${issues.length} exact-release issue(s):`);
+    for (const issue of issues) log(`  - ${issue}`);
+    return false;
+  }
+  log(`Exact release contains all ${runtime.count} offline assets and required native modules`);
+  return true;
+}
+
 // Run all checks.
 function main() {
   log('Starting dependency completeness check...\n');
@@ -178,7 +235,8 @@ function main() {
   allPassed = checkDependencies() && allPassed;
   allPassed = checkBinaries() && allPassed;
   allPassed = checkNativeModules() && allPassed;
-  allPassed = checkAsarContents() && allPassed;
+  allPassed = checkAsarContents(RELEASE_DIR || undefined) && allPassed;
+  allPassed = checkReleaseDirectory(RELEASE_DIR) && allPassed;
 
   log('');
   if (allPassed) {

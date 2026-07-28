@@ -1,115 +1,133 @@
-// Preflight check for the bundled runtime. Run with `npm run check`.
-// It verifies the dependencies required by the default out-of-box path.
+// Strict preflight for a full offline Windows release. Run with `npm run check`.
+'use strict';
+
 const fs = require('fs');
 const path = require('path');
+const { spawnSync } = require('child_process');
+const { verifyRuntimeAssets } = require('./lib/runtimeAssets');
 
 const ROOT = path.resolve(__dirname, '..');
 const BIN = path.join(ROOT, 'bin');
-const MODELS = path.join(BIN, 'models');
 
-const checks = [
-  {
-    label: 'Real-ESRGAN binary (optional acceleration)',
-    path: path.join(BIN, process.platform === 'win32' ? 'realesrgan-ncnn-vulkan.exe' : 'realesrgan-ncnn-vulkan'),
-    optional: true,
-  },
-  {
-    label: 'Real-ESRGAN model: realesrgan-x4plus.param (optional acceleration)',
-    path: path.join(MODELS, 'realesrgan-x4plus.param'),
-    optional: true,
-  },
-  {
-    label: 'Real-ESRGAN model: realesrgan-x4plus.bin (optional acceleration)',
-    path: path.join(MODELS, 'realesrgan-x4plus.bin'),
-    optional: true,
-  },
-  {
-    label: 'IS-Net ONNX model: isnet-general-use.onnx',
-    path: path.join(MODELS, 'isnet-general-use.onnx'),
-    requiredMinBytes: 100 * 1024 * 1024,
-  },
-  {
-    label: 'npm dep: onnxruntime-node',
-    resolve: () => require.resolve('onnxruntime-node', { paths: [ROOT] }),
-  },
-  {
-    label: 'npm dep: sharp',
-    resolve: () => require.resolve('sharp', { paths: [ROOT] }),
-  },
+const requiredPackages = [
+  'ffmpeg-static',
+  'mmx-cli',
+  'onnxruntime-node',
+  'sharp',
 ];
 
-function inspect(check) {
-  try {
-    const filePath = check.resolve ? check.resolve() : check.path;
-    const stat = fs.statSync(filePath);
-    if (check.requiredMinBytes && stat.size < check.requiredMinBytes) {
-      return { ok: false, detail: `too small (${(stat.size / 1024 / 1024).toFixed(1)} MB)` };
-    }
-    return { ok: true, detail: check.resolve ? 'present' : `present (${(stat.size / 1024 / 1024).toFixed(1)} MB)` };
-  } catch (_) {
-    return { ok: false, detail: check.optional ? 'missing (optional)' : 'MISSING' };
-  }
-}
+console.log('Full offline release preflight');
+console.log('==============================');
 
 let requiredMissing = 0;
-let optionalMissing = 0;
-let leakedTemps = 0;
-console.log('Pre-release preflight check');
-console.log('===========================');
-for (const check of checks) {
-  const result = inspect(check);
-  console.log(`  ${result.ok ? 'OK' : (check.optional ? 'OPTIONAL' : 'MISSING')}  ${check.label}`);
-  console.log(`       ${result.detail}`);
-  if (!result.ok) {
-    if (check.optional) optionalMissing++;
-    else requiredMissing++;
+for (const packageName of requiredPackages) {
+  try {
+    const packagePath = path.join(ROOT, 'node_modules', ...packageName.split('/'), 'package.json');
+    if (!fs.statSync(packagePath).isFile()) throw new Error('not a file');
+    console.log(`  OK       npm runtime: ${packageName}`);
+  } catch (_) {
+    console.log(`  MISSING  npm runtime: ${packageName}`);
+    requiredMissing++;
   }
 }
 
-// KGO7-017: orphaned download temps under bin/ are wasted disk AND would
-// be swept into a release archive. One measured leak was 161 MB and every
-// gate stayed green with it present.
-{
-  const binDir = path.join(__dirname, '..', 'bin');
-  const leaks = [];
-  const walkBin = (d) => {
-    let entries;
-    try { entries = fs.readdirSync(d, { withFileTypes: true }); } catch (_) { return; }
-    for (const e of entries) {
-      const p = path.join(d, e.name);
-      if (e.isDirectory()) { walkBin(p); continue; }
-      if (/\.tmp-|\.partial$|\.download$/i.test(e.name)) {
-        let size = 0;
-        try { size = fs.statSync(p).size; } catch (_) {}
-        leaks.push({ p, size });
-      }
-    }
-  };
-  walkBin(binDir);
-  if (leaks.length) {
-    const totalMB = leaks.reduce((a, l) => a + l.size, 0) / 1048576;
-    console.log('');
-    console.log(`  LEAK  ${leaks.length} orphaned temp file(s) under bin/ (${totalMB.toFixed(1)} MB)`);
-    for (const l of leaks) {
-      console.log(`       ${path.relative(path.join(__dirname, '..'), l.p)}  (${(l.size / 1048576).toFixed(1)} MB)`);
-    }
-    console.log('       These are aborted model downloads. Delete them before building.');
-    leakedTemps = leaks.length;
+if (process.platform === 'win32') {
+  const probes = [
+    {
+      label: 'Sharp and ONNX Runtime native bindings',
+      run() {
+        const sharp = require('sharp');
+        const onnx = require('onnxruntime-node');
+        return typeof sharp === 'function' && typeof onnx.InferenceSession === 'function';
+      },
+    },
+    {
+      label: 'bundled MiniMax CLI',
+      run() {
+        const result = spawnSync(process.execPath, [path.join(ROOT, 'node_modules', 'mmx-cli', 'dist', 'mmx.mjs'), '--version'], { encoding: 'utf8', windowsHide: true });
+        return result.status === 0 && /mmx\s+\d+\.\d+\.\d+/i.test(result.stdout || '');
+      },
+    },
+    {
+      label: 'bundled FFmpeg',
+      run() {
+        const ffmpeg = require('ffmpeg-static');
+        const result = spawnSync(ffmpeg, ['-version'], { encoding: 'utf8', windowsHide: true });
+        return result.status === 0 && /ffmpeg version/i.test(result.stdout || '');
+      },
+    },
+    {
+      label: 'bundled Real-ESRGAN executable',
+      run() {
+        const executable = path.join(BIN, 'realesrgan-ncnn-vulkan.exe');
+        const result = spawnSync(executable, ['-h'], { encoding: 'utf8', windowsHide: true });
+        return /Usage:\s*realesrgan-ncnn-vulkan/i.test((result.stdout || '') + (result.stderr || ''));
+      },
+    },
+  ];
+
+  console.log('');
+  console.log('Loading and starting the bundled native tools...');
+  for (const probe of probes) {
+    let ok = false;
+    try { ok = probe.run(); } catch (_) {}
+    console.log(`  ${ok ? 'OK     ' : 'FAILED '}  ${probe.label}`);
+    if (!ok) requiredMissing++;
   }
+}
+
+let runtimeResult;
+try {
+  console.log('');
+  console.log('Checking every bundled model and native runtime by size and SHA-256...');
+  runtimeResult = verifyRuntimeAssets(BIN);
+  if (runtimeResult.ok) {
+    console.log(`  OK       ${runtimeResult.count} runtime assets (${(runtimeResult.totalBytes / 1073741824).toFixed(2)} GiB)`);
+  } else {
+    for (const issue of runtimeResult.issues) console.log(`  MISSING  ${issue}`);
+    requiredMissing += runtimeResult.issues.length;
+  }
+} catch (error) {
+  console.log(`  ERROR    ${error.message}`);
+  requiredMissing++;
+}
+
+// A hard process kill can leave large temporary downloads behind. They are
+// excluded from the curated release copy, but failing here keeps the local
+// runtime trustworthy and prevents unnoticed multi-gigabyte leaks.
+let leakedTemps = 0;
+const leaks = [];
+const walkBin = (directory) => {
+  let entries;
+  try { entries = fs.readdirSync(directory, { withFileTypes: true }); } catch (_) { return; }
+  for (const entry of entries) {
+    const filePath = path.join(directory, entry.name);
+    if (entry.isDirectory()) {
+      walkBin(filePath);
+    } else if (/\.tmp-|\.partial$|\.download$/i.test(entry.name)) {
+      let size = 0;
+      try { size = fs.statSync(filePath).size; } catch (_) {}
+      leaks.push({ filePath, size });
+    }
+  }
+};
+walkBin(BIN);
+if (leaks.length) {
+  console.log('');
+  console.log(`  LEAK     ${leaks.length} orphaned download file(s)`);
+  for (const leak of leaks) {
+    console.log(`           ${path.relative(ROOT, leak.filePath)} (${(leak.size / 1048576).toFixed(1)} MB)`);
+  }
+  leakedTemps = leaks.length;
 }
 
 console.log('');
-if (leakedTemps > 0) {
-  console.log(`${leakedTemps} orphaned temp file(s) under bin/ must be deleted before building.`);
-  process.exit(1);
-}
-if (requiredMissing === 0) {
-  console.log(`All required bundled runtime files are in place. (${optionalMissing} optional Real-ESRGAN item(s) missing.)`);
-  console.log('The default background-removal path is the bundled Node.js/ONNX backend; no C# or .NET runtime is required.');
-  console.log('You can now run: npm run build');
+if (requiredMissing === 0 && leakedTemps === 0) {
+  console.log('PASS: The source runtime is complete and verified for an offline release.');
+  console.log('No model, Node.js, Python, .NET, FFmpeg, or Real-ESRGAN download is required after installation.');
   process.exit(0);
 }
 
-console.log(`${requiredMissing} required runtime item(s) are missing.`);
-console.log('To fix, run: npm run setup');
+if (leakedTemps > 0) console.log(`${leakedTemps} orphaned temp file(s) must be moved out of bin/ before building.`);
+if (requiredMissing > 0) console.log(`${requiredMissing} required runtime check(s) failed. Run: npm ci && npm run setup`);
 process.exit(1);

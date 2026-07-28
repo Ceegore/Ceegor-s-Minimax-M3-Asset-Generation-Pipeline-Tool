@@ -6,7 +6,7 @@
 
 const REGION_HOSTS = {
   global: 'https://api.minimax.io/v1',
-  cn: 'https://api.minimaxi.com/v1', // TODO: confirm the cn host against MiniMax docs
+  cn: 'https://api.minimaxi.com/v1',
 };
 
 /**

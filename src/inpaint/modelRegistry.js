@@ -36,7 +36,7 @@ const MODELS = {
   'migan': {
     file: 'migan.onnx',
     url: 'https://huggingface.co/andraniksargsyan/migan/resolve/main/migan_pipeline_v2.onnx',
-    sha256: null, // pinned once the canonical file is provisioned
+    sha256: '6f1f3530a1a2324b19752018ce756088b07973cda8d7d890034ace5c8a48c40b',
     sizeMB: 28,
     license: 'MIT',
     label: 'MI-GAN (AI, fast, 28 MB)',
@@ -66,7 +66,7 @@ const MODELS = {
   'lama-big': {
     file: 'lama-big.onnx',
     url: 'https://huggingface.co/Carve/LaMa-ONNX/resolve/main/lama_fp32.onnx',
-    sha256: null,
+    sha256: '1faef5301d78db7dda502fe59966957ec4b79dd64e16f03ed96913c7a4eb68d6',
     sizeMB: 208,
     license: 'Apache-2.0',
     label: 'LaMa (AI, highest quality, 208 MB)',

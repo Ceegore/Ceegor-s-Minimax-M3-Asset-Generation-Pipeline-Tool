@@ -27,6 +27,7 @@
 
 const fs = require('fs');
 const fsp = fs.promises;
+const crypto = require('crypto');
 const path = require('path');
 const https = require('https');
 const { spawn } = require('child_process');
@@ -48,6 +49,10 @@ const ISNET_MODEL_URL = 'https://huggingface.co/x-Liola-x/isnet-general-use-onnx
 // URLs match src/inpaint/modelRegistry.js.
 const MIGAN_MODEL_URL = 'https://huggingface.co/andraniksargsyan/migan/resolve/main/migan_pipeline_v2.onnx';
 const LAMA_MODEL_URL = 'https://huggingface.co/Carve/LaMa-ONNX/resolve/main/lama_fp32.onnx';
+const RE_ESRGAN_ZIP_SHA256 = 'abc02804e17982a3be33675e4d471e91ea374e65b70167abc09e31acb412802d';
+const ISNET_MODEL_SHA256 = '4c56bbc21588459dda11efba5a4a8ee163969da109ae170fb1988c1c2ea4a90a';
+const MIGAN_MODEL_SHA256 = '6f1f3530a1a2324b19752018ce756088b07973cda8d7d890034ace5c8a48c40b';
+const LAMA_MODEL_SHA256 = '1faef5301d78db7dda502fe59966957ec4b79dd64e16f03ed96913c7a4eb68d6';
 
 function log(msg) {
   process.stdout.write(msg + '\n');
@@ -80,7 +85,7 @@ function followRedirects(url, maxRedirects = 5) {
 
 // Download a URL to a target file. Streams the response so
 // even the 176 MB ONNX model doesn't OOM a 4 GB-RAM dev box.
-async function download(url, destPath) {
+async function download(url, destPath, expectedSha256) {
   log('  → ' + url);
   const res = await followRedirects(url);
   if (res.statusCode !== 200) {
@@ -89,12 +94,14 @@ async function download(url, destPath) {
   const total = parseInt(res.headers['content-length'] || '0', 10);
   const tmp = destPath + '.tmp-' + process.pid + '-' + Date.now();
   await fsp.mkdir(path.dirname(destPath), { recursive: true });
+  const hash = crypto.createHash('sha256');
   await new Promise((resolve, reject) => {
     const out = fs.createWriteStream(tmp);
     let downloaded = 0;
     let lastPct = -1;
     res.on('data', (chunk) => {
       downloaded += chunk.length;
+      hash.update(chunk);
       if (total > 0) {
         const pct = Math.floor((downloaded / total) * 100);
         if (pct !== lastPct && pct % 10 === 0) {
@@ -113,6 +120,11 @@ async function download(url, destPath) {
     out.on('error', reject);
     res.on('error', reject);
   });
+  const actualSha256 = hash.digest('hex');
+  if (!expectedSha256 || actualSha256 !== expectedSha256) {
+    try { await fsp.unlink(tmp); } catch (_) {}
+    throw new Error(`SHA-256 mismatch for ${path.basename(destPath)}; the download was not installed.`);
+  }
   // Atomic rename — a kill mid-download leaves the previous
   // good file in place instead of a half-written one.
   try {
@@ -159,7 +171,7 @@ async function downloadRealEsrgan() {
   // chain expects).
   const tmpZip = path.join(BIN, '.tmp-realesrgan.zip');
   try {
-    await download(RE_ESRGAN_URL, tmpZip);
+    await download(RE_ESRGAN_URL, tmpZip, RE_ESRGAN_ZIP_SHA256);
     log('  → extracting into ./bin/');
     await extractZip(tmpZip, BIN);
   } finally {
@@ -175,7 +187,7 @@ async function downloadIsnetModel() {
   // into a single buffer).
   await fsp.mkdir(MODELS, { recursive: true });
   const dest = path.join(MODELS, 'isnet-general-use.onnx');
-  await download(ISNET_MODEL_URL, dest);
+  await download(ISNET_MODEL_URL, dest, ISNET_MODEL_SHA256);
 }
 
 // Editor Heal AI inpaint models. Both ship bundled so the editor's
@@ -184,10 +196,10 @@ async function downloadIsnetModel() {
 async function downloadInpaintModels() {
   await fsp.mkdir(MODELS, { recursive: true });
   log('MI-GAN inpaint model (~28 MB, MIT)');
-  await download(MIGAN_MODEL_URL, path.join(MODELS, 'migan.onnx'));
+  await download(MIGAN_MODEL_URL, path.join(MODELS, 'migan.onnx'), MIGAN_MODEL_SHA256);
   log('');
   log('LaMa inpaint model (~208 MB, Apache-2.0)');
-  await download(LAMA_MODEL_URL, path.join(MODELS, 'lama-big.onnx'));
+  await download(LAMA_MODEL_URL, path.join(MODELS, 'lama-big.onnx'), LAMA_MODEL_SHA256);
 }
 
 async function checkIsnetBinary() {
@@ -205,6 +217,7 @@ async function checkIsnetBinary() {
 }
 
 const { downloadModel } = require('../src/isnetbg/modelDownload');
+const { verifyRuntimeAssets } = require('./lib/runtimeAssets');
 
 (async () => {
   const argv = process.argv.slice(2);
@@ -260,6 +273,14 @@ const { downloadModel } = require('../src/isnetbg/modelDownload');
     log('');
     await downloadInpaintModels();
   }
+
+  log('');
+  log('Verifying the complete offline runtime by size and SHA-256...');
+  const verification = verifyRuntimeAssets(BIN);
+  if (!verification.ok) {
+    throw new Error('Offline runtime verification failed:\n  ' + verification.issues.join('\n  '));
+  }
+  log(`  ${verification.count} files verified (${(verification.totalBytes / 1073741824).toFixed(2)} GiB)`);
 
   log('');
   log('Done. Verify with:');

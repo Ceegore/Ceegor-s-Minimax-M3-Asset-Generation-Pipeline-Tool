@@ -1,0 +1,46 @@
+MINIMAX ASSET TOOL - START HERE
+================================
+
+Easiest installation (recommended)
+----------------------------------
+
+1. Double-click "Install MiniMax Asset Tool.cmd".
+   - If you downloaded numbered ZIP parts, keep the CMD, every part, and the
+     matching .zip.sha256 file together. The installer verifies and extracts them.
+   - If this folder is already extracted, just run the CMD here.
+2. Let the installer finish.
+3. Wait for the app to open, enter your MiniMax API key, and choose an output folder.
+
+The installer works only for your Windows account. It does not ask for administrator
+access. It copies the app to your local Programs folder and creates Desktop and Start
+menu shortcuts.
+
+You do not need 7-Zip or another archive program for the easy installation.
+
+Everything needed for local processing is already included: the application runtime,
+FFmpeg, Real-ESRGAN, ONNX Runtime, Sharp, and all supported local models. Nothing else
+needs to be downloaded during normal use. An internet connection is still required
+when you ask MiniMax or another cloud provider to generate an asset.
+
+Portable use
+------------
+
+If you do not want to install it, keep the extracted folder together and double-click
+"MiniMaxAssetTool.exe". Do not move only the EXE; it needs the resources folder beside it.
+
+Windows security message
+------------------------
+
+This release is not yet code-signed. Windows may therefore say that the publisher is
+unknown or that the app is unrecognized. Download releases only from the official
+Ceegore GitHub repository and compare the download with the published SHA-256 file.
+
+If the checksum matches and Windows shows "Windows protected your PC", choose
+"More info" and then "Run anyway". Never disable Microsoft Defender and never add a
+Defender exclusion for this app. A work or school computer may enforce a policy that
+only its administrator can approve; the installer does not try to bypass that policy.
+
+Need help?
+----------
+
+Open README.md for the full workflow and project information.

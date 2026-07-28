@@ -164,10 +164,18 @@ Renderer mirrors: `utils → services → components → panels/tabs/dialogs →
 
 ## 6. Build / release workflow
 
-- The project ships as a **portable zip** via `scripts/zip-portable.js`
-  (electron-builder `dir` target, not a signed installer).
+- The project ships as a **full offline portable zip** via
+  `scripts/zip-portable.js` (electron-builder `dir` target). The extracted
+  release also contains a no-admin per-user CMD installer and remains usable
+  as a portable app. The installer must not weaken Windows security settings.
+- The same CMD is published beside split archives. It verifies every part
+  against the SHA-256 manifest, joins and extracts them with built-in Windows
+  tools, then performs the per-user install without requiring 7-Zip.
 - `bin/` (models + binaries) is **gitignored** and populated by `npm run setup`
   (downloads Real-ESRGAN, IS-Net/BiRefNet, and v1.5 LaMa/MI-GAN models).
+- `scripts/runtime-assets.json` is the release inventory. A build fails unless
+  every listed file matches its exact byte count and SHA-256 in both `bin/`
+  and the packaged `resources/bin/` directory.
 - **Workflow after any source change for a release:** `npm test` (gate) →
   `npm run build` → ship the zip. There is no fixed-hash signed `.exe` in this
   repo (the old `dist-stable` stable-exe workflow was for an earlier release

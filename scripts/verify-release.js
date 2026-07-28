@@ -113,7 +113,7 @@ function verifyManifest(paths, files) {
   const byRel = {};
   for (const f of files) byRel[relative(paths.output, f)] = f;
   for (const line of lines) {
-    const m = line.match(/^([0-9a-fA-F]{64})\s+\*?(\S+)$/);
+    const m = line.match(/^([0-9a-fA-F]{64})\s+\*?(.+?)\s*$/);
     if (!m) { errors.push(`Manifest line is not a valid "<sha256>  <file>" entry: "${line}".`); continue; }
     const [, expected, rel] = m;
     const fp = byRel[rel] || path.join(paths.output, rel);
@@ -138,6 +138,12 @@ function verifyProvenance(root, paths) {
   try { prov = JSON.parse(fs.readFileSync(paths.provenance, 'utf8')); }
   catch (e) { return { ok: false, errors: [`Provenance file is not valid JSON: ${e.message}`] }; }
   const errors = [];
+  if (prov.commitDirty !== false) {
+    errors.push('Provenance says the release was built from a dirty or unknown Git tree. Commit the intended release files and rebuild.');
+  }
+  if (!prov.commit) {
+    errors.push('Provenance does not identify a Git commit. Build the release from a committed repository checkout.');
+  }
   // Electron version: compare provenance against the currently-installed runtime.
   if (prov.electronVersion) {
     try {

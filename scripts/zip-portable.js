@@ -31,6 +31,7 @@ const fsp = fs.promises;
 const crypto = require('crypto');
 const path = require('path');
 const { spawn, spawnSync } = require('child_process');
+const { verifyRuntimeAssets } = require('./lib/runtimeAssets');
 
 const ROOT = path.resolve(__dirname, '..');
 const DIST = path.join(ROOT, 'dist-out');
@@ -160,9 +161,25 @@ function printPrivilegeFix() {
 }
 
 (async () => {
+  log('Step 0: verifying the complete offline runtime...');
+  const sourceRuntime = verifyRuntimeAssets(path.join(ROOT, 'bin'));
+  if (!sourceRuntime.ok) {
+    fail('offline runtime is incomplete or changed:\n  ' + sourceRuntime.issues.join('\n  ') + '\nRun `npm run setup` and retry.');
+  }
+  log(`  ${sourceRuntime.count} files verified (${(sourceRuntime.totalBytes / 1073741824).toFixed(2)} GiB)`);
+
   // Clean dist/ so a previous failure state doesn't leak in.
   await fsp.rm(UNPACKED, { recursive: true, force: true });
   await fsp.rm(ZIP_PATH, { force: true });
+  const staleBase = path.basename(ZIP_PATH).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  for (const name of await fsp.readdir(DIST).catch(() => [])) {
+    if (new RegExp(`^${staleBase}\\.\\d{3}$`).test(name)
+      || name === `${path.basename(ZIP_PATH)}.sha256`
+      || name === `MiniMaxAssetTool-${VERSION}-x64.provenance.json`
+      || name === 'Install MiniMax Asset Tool.cmd') {
+      await fsp.rm(path.join(DIST, name), { force: true });
+    }
+  }
 
   // ---- Step 1: build the unpacked directory ----
   log('Step 1/2: building dist/win-unpacked/ via electron-builder --win dir...');
@@ -189,10 +206,15 @@ function printPrivilegeFix() {
 
   // Keep the end-user license and third-party obligations visible next to
   // the executable instead of burying them inside app.asar.
-  for (const name of ['README.md', 'LICENSE', 'THIRD_PARTY_NOTICES.md']) {
+  for (const name of ['START HERE.txt', 'Install MiniMax Asset Tool.cmd', 'README.md', 'LICENSE', 'THIRD_PARTY_NOTICES.md']) {
     const source = path.join(ROOT, name);
-    if (fs.existsSync(source)) await fsp.copyFile(source, path.join(UNPACKED, name));
+    if (!fs.existsSync(source)) fail(`required end-user file is missing: ${name}`);
+    await fsp.copyFile(source, path.join(UNPACKED, name));
   }
+  await fsp.copyFile(
+    path.join(ROOT, 'scripts', 'runtime-assets.json'),
+    path.join(UNPACKED, 'OFFLINE_RUNTIME_MANIFEST.json'),
+  );
   if (REQUIRE_CODE_SIGNING) {
     const verify = path.join(ROOT, 'scripts', 'verify-release.js');
     try {
@@ -203,14 +225,10 @@ function printPrivilegeFix() {
   }
 
   // ---- Step 1.5: copy ./bin/ into dist/win-unpacked/resources/bin/ ----
-  // electron-builder's `files: ["bin/**/*"]` pattern is ignored
-  // (verified empirically — the built dist/win-unpacked/ never
-  // contains a bin/ subdir). The `extraResources` route also
-  // didn't bake the files in for the unpacked dir target. So we
-  // copy the source bin/ directory into `resources/bin/` here,
-  // which is the standard Electron location for runtime assets
-  // accessed via `process.resourcesPath`. The wrappers look
-  // there first, then fall back to the dev path.
+  // Copy the verified source assets into `resources/bin/`, which is the
+  // standard Electron location used by the runtime wrappers. This explicit
+  // step avoids electron-builder copying untracked developer fixtures and
+  // makes the manifest the one source of truth for the release payload.
   //
   // We do a SELECTIVE copy rather than a blanket `cpSync` of the
   // whole bin/ — the source dir often contains Real-ESRGAN test
@@ -276,16 +294,32 @@ function printPrivilegeFix() {
         let s = 0; function w(d) { for (const e of fs.readdirSync(d, { withFileTypes: true })) { const pp = path.join(d, e.name); if (e.isDirectory()) w(pp); else s += fs.statSync(pp).size; } } w(p); return (s / 1024 / 1024).toFixed(1) + ' MB'; })(dst) + ')');
     }
     log('  copied ' + copied + ' entries (' + (total / 1024 / 1024).toFixed(1) + ' MB total)');
-    if (copied === 0) {
-      log('');
-      log('Step 1.5: WARNING — none of the runtime assets were found in ' + sourceBin);
-      log('         Run `npm run setup` to download them, then re-run `npm run build`.');
+    const packagedRuntime = verifyRuntimeAssets(destBin);
+    if (!packagedRuntime.ok) {
+      fail('packaged offline runtime is incomplete or changed:\n  ' + packagedRuntime.issues.join('\n  '));
     }
+    log(`  verified ${packagedRuntime.count} packaged runtime files by SHA-256`);
   } else {
-    log('');
-    log('Step 1.5: WARNING — ./bin/ not found at ' + sourceBin);
-    log('         The end-user .zip will not contain the IS-Net model or Real-ESRGAN binaries.');
-    log('         Run `npm run setup` to download them, then re-run `npm run build`.');
+    fail('./bin/ is missing. Run `npm run setup` before building a release.');
+  }
+
+  log('');
+  log('Step 1.6: checking the exact packaged dependency tree...');
+  try {
+    await run(process.execPath, [
+      path.join(ROOT, 'scripts', 'check-bundled-deps.js'),
+      `--release-dir=${UNPACKED}`,
+    ], { cwd: ROOT });
+  } catch (e) {
+    fail('packaged dependency check failed: ' + ((e && e.message) || e));
+  }
+
+  log('');
+  log('Step 1.7: testing the no-admin installer and its shortcuts...');
+  try {
+    await run(process.execPath, [path.join(ROOT, 'scripts', 'test-release-installer.js'), UNPACKED], { cwd: ROOT });
+  } catch (e) {
+    fail('installer test failed: ' + ((e && e.message) || e));
   }
 
   // ---- Step 2: zip the unpacked directory ----
@@ -336,9 +370,14 @@ function printPrivilegeFix() {
   } else {
     finalPaths = [ZIP_PATH];
   }
+  // Publish the same dual-purpose installer beside the archive. It can verify,
+  // join, and extract split volumes using built-in Windows tools, or install
+  // directly when it is run from inside the extracted release.
+  const easyInstallerPath = path.join(DIST, 'Install MiniMax Asset Tool.cmd');
+  await fsp.copyFile(path.join(ROOT, 'Install MiniMax Asset Tool.cmd'), easyInstallerPath);
   // Write a .sha256 checksum manifest alongside the archive(s).
   const checksumLines = [];
-  for (const fp of finalPaths) {
+  for (const fp of [...finalPaths, easyInstallerPath]) {
     const h = crypto.createHash('sha256');
     const fd = fs.openSync(fp, 'r');
     const buf = Buffer.alloc(64 * 1024);
@@ -360,8 +399,8 @@ function printPrivilegeFix() {
   log('  Checksums: ' + ZIP_PATH + '.sha256');
   log('');
   if (wantSplit) {
-    log('To install: download all .001/.002/... parts into the same folder,');
-    log('extract from the .001 part with 7-Zip, then run MiniMaxAssetTool.exe.');
+    log('To install: download the CMD, checksum, and all .001/.002/... parts');
+    log('into the same folder, then double-click the CMD. No archiver is needed.');
   } else {
     log('To install on a target machine, extract the .zip and run MiniMaxAssetTool.exe inside the extracted folder.');
   }

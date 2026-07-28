@@ -14,6 +14,7 @@ Notable user-facing changes are recorded here. The next public release is being 
 - Audio cutter with waveform navigation, silence trimming, zero-crossing snap, micro-fades, and multiple output formats.
 - Optional provider connections for OpenAI-compatible APIs and Replicate.
 - Packaged-build, contract, unit, E2E, IPC-coverage, UI-coverage, and visual-regression checks.
+- No-admin per-user Windows installer with Desktop and Start menu shortcuts. It can verify, join, and extract multipart release downloads without a separate archive program.
 
 ### Improved
 
@@ -24,6 +25,7 @@ Notable user-facing changes are recorded here. The next public release is being 
 - Model availability checks, download validation, and clearer fallback warnings.
 - Windows release verification with checksums and build provenance.
 - Runtime dependencies and lockfile updated for current security fixes.
+- Full offline runtime checks with pinned sizes and SHA-256 hashes for every bundled model and native processing asset.
 
 ### Fixed
 

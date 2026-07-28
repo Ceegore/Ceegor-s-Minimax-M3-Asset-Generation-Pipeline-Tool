@@ -58,15 +58,25 @@ This does not make cloud generation free. MiniMax and any optional provider may 
 
 Project files, settings, and post-processing stay on your computer. Prompts and inputs used for generation are sent to the API provider you choose. API keys are stored locally unless you enable session-only mode, which keeps the key off disk for that session.
 
-## Install a release
+## Easy Windows installation
 
-1. Download `MiniMaxAssetTool-<version>-x64.zip` and its `.sha256` file from [Releases](../../releases).
-2. Verify the checksum if you want to confirm the download.
-3. Extract the ZIP to a normal folder.
-4. Run `MiniMaxAssetTool.exe`.
-5. Add your MiniMax API key and choose an output folder on first launch.
+The full release is made for nontechnical users. It includes Electron, Node.js, the MiniMax command-line client, FFmpeg, Sharp, ONNX Runtime, Real-ESRGAN, and every supported local model. You do not need to install Python, .NET, Node.js, or any image tool, and the app does not download local components while you use it.
 
-The release is portable and currently targets Windows 11 x64. It is not code-signed, so Windows may show a reputation warning for a new download.
+1. Open [Releases](../../releases). Download **Install MiniMax Asset Tool.cmd**, the `.zip.sha256` file, and every numbered `.zip.001`, `.zip.002`, and later part listed under **Full offline Windows release**. Keep them together in one folder.
+2. Double-click **Install MiniMax Asset Tool.cmd**. It checks every download, joins and extracts the parts, installs the app for your Windows account, and creates Desktop and Start menu shortcuts.
+3. When the app opens, enter your MiniMax API key and choose an output folder.
+
+No archive program or administrator access is needed. Allow roughly 9 GB of free space during installation; the temporary extraction files are removed after a successful install. The installer makes no network requests.
+
+The tool needs an internet connection when it sends generation requests to MiniMax or another cloud provider. All post-processing runs with the included local components.
+
+### Portable option
+
+Experienced users can instead join/extract the archive parts with 7-Zip and run `MiniMaxAssetTool.exe` directly from the extracted `win-unpacked` folder. Keep the entire folder together; the EXE needs the `resources` folder beside it.
+
+### Windows security message
+
+The current release is not code-signed, so Windows may identify it as an unknown publisher or show **Windows protected your PC**. Download it only from this repository and compare the files with the published `.sha256` manifest. If the checksum matches, choose **More info → Run anyway**. Do not disable Microsoft Defender or add an antivirus exclusion. A managed work or school computer may require approval from its administrator.
 
 ## Develop from source
 

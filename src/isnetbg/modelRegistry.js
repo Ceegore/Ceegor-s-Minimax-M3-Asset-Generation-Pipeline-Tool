@@ -14,7 +14,8 @@ const MODELS = {
   'isnet-general-use': {
     file: 'isnet-general-use.onnx',
     url: 'https://huggingface.co/x-Liola-x/isnet-general-use-onnx/resolve/main/isnet-general-use.onnx',
-    md5: null, // legacy — setup.js never recorded one; keep null
+    sha256: '4c56bbc21588459dda11efba5a4a8ee163969da109ae170fb1988c1c2ea4a90a',
+    md5: null,
     sizeMB: 176,
     license: 'Apache-2.0',
     label: 'IS-Net (fast, default)',
@@ -30,6 +31,7 @@ const MODELS = {
   'birefnet-general-lite': {
     file: 'birefnet-general-lite.onnx',
     url: 'https://github.com/danielgatis/rembg/releases/download/v0.0.0/BiRefNet-general-bb_swin_v1_tiny-epoch_232.onnx',
+    sha256: '5600024376f572a557870a5eb0afb1e5961636bef4e1e22132025467d0f03333',
     md5: '4fab47adc4ff364be1713e97b7e66334',
     sizeMB: 224,
     license: 'MIT',
@@ -46,6 +48,7 @@ const MODELS = {
   'birefnet-general': {
     file: 'birefnet-general.onnx',
     url: 'https://github.com/danielgatis/rembg/releases/download/v0.0.0/BiRefNet-general-epoch_244.onnx',
+    sha256: '58f621f00f5d756097615970a88a791584600dcf7c45b18a0a6267535a1ebd3c',
     md5: '7a35a0141cbbc80de11d9c9a28f52697',
     sizeMB: 930,
     license: 'MIT',
@@ -62,6 +65,7 @@ const MODELS = {
   'birefnet-portrait': {
     file: 'birefnet-portrait.onnx',
     url: 'https://github.com/danielgatis/rembg/releases/download/v0.0.0/BiRefNet-portrait-epoch_150.onnx',
+    sha256: '1ba1c8ff5a7bbfadc8d8d13fb11d7be793f91f23d9d466549e37a854f6668f99',
     md5: 'c3a64a6abf20250d090cd055f12a3b67',
     sizeMB: 930,
     license: 'MIT',

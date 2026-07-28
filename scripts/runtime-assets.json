@@ -1,0 +1,101 @@
+{
+  "schemaVersion": 1,
+  "description": "Files that must be present in every full offline Windows release. Paths are relative to resources/bin.",
+  "assets": [
+    {
+      "path": "realesrgan-ncnn-vulkan.exe",
+      "bytes": 6161408,
+      "sha256": "07e49f7cbb4ede01ae4dd4c399d3a7e5846e3d2085c3128eff881e55cb7b1a0c"
+    },
+    {
+      "path": "vcomp140.dll",
+      "bytes": 182704,
+      "sha256": "8f72ef2e483465444b2059fc6744d6cb22cd8d8a27f6fa56befd2a42dcd0f78b"
+    },
+    {
+      "path": "vcomp140d.dll",
+      "bytes": 207736,
+      "sha256": "34980f5a28002967d4f2659b10a417b1b9a242e240195947c89195083d146c53"
+    },
+    {
+      "path": "models/birefnet-general-lite.onnx",
+      "bytes": 224005088,
+      "sha256": "5600024376f572a557870a5eb0afb1e5961636bef4e1e22132025467d0f03333"
+    },
+    {
+      "path": "models/birefnet-general.onnx",
+      "bytes": 972666916,
+      "sha256": "58f621f00f5d756097615970a88a791584600dcf7c45b18a0a6267535a1ebd3c"
+    },
+    {
+      "path": "models/birefnet-portrait.onnx",
+      "bytes": 972666916,
+      "sha256": "1ba1c8ff5a7bbfadc8d8d13fb11d7be793f91f23d9d466549e37a854f6668f99"
+    },
+    {
+      "path": "models/isnet-general-use.onnx",
+      "bytes": 176213804,
+      "sha256": "4c56bbc21588459dda11efba5a4a8ee163969da109ae170fb1988c1c2ea4a90a"
+    },
+    {
+      "path": "models/lama-big.onnx",
+      "bytes": 208044816,
+      "sha256": "1faef5301d78db7dda502fe59966957ec4b79dd64e16f03ed96913c7a4eb68d6"
+    },
+    {
+      "path": "models/migan.onnx",
+      "bytes": 28079181,
+      "sha256": "6f1f3530a1a2324b19752018ce756088b07973cda8d7d890034ace5c8a48c40b"
+    },
+    {
+      "path": "models/realesr-animevideov3-x2.bin",
+      "bytes": 1247368,
+      "sha256": "548a36f9c3f4ab8da56cd3b13badf23968bee207b396dad14d04b830e5f2ab2d"
+    },
+    {
+      "path": "models/realesr-animevideov3-x2.param",
+      "bytes": 3173,
+      "sha256": "b88ff4f00ebf019a7fdac17fdd45a7fd3665d37509efc5baf2e4da2e24420a04"
+    },
+    {
+      "path": "models/realesr-animevideov3-x3.bin",
+      "bytes": 1247368,
+      "sha256": "548a36f9c3f4ab8da56cd3b13badf23968bee207b396dad14d04b830e5f2ab2d"
+    },
+    {
+      "path": "models/realesr-animevideov3-x3.param",
+      "bytes": 3173,
+      "sha256": "d1a5755008791d09b57e3425fc9dd0bd26b00fdf79c606210bc0e693f8230881"
+    },
+    {
+      "path": "models/realesr-animevideov3-x4.bin",
+      "bytes": 1247368,
+      "sha256": "548a36f9c3f4ab8da56cd3b13badf23968bee207b396dad14d04b830e5f2ab2d"
+    },
+    {
+      "path": "models/realesr-animevideov3-x4.param",
+      "bytes": 3077,
+      "sha256": "850a248e7c14c27e5bd8cf7265113a9441036a7db63963bb8aa5169d788a435e"
+    },
+    {
+      "path": "models/realesrgan-x4plus-anime.bin",
+      "bytes": 8943500,
+      "sha256": "fe01c269cfd10cdef8e018ab66ebe750cf79c7af4d1f9c16c737e1295229bacc"
+    },
+    {
+      "path": "models/realesrgan-x4plus-anime.param",
+      "bytes": 30290,
+      "sha256": "2b8fb6e0ae4d2d85704ca08c119a2f5ea40add4f2ecd512eb7f4cd44b6127ed4"
+    },
+    {
+      "path": "models/realesrgan-x4plus.bin",
+      "bytes": 33424520,
+      "sha256": "713ee713b0353afaa27976f0563a64a5043bd70b9bd8936c2e26e25ebcdbcddf"
+    },
+    {
+      "path": "models/realesrgan-x4plus.param",
+      "bytes": 116029,
+      "sha256": "35330ececcea33b6c397a72548e788d5d53becee4734c50b7fada36e89f10a86"
+    }
+  ]
+}
