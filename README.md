@@ -1,3 +1,5 @@
+<img width="238" height="117" alt="grafik" src="https://github.com/user-attachments/assets/aba983ea-401b-4586-a453-8223047f181b" />
+
 # MiniMax Asset Tool
 
 [![CI](https://github.com/Ceegore/Ceegor-s-Minimax-M3-Asset-Generation-Pipeline-Tool/actions/workflows/ci.yml/badge.svg)](https://github.com/Ceegore/Ceegor-s-Minimax-M3-Asset-Generation-Pipeline-Tool/actions/workflows/ci.yml)
@@ -7,7 +9,7 @@ A Windows desktop app for producing large sets of images, speech, music, and vid
 
 The tool is aimed at projects that need more than a few isolated assets. Start with a book, game design document, lore guide, script, or plain text; turn it into a structured batch; generate the assets; process the results; and save everything in a predictable folder structure.
 
-## The workflow
+## The usp workflow
 
 ### 1. Turn a document into an asset plan
 
@@ -37,14 +39,14 @@ Pipeline export and clear reports can record the asset ID, dimensions, format, f
 
 ## Main features
 
-- Image, speech, music, and video generation through MiniMax.
-- Optional OpenAI-compatible and Replicate provider connections.
+- Image, speech, music, and video generation through MiniMax. All parameters are offered and all restrictions are caught in the tool itself.
+- Optional OpenAI-compatible and Replicate provider connections. Works, but has not seen much testing yet
 - Reusable style presets and per-row batch settings.
 - Queue controls, variants, retries, cost preview, and cancellation.
 - Local Real-ESRGAN upscaling and IS-Net/BiRefNet background removal.
 - Crop, resize, optimize, and convert to PNG, JPEG, WebP, or AVIF.
-- Image editor with paint, erase, selection, compositing, and heal/inpaint tools.
-- Audio cutter with waveform view, silence trim, zero-crossing snap, micro-fades, and common export formats.
+- Image editor with paint, erase, selection, compositing, and heal/inpaint tools. This mainly works, but is still WIP and some things do not work well yet.
+- Audio cutter with waveform view, silence trim, zero-crossing snap, micro-fades, and common export formats. Works, but has not seen much manual testing yet.
 - Local state and batch persistence, plus an optional session-only API-key mode.
 - Sandboxed Electron renderer with a restricted IPC bridge and path grants.
 
@@ -52,7 +54,7 @@ Pipeline export and clear reports can record the asset ID, dimensions, format, f
 
 The application is MIT licensed. It is designed so that the app and the selected local processing components can be used in commercial projects without an additional software-license fee. The bundled components use licenses that allow commercial use, including MIT, Apache-2.0, BSD-3-Clause, and GPL licenses; see [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) for the exact list and obligations.
 
-This does not make cloud generation free. MiniMax and any optional provider may charge for API use and apply separate service and output terms. You are responsible for reviewing those terms and for making sure you have the necessary rights to the source material and final assets.
+This does not make API generation free. MiniMax and any optional provider may charge for API use and apply separate service and output terms. You are responsible for reviewing those terms and for making sure you have the necessary rights to the source material and final assets.
 
 ## Privacy
 
@@ -69,6 +71,8 @@ The full release is made for nontechnical users. It includes Electron, Node.js, 
 No archive program or administrator access is needed. Allow roughly 9 GB of free space during installation; the temporary extraction files are removed after a successful install. The installer makes no network requests.
 
 The tool needs an internet connection when it sends generation requests to MiniMax or another cloud provider. All post-processing runs with the included local components.
+
+**If you run into problems with Windows Security and the tool installer, just unpack the .zip and start the .exe. If anything in the tool does not work, make sure the output folder is set to a directory you have full access to. Due to Windows, the automatically picked output folder sometimes leads to issues.**
 
 ### Portable option
 
@@ -112,6 +116,14 @@ MiniMax Asset Tool is an independent project and is not an official MiniMax prod
 
 <img width="1638" height="883" alt="Main window with generation tabs and file browser" src="https://github.com/user-attachments/assets/fcbf7ed9-e369-41b9-8ed3-763001e7bb9b" />
 
-<img width="1920" height="1032" alt="Column-based image processing pipeline" src="https://github.com/user-attachments/assets/3770048b-fcfd-4d05-8e51-413046a8cde1" />
+<img width="1920" height="1032" alt="grafik" src="https://github.com/user-attachments/assets/2dce3ca5-fcb5-4008-a5ce-c1639e699755" />
 
-<img width="610" height="960" alt="Image editor with Asset Composer panel" src="https://github.com/user-attachments/assets/66a2e5de-57ef-4e59-949e-b09515845908" />
+<img width="1920" height="1032" alt="grafik" src="https://github.com/user-attachments/assets/8141937f-919b-4b70-814c-78a6185ca9d3" />
+
+<img width="649" height="900" alt="grafik" src="https://github.com/user-attachments/assets/7010e806-8d61-48e2-ace2-fd9c4747231c" />
+
+<img width="1920" height="1032" alt="grafik" src="https://github.com/user-attachments/assets/43e4e6b4-13ed-4160-81b2-ada046b514ae" />
+
+<img width="1920" height="1032" alt="grafik" src="https://github.com/user-attachments/assets/13f19e0d-2658-475e-b712-3361dd80c7a5" />
+
+<img width="1920" height="1032" alt="grafik" src="https://github.com/user-attachments/assets/13dbac2b-fb63-4f02-b3c0-0482995eb4f9" />
