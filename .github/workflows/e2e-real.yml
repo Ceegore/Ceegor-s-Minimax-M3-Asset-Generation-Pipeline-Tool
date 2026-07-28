@@ -30,7 +30,7 @@ jobs:
       # One real video generation on the nightly schedule only (1 of 3/day
       # quota). Manual dispatch keeps video faked so it never burns quota.
       RUN_VIDEO_CANARY: ${{ github.event_name == 'schedule' && '1' || '0' }}
-      MMX_SHOTS_DIR: ${{ runner.temp }}\mmx-shots
+      MMX_SHOTS_DIR: ${{ github.workspace }}\mmx-shots
     steps:
       - uses: actions/checkout@v4
 
@@ -50,18 +50,18 @@ jobs:
           }
 
       - name: Contract tests (real API)
+        if: env.MINIMAX_API_KEY != ''
         run: npm run test:contract
 
       - name: E2E real (image/speech/music real, video faked unless canary)
-        run: |
-          if (-not $env:MINIMAX_API_KEY) { Write-Host "Skipped (no API key)."; exit 0 }
-          npm run test:e2e:real
+        if: env.MINIMAX_API_KEY != ''
+        run: npm run test:e2e:real
 
       - name: Upload failure screenshots
         if: failure()
         uses: actions/upload-artifact@v4
         with:
           name: e2e-real-failure-screenshots
-          path: ${{ runner.temp }}\mmx-shots
+          path: ${{ github.workspace }}\mmx-shots
           if-no-files-found: ignore
           retention-days: 7

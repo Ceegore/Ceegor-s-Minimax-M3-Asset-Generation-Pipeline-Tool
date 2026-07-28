@@ -35,3 +35,4 @@ Notable user-facing changes are recorded here.
 - Image editor history, selection, resize, background removal, and inpaint failures.
 - Audio trimming, waveform, format, and packaged FFmpeg path issues.
 - Startup, shutdown, modal, renderer, and packaged-build regressions found during pre-release testing.
+- GitHub Actions validation and the downloadable installer filename used by the release page.

@@ -37,7 +37,7 @@ The build also runs the exact packaged-dependency check and tests the no-admin i
 
 1. Create a release tag that matches `package.json`.
 2. Paste the prepared text from `docs/GITHUB_RELEASE.md` and adjust the version-specific details.
-3. Upload the ZIP, checksum, provenance, and root-level `Install MiniMax Asset Tool.cmd` files. If the build is split, upload every numbered part. Label them **Full offline Windows release**.
+3. Upload the ZIP, checksum, provenance, and root-level `Install-MiniMax-Asset-Tool.cmd` files. If the build is split, upload every numbered part. Label them **Full offline Windows release**.
 4. Verify the download from GitHub and extract it again before announcing the release.
 
 GitHub limits individual release attachments to 2 GiB. The root-level CMD verifies and joins a split archive before extracting it with Windows' built-in archive tool. Experienced users can still extract starting with `.001` using 7-Zip.

@@ -34,7 +34,7 @@ jobs:
     timeout-minutes: 20
     env:
       # Fixed shots dir so failure screenshots are uploadable as artifacts.
-      MMX_SHOTS_DIR: ${{ runner.temp }}\mmx-shots
+      MMX_SHOTS_DIR: ${{ github.workspace }}\mmx-shots
     steps:
       - uses: actions/checkout@v4
 
@@ -69,7 +69,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: e2e-failure-screenshots
-          path: ${{ runner.temp }}\mmx-shots
+          path: ${{ github.workspace }}\mmx-shots
           if-no-files-found: ignore
           retention-days: 7
 

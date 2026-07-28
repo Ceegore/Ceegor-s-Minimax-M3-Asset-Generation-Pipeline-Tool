@@ -176,7 +176,8 @@ function printPrivilegeFix() {
     if (new RegExp(`^${staleBase}\\.\\d{3}$`).test(name)
       || name === `${path.basename(ZIP_PATH)}.sha256`
       || name === `MiniMaxAssetTool-${VERSION}-x64.provenance.json`
-      || name === 'Install MiniMax Asset Tool.cmd') {
+      || name === 'Install MiniMax Asset Tool.cmd'
+      || name === 'Install-MiniMax-Asset-Tool.cmd') {
       await fsp.rm(path.join(DIST, name), { force: true });
     }
   }
@@ -373,7 +374,7 @@ function printPrivilegeFix() {
   // Publish the same dual-purpose installer beside the archive. It can verify,
   // join, and extract split volumes using built-in Windows tools, or install
   // directly when it is run from inside the extracted release.
-  const easyInstallerPath = path.join(DIST, 'Install MiniMax Asset Tool.cmd');
+  const easyInstallerPath = path.join(DIST, 'Install-MiniMax-Asset-Tool.cmd');
   await fsp.copyFile(path.join(ROOT, 'Install MiniMax Asset Tool.cmd'), easyInstallerPath);
   // Write a .sha256 checksum manifest alongside the archive(s).
   const checksumLines = [];

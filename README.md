@@ -62,8 +62,8 @@ Project files, settings, and post-processing stay on your computer. Prompts and 
 
 The full release is made for nontechnical users. It includes Electron, Node.js, the MiniMax command-line client, FFmpeg, Sharp, ONNX Runtime, Real-ESRGAN, and every supported local model. You do not need to install Python, .NET, Node.js, or any image tool, and the app does not download local components while you use it.
 
-1. Open [Releases](../../releases). Download **Install MiniMax Asset Tool.cmd**, the `.zip.sha256` file, and every numbered `.zip.001`, `.zip.002`, and later part listed under **Full offline Windows release**. Keep them together in one folder.
-2. Double-click **Install MiniMax Asset Tool.cmd**. It checks every download, joins and extracts the parts, installs the app for your Windows account, and creates Desktop and Start menu shortcuts.
+1. Open [Releases](../../releases). Download **Install-MiniMax-Asset-Tool.cmd**, the `.zip.sha256` file, and every numbered `.zip.001`, `.zip.002`, and later part listed under **Full offline Windows release**. Keep them together in one folder.
+2. Double-click **Install-MiniMax-Asset-Tool.cmd**. It checks every download, joins and extracts the parts, installs the app for your Windows account, and creates Desktop and Start menu shortcuts.
 3. When the app opens, enter your MiniMax API key and choose an output folder.
 
 No archive program or administrator access is needed. Allow roughly 9 GB of free space during installation; the temporary extraction files are removed after a successful install. The installer makes no network requests.
