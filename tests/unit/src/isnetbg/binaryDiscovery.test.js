@@ -3,6 +3,8 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const path = require('path');
 const fs = require('fs');
+const os = require('os');
+const assetPaths = require('../../../../src/assetPaths');
 
 const {
   findModelPath,
@@ -11,12 +13,25 @@ const {
   resetCache,
 } = require('../../../../src/isnetbg/binaryDiscovery');
 
-test('findModelPath: resolves the model path correctly in local dev mode', () => {
-  const modelPath = findModelPath();
-  assert.ok(modelPath, 'Model path should be resolved');
-  assert.ok(path.isAbsolute(modelPath), 'Model path should be absolute');
-  assert.ok(modelPath.endsWith('isnet-general-use.onnx'), 'Model path should end with the correct filename');
-  assert.ok(fs.existsSync(modelPath), 'Resolved model path should actually exist on disk');
+test('findModelPath: resolves a bundled model without requiring release assets in the source checkout', () => {
+  const originalConfig = assetPaths.getConfig();
+  const appRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'mmx-model-path-'));
+  const modelDir = path.join(appRoot, 'bin', 'models');
+  const expectedPath = path.join(modelDir, 'isnet-general-use.onnx');
+
+  try {
+    fs.mkdirSync(modelDir, { recursive: true });
+    fs.writeFileSync(expectedPath, 'test fixture');
+    assetPaths.init({ appRoot, resourcesPath: '', userDataPath: '' });
+
+    const modelPath = findModelPath();
+    assert.equal(modelPath, expectedPath);
+    assert.ok(path.isAbsolute(modelPath), 'Model path should be absolute');
+    assert.ok(fs.existsSync(modelPath), 'Resolved model path should actually exist on disk');
+  } finally {
+    assetPaths.init(originalConfig);
+    fs.rmSync(appRoot, { recursive: true, force: true });
+  }
 });
 
 test('findBinary: returns a string (path) or null', () => {
