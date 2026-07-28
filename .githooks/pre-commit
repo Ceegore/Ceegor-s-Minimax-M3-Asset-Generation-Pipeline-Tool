@@ -1,0 +1,66 @@
+#!/usr/bin/env node
+// .githooks/pre-commit
+// Atomare Qualitätssicherung. Wird vor jedem Commit ausgeführt und
+// blockt, wenn Lint oder Unit-Tests fehlschlagen.
+//
+// Aktivierung (einmal pro Clone):
+//   git config core.hooksPath .githooks
+//
+// Überspringen (NOTFALL, nicht für Regelverstöße):
+//   git commit --no-verify
+
+const { spawnSync } = require('child_process');
+
+const ROOT = __dirname.replace(/\.githooks$/, '');
+
+function run(label, args) {
+  console.log(`\n[pre-commit] → ${label}`);
+  const r = spawnSync(process.execPath, args, {
+    cwd: ROOT,
+    stdio: 'inherit',
+    shell: false,
+  });
+  if (r.status !== 0) {
+    console.error(`\n[pre-commit] ✗ ${label} failed (exit ${r.status})`);
+    process.exit(r.status);
+  }
+  console.log(`[pre-commit] ✓ ${label} passed`);
+}
+
+// 1) Lint: Dateigrößen, God-Words, Cross-Tier-DAG
+run('lint', ['scripts/lint.js']);
+
+// 2) Syntax-Check für renderer/app.js (und alle anderen
+// renderer-Dateien). Ohne diesen Check können pre-existierende
+// unclosed-brace-Bugs (wie sie in v1.1.2 waren) unbemerkt
+// ins Repo wandern.
+{
+  console.log('\n[pre-commit] → syntax');
+  const { execSync } = require('child_process');
+  const fs = require('fs');
+  const path = require('path');
+  const rendererDir = path.join(ROOT, 'renderer');
+  const files = fs.readdirSync(rendererDir, { withFileTypes: true })
+    .filter(d => d.isFile() && d.name.endsWith('.js'))
+    .map(d => path.join(rendererDir, d.name));
+  let failed = 0;
+  for (const f of files) {
+    try {
+      execSync(`"${process.execPath}" --check "${f}"`, { stdio: 'pipe' });
+    } catch (e) {
+      console.error(`\n[pre-commit] ✗ syntax error in ${path.relative(ROOT, f)}:`);
+      console.error(e.stderr ? e.stderr.toString() : e.message);
+      failed++;
+    }
+  }
+  if (failed > 0) {
+    console.error(`\n[pre-commit] ✗ ${failed} file(s) have syntax errors`);
+    process.exit(1);
+  }
+  console.log(`[pre-commit] ✓ syntax (${files.length} files)`);
+}
+
+// 3) Unit-Tests: 53 Tests über alle Pure-Module
+run('test', ['--test', 'tests/unit/**/*.test.js']);
+
+console.log('\n[pre-commit] ✓ all checks passed — proceeding with commit');

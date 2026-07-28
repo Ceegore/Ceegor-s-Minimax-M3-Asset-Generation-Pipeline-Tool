@@ -1,0 +1,31 @@
+{
+  "env": {
+    "browser": true,
+    "node": true,
+    "es2022": true
+  },
+  "parserOptions": {
+    "ecmaVersion": 13,
+    "sourceType": "script"
+  },
+  "rules": {
+    "no-undef": "error",
+    "no-unreachable": "error"
+  },
+  "globals": {
+    "api": "readonly",
+    "TABS": "writable",
+    "state": "writable",
+    "el": "readonly",
+    "$": "readonly",
+    "$$": "readonly",
+    "applyFileSearch": "writable",
+    "refreshBrowser": "writable",
+    "buildStyleRow": "readonly",
+    "escapeHtml": "readonly",
+    "ToastService": "readonly",
+    "ApiClient": "readonly",
+    "DomHelpers": "readonly",
+    "LogCategories": "readonly"
+  }
+}

@@ -1,0 +1,93 @@
+# .github/workflows/ci.yml
+# ============================================================================
+# Tier 0 (unit + line coverage) and Tier 2 (E2E, fake mmx) gate every push
+# and PR. Both are offline, deterministic and free — no API key, no display
+# (Electron runs headless via the hidden BrowserWindow, already proven by the
+# smoke harness). Any assertion failure fails the run.
+#
+# Failure screenshots are uploaded as short-retention artifacts; on success
+# the harness's cleanup() has already deleted them from the runner temp dir.
+#
+# Phase F additions:
+#   - IPC coverage gate (fail if below 95%)
+#   - UI-surface coverage gate (fail if below 96%)
+#   - Unit line-coverage gate (fail if below 50%)
+#   - Packaged-build boot test (catches "works in dev, broken in release")
+#   - Bundled dependency completeness check
+#
+# Harness finding architecture-gate-not-in-ci:
+#   - Architecture lint gate (scripts/lint.js) now runs in CI, first, so the
+#     "CI-enforced" claim in docs/DECISIONS_AND_RULES.md is actually true.
+# ============================================================================
+
+name: CI
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  test:
+    name: Unit + E2E (fake)
+    runs-on: windows-latest
+    timeout-minutes: 20
+    env:
+      # Fixed shots dir so failure screenshots are uploadable as artifacts.
+      MMX_SHOTS_DIR: ${{ runner.temp }}\mmx-shots
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Architecture lint (size budgets, god-words, cross-tier DAG)
+        run: npm run lint
+
+      - name: Unit tests (with line coverage)
+        run: npm run test:coverage
+
+      - name: Unit line-coverage gate (fail below 50%)
+        run: npm run test:coverage:gate -- --threshold=50
+
+      - name: E2E (real renderer + fake mmx, full ported smoke surface)
+        run: npm run test:e2e -- --surface-threshold=96
+
+      - name: IPC coverage check (gate at 95%)
+        run: npm run test:ipc-coverage -- --threshold=95
+
+      - name: Check bundled dependencies
+        run: node scripts/check-bundled-deps.js
+
+      - name: Upload failure screenshots
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-failure-screenshots
+          path: ${{ runner.temp }}\mmx-shots
+          if-no-files-found: ignore
+          retention-days: 7
+
+  packaged:
+    name: Packaged-build boot test
+    runs-on: windows-latest
+    timeout-minutes: 15
+    needs: test
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build asar and boot packaged app
+        run: node scripts/e2e/packaged-boot.js

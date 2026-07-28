@@ -1,0 +1,278 @@
+/* renderer/jobs/jobs.css — Job runner + log layout.
+   Loaded after styles.css; only adds the rules that need to live in a
+   dedicated file (state colours, keyframes, selected ring, jump pill,
+   progress dots, inline cancel button). No resets, no globals. */
+
+/* ========== State colours for log rows ==========
+   Each row gets a state class (log-state-wip / ok / warn / err / cancel)
+   that drives the left-border + background tint. The row also keeps its
+   category class (gen / upscale / etc.) — the more specific state rule
+   below wins via the combined selector. */
+.log-pane .log-event.log-state-wip {
+  background: rgba(77, 155, 255, 0.10);
+  border-left-color: var(--log-wip, #4d8bff);
+  border-left-width: 3px;
+}
+.log-pane .log-event.log-state-ok {
+  background: rgba(110, 224, 168, 0.10);
+  border-left-color: var(--log-ok, #3ecf8e);
+  border-left-width: 3px;
+}
+.log-pane .log-event.log-state-warn {
+  background: rgba(245, 180, 0, 0.10);
+  border-left-color: var(--log-warn, #f5b400);
+  border-left-width: 3px;
+}
+.log-pane .log-event.log-state-err {
+  background: rgba(255, 87, 87, 0.10);
+  border-left-color: var(--log-err, #ff5757);
+  border-left-width: 3px;
+}
+.log-pane .log-event.log-state-cancel {
+  background: rgba(138, 143, 153, 0.08);
+  border-left-color: var(--log-cancel, #8a8f99);
+  border-left-width: 3px;
+}
+/* Headline colour matches the state when not selected. */
+.log-pane .log-event.log-state-wip .log-event-headline { color: var(--log-wip, #4d8bff); }
+.log-pane .log-event.log-state-ok .log-event-headline { color: var(--log-ok, #3ecf8e); }
+.log-pane .log-event.log-state-warn .log-event-headline { color: var(--log-warn, #f5b400); }
+.log-pane .log-event.log-state-err .log-event-headline { color: var(--log-err, #ff5757); }
+.log-pane .log-event.log-state-cancel .log-event-headline { color: var(--log-cancel, #8a8f99); }
+
+/* Selection ring (Phase A): the user Ctrl+Click'd a row to add it to
+   the copy selection. The ring is a thin accent border + a subtle
+   inset so it's visible against any state colour. */
+.log-pane .log-event.selected {
+  box-shadow: inset 0 0 0 1px var(--accent);
+  outline: 1px solid var(--accent);
+  outline-offset: -1px;
+}
+
+/* ========== Animated "..." WIP indicator ==========
+   Three dots that pulse in sequence via pure CSS — no JS timers so we
+   can't leak them when rows are GC'd. Each dot has the same animation
+   but a different delay so they cascade. We animate `opacity` only
+   (no layout / paint cost on a long log). */
+.log-pane .log-event .log-wip-dots {
+  display: inline-flex;
+  gap: 2px;
+  align-items: center;
+  margin-left: 4px;
+}
+.log-pane .log-event .log-wip-dots span {
+  width: 4px;
+  height: 4px;
+  background: var(--log-wip, #4d8bff);
+  border-radius: 50%;
+  opacity: 0.3;
+  animation: log-wip-dot 1.2s ease-in-out infinite;
+}
+.log-pane .log-event .log-wip-dots span:nth-child(2) { animation-delay: 0.2s; }
+.log-pane .log-event .log-wip-dots span:nth-child(3) { animation-delay: 0.4s; }
+@keyframes log-wip-dot {
+  0%, 80%, 100% { opacity: 0.3; }
+  40% { opacity: 1.0; }
+}
+
+/* ========== Inline cancel button on primary job rows ==========
+   A small ✕ rendered into the right side of the row, only visible
+   when the row is `cancellable` AND wip. Hover state uses the danger
+   accent so the destructive action is obvious. */
+.log-pane .log-event .log-cancel-btn {
+  background: transparent;
+  border: 1px solid transparent;
+  color: var(--fg-3);
+  width: 18px;
+  height: 18px;
+  line-height: 1;
+  font-size: 12px;
+  border-radius: 3px;
+  cursor: pointer;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+.log-pane .log-event .log-cancel-btn:hover {
+  background: var(--danger);
+  color: #fff;
+  border-color: var(--danger);
+}
+
+/* ========== Progress fraction + secondary count ========== */
+.log-pane .log-event .log-progress {
+  font-variant-numeric: tabular-nums;
+  color: var(--fg-3);
+  font-size: 10.5px;
+  margin-left: 4px;
+  white-space: nowrap;
+}
+
+/* ========== Type icon ==========
+   The leading emoji is rendered by renderLogEvent via a dedicated
+   `.log-type-icon` span so the column stays at a fixed width even
+   when the headline wraps. */
+.log-pane .log-event .log-type-icon {
+  text-align: center;
+  font-size: 12px;
+  line-height: 1;
+}
+
+/* ========== Log pane button bar (Phase A) ==========
+   Sits above the log pane (inside the <details><summary> for layout
+   reuse). Buttons: jump to newest/oldest, expand/collapse all, and
+   the autoscroll chip. */
+.log-pane-toolbar {
+  display: inline-flex;
+  gap: 4px;
+  align-items: center;
+  margin-left: 6px;
+}
+.log-pane-toolbar .btn-mini {
+  padding: 1px 6px;
+  font-size: 10.5px;
+}
+.log-autoscroll-chip {
+  font-size: 10px;
+  color: var(--fg-3);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 0 6px;
+  background: var(--bg-2);
+  cursor: pointer;
+  user-select: none;
+}
+.log-autoscroll-chip.on { color: var(--success); border-color: var(--success); }
+.log-autoscroll-chip.off { color: var(--fg-3); }
+
+/* ========== "↓ N new" pill (Phase A) ==========
+   A floating chip at the top of the log pane that appears when
+   autoscroll is OFF and new events arrived while the user was
+   scrolled away. Clicking it jumps to the newest + re-enables
+   autoscroll. Hidden by default; toggled by LogService. */
+.log-jump-pill {
+  position: sticky;
+  top: 0;
+  z-index: 5;
+  display: none;
+  align-items: center;
+  justify-content: center;
+  margin: 2px auto;
+  padding: 2px 10px;
+  font-size: 11px;
+  background: var(--accent-2);
+  color: #fff;
+  border-radius: 10px;
+  cursor: pointer;
+  width: max-content;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.3);
+  user-select: none;
+}
+.log-jump-pill.visible { display: flex; }
+.log-jump-pill:hover { background: var(--accent-3); }
+
+/* ========== Active jobs widget (Phase B) ==========
+   A small fixed-position widget in the bottom-right of the
+   content area showing every running job. The widget is a pure
+   projection of state.jobs; it owns no data. */
+.active-jobs-host {
+  position: fixed;
+  right: 12px;
+  bottom: 12px;
+  z-index: 100;
+  pointer-events: none;
+}
+.active-jobs-widget {
+  pointer-events: auto;
+  background: var(--bg-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.35);
+  min-width: 240px;
+  max-width: 360px;
+  font-size: 12px;
+  color: var(--fg);
+}
+.active-jobs-header {
+  padding: 4px 10px;
+  font-size: 10.5px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--fg-3);
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-3);
+  border-radius: var(--radius) var(--radius) 0 0;
+}
+.active-jobs-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  padding: 4px 0;
+}
+.active-jobs-row {
+  display: grid;
+  grid-template-columns: 22px 1fr 22px;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  cursor: pointer;
+  border-left: 2px solid transparent;
+}
+.active-jobs-row:hover { background: var(--bg-3); }
+.active-jobs-icon {
+  text-align: center;
+  font-size: 14px;
+  line-height: 1;
+}
+.active-jobs-text {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+.active-jobs-title {
+  font-size: 12px;
+  font-weight: 500;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--fg);
+}
+.active-jobs-meta {
+  font-size: 10.5px;
+  color: var(--fg-3);
+  font-variant-numeric: tabular-nums;
+}
+.active-jobs-cancel {
+  background: transparent;
+  border: 1px solid transparent;
+  color: var(--fg-3);
+  width: 18px;
+  height: 18px;
+  line-height: 1;
+  font-size: 11px;
+  border-radius: 3px;
+  cursor: pointer;
+  padding: 0;
+}
+.active-jobs-cancel:hover {
+  background: var(--danger);
+  color: #fff;
+  border-color: var(--danger);
+}
+
+/* ========== Persisted L2 rows (Phase C) ==========
+   The bottom-of-log rows for jobs finished in a previous
+   session. They're status-coloured but visually muted
+   (lower opacity) and not clickable. The ↻ icon (rendered via the
+   shared .log-type-icon class — see renderPersistedL2, bug-fix M2)
+   signals "from previous session"; row opacity below already mutes
+   it along with the rest of the row, so it needs no icon-specific
+   rule of its own. */
+.log-event-persisted {
+  opacity: 0.72;
+  cursor: default;
+  border-left: 2px solid var(--fg-3);
+}
+.log-event-persisted:hover { background: transparent; }

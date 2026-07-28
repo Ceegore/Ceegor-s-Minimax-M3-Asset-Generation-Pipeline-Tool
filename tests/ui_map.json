@@ -1,0 +1,621 @@
+{
+  "$schema": "ui_map_v2",
+  "meta": {
+    "app": "MiniMax Assets Tool",
+    "version": "1.0.0",
+    "generated": "2026-07-23",
+    "screen_resolution": "1920x1080",
+    "window_size": "1400x900",
+    "window_position": { "x": 519, "y": 0 },
+    "coordinate_system": "absolute_screen (add window x=519 to window-relative)",
+    "theme": "dark"
+  },
+  "navigation_graph": {
+    "app_launch": { "triggers": ["startup_modal"], "default_tab": "image" },
+    "startup_modal": { "dismiss": ["BTN_STARTUP_OK", "KEY_ESCAPE"], "next": "main_interface" },
+    "tab_image": { "element": "TAB_IMAGE", "next": "main_interface" },
+    "tab_speech": { "element": "TAB_SPEECH", "next": "speech_panel" },
+    "tab_music": { "element": "TAB_MUSIC", "next": "music_panel" },
+    "tab_video": { "element": "TAB_VIDEO", "next": "video_panel" },
+    "tab_providers": { "element": "TAB_PROVIDERS", "next": "providers_panel" },
+    "settings": { "element": "BTN_SETTINGS", "shortcut": "Ctrl+S", "next": "settings_dialog" },
+    "style_settings": { "element": "BTN_STYLES", "shortcut": "Ctrl+T", "next": "style_overlay" },
+    "image_editor": { "element": "BTN_IMAGE_EDIT", "next": "editor_overlay" },
+    "pipeline": { "element": "BTN_PIPELINE", "next": "pipeline_overlay" },
+    "batchgen": { "element": "BTN_BATCH", "shortcut": "Ctrl+B", "next": "batchgen_dialog" },
+    "theme_toggle": { "element": "BTN_THEME", "shortcut": "Ctrl+L", "effect": "toggles dark/light" },
+    "quota_refresh": { "element": "BTN_QUOTA_REFRESH", "shortcut": "Ctrl+R", "effect": "refreshes quota display" }
+  },
+  "screens": {
+    "main_interface": {
+      "description": "Main app window with header, tab content, sidebar, log panel",
+      "elements": {
+        "header": {
+          "BRAND": { "id": "BRAND", "type": "text", "dom": ".brand", "visual_anchor": "MiniMax Assets Tool", "coords": { "x": 614, "y": 19 }, "interaction": "click reopens welcome popup (force:true)" },
+          "BRAND_VERSION": { "id": "BRAND_VERSION", "type": "text", "dom": "#brand-version", "visual_anchor": "v1.0.0", "coords": { "x": 724, "y": 19 } },
+          "TAB_IMAGE": { "id": "TAB_IMAGE", "type": "tab_button", "dom": "button[data-tab='image']", "visual_anchor": "Image", "coords": { "x": 809, "y": 19 }, "interaction": "left-click", "shortcut": "Ctrl+1", "states": ["active (blue highlight)", "inactive"] },
+          "TAB_SPEECH": { "id": "TAB_SPEECH", "type": "tab_button", "dom": "button[data-tab='speech']", "visual_anchor": "Speech", "coords": { "x": 884, "y": 19 }, "interaction": "left-click", "shortcut": "Ctrl+2" },
+          "TAB_MUSIC": { "id": "TAB_MUSIC", "type": "tab_button", "dom": "button[data-tab='music']", "visual_anchor": "Music", "coords": { "x": 956, "y": 19 }, "interaction": "left-click", "shortcut": "Ctrl+3" },
+          "TAB_VIDEO": { "id": "TAB_VIDEO", "type": "tab_button", "dom": "button[data-tab='video']", "visual_anchor": "Video", "coords": { "x": 1026, "y": 19 }, "interaction": "left-click", "shortcut": "Ctrl+4" },
+          "QUOTA_LABEL": { "id": "QUOTA_LABEL", "type": "text", "dom": ".quota-label", "visual_anchor": "Quota —", "coords": { "x": 1430, "y": 19 } },
+          "QUOTA_VALUE": { "id": "QUOTA_VALUE", "type": "text", "dom": "#quota-value", "visual_anchor": "No API key configured.", "coords": { "x": 1530, "y": 19 }, "states": ["no_key (amber warning)", "with_key (compact tooltip)"] },
+          "BTN_QUOTA_REFRESH": { "id": "BTN_QUOTA_REFRESH", "type": "button", "dom": "#quota-refresh", "visual_anchor": "↻", "coords": { "x": 1599, "y": 19 }, "interaction": "left-click", "shortcut": "Ctrl+R", "tooltip": "Refresh quota (Ctrl+R)" },
+          "BTN_STYLES": { "id": "BTN_STYLES", "type": "button", "dom": "#btn-styles", "visual_anchor": "🎨", "coords": { "x": 1634, "y": 19 }, "interaction": "left-click", "shortcut": "Ctrl+T", "tooltip": "Style Settings (Ctrl+T)" },
+          "BTN_THEME": { "id": "BTN_THEME", "type": "button", "dom": "#btn-theme", "visual_anchor": "🌓", "coords": { "x": 1669, "y": 19 }, "interaction": "left-click", "shortcut": "Ctrl+L", "tooltip": "Toggle dark/light mode (Ctrl+L)" },
+          "BTN_IMAGE_EDIT": { "id": "BTN_IMAGE_EDIT", "type": "button", "dom": "#btn-image-edit", "visual_anchor": "✏", "coords": { "x": 1704, "y": 19 }, "interaction": "left-click", "tooltip": "Open the image editor" },
+          "BTN_SETTINGS": { "id": "BTN_SETTINGS", "type": "button", "dom": "#btn-settings", "visual_anchor": "⚙", "coords": { "x": 1739, "y": 19 }, "interaction": "left-click", "shortcut": "Ctrl+S", "tooltip": "Settings / config (Ctrl+S)" }
+        },
+        "statusbar": {
+          "STATUSBAR": { "id": "STATUSBAR", "type": "status_text", "dom": "#statusbar", "visual_anchor": "Ready", "coords": { "x": 556, "y": 47 }, "states": ["Ready", "busy (class .busy)", "error text"] }
+        },
+        "sidebar": {
+          "BTN_FB_UP": { "id": "BTN_FB_UP", "type": "button", "dom": "#fb-up", "visual_anchor": "↑", "coords": { "x": 1575, "y": 72 }, "interaction": "left-click", "shortcut": "Ctrl+U", "tooltip": "Up one level (Ctrl+U)" },
+          "FB_PATH": { "id": "FB_PATH", "type": "text", "dom": "#fb-path", "visual_anchor": "C:\\Users\\Example\\Documents", "coords": { "x": 1700, "y": 72 } },
+          "BTN_FB_REFRESH": { "id": "BTN_FB_REFRESH", "type": "button", "dom": "#fb-refresh", "visual_anchor": "↻", "coords": { "x": 1880, "y": 72 }, "interaction": "left-click", "tooltip": "Refresh" },
+          "INPUT_FB_SEARCH": { "id": "INPUT_FB_SEARCH", "type": "text_input", "dom": "#fb-search", "visual_anchor": "Filter…", "coords": { "x": 1650, "y": 100 }, "interaction": "type-text", "shortcut": "Ctrl+F", "placeholder": "Filter…" },
+          "SELECT_FB_TYPE": { "id": "SELECT_FB_TYPE", "type": "dropdown", "dom": "#fb-type-filter", "visual_anchor": "All types", "coords": { "x": 1620, "y": 128 }, "options": ["All types", "🖼 Images", "🎵 Audio", "🎬 Video", "📝 Text"] },
+          "SELECT_FB_SORT": { "id": "SELECT_FB_SORT", "type": "dropdown", "dom": "#fb-sort", "visual_anchor": "Name ↑", "coords": { "x": 1760, "y": 128 }, "options": ["Name ↑", "Name ↓", "Size ↓", "Size ↑", "Newest", "Oldest", "Created ↓", "Created ↑", "Type"] },
+          "BTN_FB_PICK": { "id": "BTN_FB_PICK", "type": "button", "dom": "#fb-pick", "visual_anchor": "📂", "coords": { "x": 1845, "y": 128 }, "interaction": "left-click", "tooltip": "Navigate to a folder" },
+          "BTN_FB_NEW": { "id": "BTN_FB_NEW", "type": "button", "dom": "#fb-new", "visual_anchor": "+ Folder", "coords": { "x": 1620, "y": 156 }, "interaction": "left-click", "tooltip": "New folder" },
+          "BTN_FB_OPEN": { "id": "BTN_FB_OPEN", "type": "button", "dom": "#fb-open", "visual_anchor": "↗", "coords": { "x": 1720, "y": 156 }, "interaction": "left-click", "tooltip": "Open in Explorer" },
+          "BTN_FB_OPTIONS": { "id": "BTN_FB_OPTIONS", "type": "button", "dom": "#fb-options", "visual_anchor": "⚙ Options", "coords": { "x": 1830, "y": 156 }, "interaction": "left-click", "tooltip": "Folder options (columns, sort)" },
+          "FB_BULK_TOOLBAR": { "id": "FB_BULK_TOOLBAR", "type": "toolbar", "dom": "#fb-bulk-toolbar", "visual_anchor": "N selected", "visible_when": "checkboxes selected", "children": ["CB_BULK_MASTER", "BTN_BULK_MOVE", "BTN_BULK_COPY", "BTN_BULK_TRIM", "BTN_BULK_DELETE", "BTN_BULK_CLEAR"] },
+          "FB_LIST": { "id": "FB_LIST", "type": "list", "dom": "#fb-list", "coords": { "x": 1555, "y": 170, "w": 350, "h": 445 }, "interaction": "left-click (select), double-click (open), right-click (context menu), checkbox (bulk select)" }
+        },
+        "log_panel": {
+          "BTN_LOG_NEWEST": { "id": "BTN_LOG_NEWEST", "type": "button", "dom": "#log-jump-newest", "visual_anchor": "▲ Newest", "shortcut": "Home" },
+          "BTN_LOG_OLDEST": { "id": "BTN_LOG_OLDEST", "type": "button", "dom": "#log-jump-oldest", "visual_anchor": "▼ Oldest", "shortcut": "End" },
+          "BTN_LOG_COLLAPSE_ALL": { "id": "BTN_LOG_COLLAPSE_ALL", "type": "button", "dom": "#log-collapse-all", "visual_anchor": "− Collapse all" },
+          "BTN_LOG_EXPAND_ALL": { "id": "BTN_LOG_EXPAND_ALL", "type": "button", "dom": "#log-expand-all", "visual_anchor": "+ Expand all" },
+          "CHIP_AUTOSCROLL": { "id": "CHIP_AUTOSCROLL", "type": "toggle_chip", "dom": "#log-autoscroll-chip", "visual_anchor": "Auto: ON", "states": ["on (green)", "off"] },
+          "BTN_LOG_COPY": { "id": "BTN_LOG_COPY", "type": "button", "dom": "#log-copy", "visual_anchor": "📋 Copy", "shortcut": "Ctrl+C" },
+          "BTN_LOG_CLEAR": { "id": "BTN_LOG_CLEAR", "type": "button", "dom": "#log-clear", "visual_anchor": "🗑 Clear" },
+          "BTN_LOG_TOGGLE": { "id": "BTN_LOG_TOGGLE", "type": "button", "dom": "#log-toggle", "visual_anchor": "▲ Collapse" },
+          "BTN_LOG_HELP": { "id": "BTN_LOG_HELP", "type": "button", "dom": "#log-help", "visual_anchor": "?" },
+          "LOG_AREA": { "id": "LOG_AREA", "type": "scrollable_list", "dom": "#log" },
+          "LOG_JUMP_PILL": { "id": "LOG_JUMP_PILL", "type": "button", "dom": "#log-jump-pill", "visual_anchor": "↓ 0 new" }
+        },
+        "preview_pane": {
+          "PREVIEW_TITLE": { "id": "PREVIEW_TITLE", "type": "text", "visual_anchor": "📦 Assets preview" },
+          "BTN_PREVIEW_CLEAR": { "id": "BTN_PREVIEW_CLEAR", "type": "button", "dom": "#preview-clear", "visual_anchor": "✕" },
+          "PREVIEW_CONTENT": { "id": "PREVIEW_CONTENT", "type": "preview_area", "dom": "#fb-preview-content" }
+        },
+        "splitters": {
+          "SPLITTER_SIDEBAR": { "id": "SPLITTER_SIDEBAR", "type": "splitter", "dom": "#splitter-sidebar", "orientation": "vertical" },
+          "SPLITTER_LOGBAR": { "id": "SPLITTER_LOGBAR", "type": "splitter", "dom": "#splitter-logbar", "orientation": "horizontal" },
+          "SPLITTER_LOG_PREVIEW": { "id": "SPLITTER_LOG_PREVIEW", "type": "splitter", "dom": "#splitter-log-preview", "orientation": "vertical" }
+        }
+      }
+    },
+    "image_tab": {
+      "description": "Image generation tab with prompt, parameters, and action bar",
+      "elements": {
+        "STYLE_PRESET": { "id": "IMG_STYLE_PRESET", "type": "dropdown", "dom": "select[id^='image.style']", "visual_anchor": "(no style)" },
+        "BTN_STYLE_SETTINGS": { "id": "IMG_BTN_STYLE_GEAR", "type": "button", "visual_anchor": "⚙ (next to style dropdown)" },
+        "PROMPT_TEXTAREA": { "id": "IMG_PROMPT", "type": "textarea", "dom": "textarea[id^='image.prompt']", "max_chars": 1500 },
+        "CHAR_COUNTER": { "id": "IMG_CHAR_COUNTER", "type": "text", "visual_anchor": "Prompt length: 36 / 1500" },
+        "INPUT_FILE_PREFIX": { "id": "IMG_FILE_PREFIX", "type": "text_input", "dom": "input[id^='image.target_file_prefix.0']", "placeholder": "(no prefix)" },
+        "BTN_PREFIX_PLUS1": { "id": "IMG_PREFIX_PLUS1", "type": "button", "visual_anchor": "+1" },
+        "CB_FORCE_PREFIX": { "id": "IMG_FORCE_PREFIX", "type": "checkbox", "dom": "input[id^='image.target_file_prefix.1']", "visual_anchor": "Force prefix only", "default": false },
+        "SELECT_ASPECT": { "id": "IMG_ASPECT", "type": "dropdown", "dom": "select[id^='image.aspect_ratio']", "options": ["(default)", "1:1", "16:9", "9:16", "4:3", "3:4", "2:3", "3:2", "21:9"] },
+        "SELECT_WIDTH": { "id": "IMG_WIDTH", "type": "dropdown", "dom": "select[id^='image.width_px']", "options": ["(unset)", "512", "768", "1024", "1280", "1536", "1792", "1920", "2048"] },
+        "SELECT_HEIGHT": { "id": "IMG_HEIGHT", "type": "dropdown", "dom": "select[id^='image.height_px']", "options": ["(unset)", "512", "768", "1024", "1080", "1280", "1536", "1792", "2048"] },
+        "SELECT_N": { "id": "IMG_N", "type": "dropdown", "dom": "select[id^='image.n_count']", "options": ["1", "2", "3", "4"] },
+        "SELECT_SEED": { "id": "IMG_SEED", "type": "dropdown", "dom": "select[id^='image.seed']", "options": ["Random", "0", "1", "42", "12345", "1337", "9999"] },
+        "SELECT_RESP_FMT": { "id": "IMG_RESP_FMT", "type": "dropdown", "dom": "select[id^='image.response_format']", "options": ["url", "base64"] },
+        "SELECT_PROMPT_OPT": { "id": "IMG_PROMPT_OPT", "type": "dropdown", "dom": "select[id^='image.prompt_optimizer']", "options": ["Off", "On"] },
+        "SELECT_WATERMARK": { "id": "IMG_WATERMARK", "type": "dropdown", "dom": "select[id^='image.aigc_watermark']", "options": ["Off", "On"] },
+        "INPUT_SUBJECT_REF": { "id": "IMG_SUBJECT_REF", "type": "text_input", "dom": "input[id^='image.subject_ref']", "placeholder": "Path or URL to character image" },
+        "BTN_SUBJECT_REF_BROWSE": { "id": "IMG_SUBJECT_REF_BROWSE", "type": "button", "visual_anchor": "Browse…" },
+        "SELECT_VARIANTS": { "id": "IMG_VARIANTS", "type": "dropdown", "dom": "#variants-image", "options": ["1×", "2×", "3×", "4×", "5×"] },
+        "BTN_ADD_BATCH": { "id": "IMG_BTN_ADD_BATCH", "type": "button", "visual_anchor": "+ Batch" },
+        "BTN_GENERATE": { "id": "IMG_BTN_GENERATE", "type": "button_primary", "visual_anchor": "Generate", "shortcut": "Ctrl+Enter" },
+        "BTN_SEND_PIPELINE": { "id": "IMG_BTN_SEND_PIPELINE", "type": "button", "visual_anchor": "Send to Pipeline", "state": "disabled until generation completes; armed on success; consumed on click" },
+        "BTN_PIPELINE": { "id": "IMG_BTN_PIPELINE", "type": "button", "visual_anchor": "Pipeline" },
+        "PIPELINE_BADGE": { "id": "IMG_PIPELINE_BADGE", "type": "badge", "dom": "#pipeline-badge", "visible_when": "pipeline has items" },
+        "CB_AUTO_PIPELINE": { "id": "IMG_CB_AUTO_PIPELINE", "type": "checkbox", "visual_anchor": "auto-pipeline", "default": false },
+        "CB_UPSCALE": { "id": "IMG_CB_UPSCALE", "type": "checkbox", "visual_anchor": "Upscale", "default": false, "interaction": "checkbox toggles; label click opens settings" },
+        "BTN_BATCH_MODE": { "id": "IMG_BTN_BATCH_MODE", "type": "button", "visual_anchor": "⚙ Batch Mode" },
+        "BTN_IMPORT_BATCH": { "id": "IMG_BTN_IMPORT_BATCH", "type": "button", "visual_anchor": "Import Batch", "interaction": "opens unified Import Batch overlay" }
+      }
+    },
+    "speech_tab": {
+      "description": "Speech (TTS) generation tab",
+      "elements": {
+        "STYLE_PRESET": { "id": "SPCH_STYLE", "type": "dropdown", "visual_anchor": "(no style)" },
+        "TEXT_AREA": { "id": "SPCH_TEXT", "type": "textarea", "max_chars": 10000 },
+        "CHAR_COUNTER": { "id": "SPCH_COUNTER", "type": "text" },
+        "SELECT_MODEL": { "id": "SPCH_MODEL", "type": "dropdown", "options": ["speech-2.8-hd", "speech-2.8-turbo", "speech-2.6-hd", "speech-2.6-turbo", "speech-02-hd", "speech-02-turbo", "speech-01-hd", "speech-01-turbo"] },
+        "SELECT_VOICE": { "id": "SPCH_VOICE", "type": "dropdown", "options": "300+ voices (dynamic per model)" },
+        "SELECT_SPEED": { "id": "SPCH_SPEED", "type": "dropdown", "options": ["0.5", "0.75", "1", "1.25", "1.5", "1.75", "2"] },
+        "SELECT_VOLUME": { "id": "SPCH_VOLUME", "type": "dropdown", "options": ["1", "2", "3", "5", "7", "10"] },
+        "SELECT_PITCH": { "id": "SPCH_PITCH", "type": "dropdown", "options": ["-12", "-6", "-3", "0", "3", "6", "12"] },
+        "SELECT_FORMAT": { "id": "SPCH_FORMAT", "type": "dropdown", "options": ["mp3", "wav", "pcm", "flac", "opus", "pcmu_raw", "pcmu_wav"] },
+        "SELECT_SAMPLE_RATE": { "id": "SPCH_SAMPLE_RATE", "type": "dropdown", "options": ["8000", "16000", "22050", "24000", "32000", "44100"] },
+        "SELECT_BITRATE": { "id": "SPCH_BITRATE", "type": "dropdown", "options": ["32000", "64000", "128000", "256000"] },
+        "SELECT_CHANNELS": { "id": "SPCH_CHANNELS", "type": "dropdown", "options": ["1 (mono)", "2 (stereo)"] },
+        "SELECT_LANGUAGE": { "id": "SPCH_LANGUAGE", "type": "dropdown_custom", "options": ["(none)", "auto", "en", "zh", "ja", "ko", "es", "fr", "de", "pt", "ru", "it", "ar", "hi"] },
+        "SELECT_SUBTITLES": { "id": "SPCH_SUBTITLES", "type": "dropdown", "options": ["Off", "On"] },
+        "INPUT_SOUND_EFFECT": { "id": "SPCH_SOUND_EFFECT", "type": "text_input", "state": "disabled", "has_browse": true },
+        "INPUT_PRONUNCIATION": { "id": "SPCH_PRONUNCIATION", "type": "text_input" },
+        "SELECT_VARIANTS": { "id": "SPCH_VARIANTS", "type": "dropdown", "options": ["1×", "2×", "3×", "4×", "5×"] },
+        "BTN_GENERATE": { "id": "SPCH_BTN_GENERATE", "type": "button_primary", "visual_anchor": "Generate", "shortcut": "Ctrl+Enter" },
+        "BTN_ADD_BATCH": { "id": "SPCH_BTN_ADD_BATCH", "type": "button", "visual_anchor": "+ Batch" }
+      }
+    },
+    "music_tab": {
+      "description": "Music generation tab with extensive parameters",
+      "elements": {
+        "STYLE_PRESET": { "id": "MUS_STYLE", "type": "dropdown" },
+        "PROMPT_TEXTAREA": { "id": "MUS_PROMPT", "type": "textarea", "max_chars": 2000 },
+        "SELECT_MODEL": { "id": "MUS_MODEL", "type": "dropdown", "options": ["music-2.6", "music-2.5+", "music-2.5"] },
+        "SELECT_GENRE": { "id": "MUS_GENRE", "type": "dropdown_custom", "options": ["(any)", "pop", "rock", "jazz", "classical", "hip-hop", "electronic", "folk", "cinematic", "lo-fi", "ambient", "country", "r&b", "metal", "indie"] },
+        "SELECT_MOOD": { "id": "MUS_MOOD", "type": "dropdown_custom", "options": ["(any)", "happy", "sad", "energetic", "calm", "melancholic", "aggressive", "romantic", "dark", "uplifting", "dreamy"] },
+        "SELECT_VOCALS": { "id": "MUS_VOCALS", "type": "dropdown_custom" },
+        "SELECT_INSTRUMENTS": { "id": "MUS_INSTRUMENTS", "type": "dropdown_custom" },
+        "SELECT_BPM": { "id": "MUS_BPM", "type": "dropdown", "range": "40-220" },
+        "SELECT_KEY": { "id": "MUS_KEY", "type": "dropdown_custom" },
+        "SELECT_TEMPO": { "id": "MUS_TEMPO", "type": "dropdown_custom" },
+        "SELECT_STRUCTURE": { "id": "MUS_STRUCTURE", "type": "dropdown_custom" },
+        "INPUT_REFERENCES": { "id": "MUS_REFERENCES", "type": "text_input" },
+        "INPUT_AVOID": { "id": "MUS_AVOID", "type": "text_input" },
+        "SELECT_USE_CASE": { "id": "MUS_USE_CASE", "type": "dropdown_custom" },
+        "INPUT_EXTRA": { "id": "MUS_EXTRA", "type": "text_input" },
+        "SELECT_FORMAT": { "id": "MUS_FORMAT", "type": "dropdown", "options": ["mp3", "wav", "pcm"] },
+        "SELECT_SAMPLE_RATE": { "id": "MUS_SAMPLE_RATE", "type": "dropdown", "options": ["16000", "24000", "32000", "44100"] },
+        "SELECT_BITRATE": { "id": "MUS_BITRATE", "type": "dropdown", "options": ["32000", "64000", "128000", "256000"] },
+        "SELECT_WATERMARK": { "id": "MUS_WATERMARK", "type": "dropdown", "options": ["Off", "On"] },
+        "SELECT_OUTPUT_FMT": { "id": "MUS_OUTPUT_FMT", "type": "dropdown" },
+        "SELECT_VARIANTS": { "id": "MUS_VARIANTS", "type": "dropdown", "options": ["1×", "2×", "3×", "4×", "5×"] },
+        "INPUT_LYRICS": { "id": "MUS_LYRICS", "type": "text_input" },
+        "SELECT_INSTRUMENTAL": { "id": "MUS_INSTRUMENTAL", "type": "dropdown", "options": ["Off", "On"] },
+        "SELECT_LYRICS_OPT": { "id": "MUS_LYRICS_OPT", "type": "dropdown", "options": ["Off", "On"] },
+        "BTN_GENERATE": { "id": "MUS_BTN_GENERATE", "type": "button_primary", "shortcut": "Ctrl+Enter" },
+        "BTN_ADD_BATCH": { "id": "MUS_BTN_ADD_BATCH", "type": "button", "visual_anchor": "+ Batch" }
+      }
+    },
+    "video_tab": {
+      "description": "Video generation tab",
+      "elements": {
+        "STYLE_PRESET": { "id": "VID_STYLE", "type": "dropdown" },
+        "PROMPT_TEXTAREA": { "id": "VID_PROMPT", "type": "textarea", "max_chars": 2000 },
+        "SELECT_MODEL": { "id": "VID_MODEL", "type": "dropdown", "options": ["MiniMax-Hailuo-2.3", "MiniMax-Hailuo-2.3-Fast", "MiniMax-Hailuo-02", "S2V-01"] },
+        "INPUT_FIRST_FRAME": { "id": "VID_FIRST_FRAME", "type": "text_input", "has_browse": true },
+        "INPUT_LAST_FRAME": { "id": "VID_LAST_FRAME", "type": "text_input", "has_browse": true },
+        "INPUT_SUBJECT_IMAGE": { "id": "VID_SUBJECT_IMAGE", "type": "text_input", "has_browse": true },
+        "SELECT_DURATION": { "id": "VID_DURATION", "type": "dropdown", "options": ["6s", "10s"], "state": "may be disabled by CapabilityGuard" },
+        "SELECT_RESOLUTION": { "id": "VID_RESOLUTION", "type": "dropdown", "options": ["512P", "768P", "1080P"], "state": "model-dependent via rebuildResolutionOptions()" },
+        "SELECT_PROMPT_OPT": { "id": "VID_PROMPT_OPT", "type": "dropdown", "options": ["On", "Off"] },
+        "SELECT_FAST_PRETREAT": { "id": "VID_FAST_PRETREAT", "type": "dropdown", "options": ["Off", "On"] },
+        "SELECT_POLL_INTERVAL": { "id": "VID_POLL_INTERVAL", "type": "dropdown", "options": ["3", "5", "10", "15", "30", "60"] },
+        "SELECT_VARIANTS": { "id": "VID_VARIANTS", "type": "dropdown", "options": ["1×", "2×", "3×", "4×", "5×"] },
+        "BTN_GENERATE": { "id": "VID_BTN_GENERATE", "type": "button_primary", "shortcut": "Ctrl+Enter" }
+      }
+    }
+  },
+  "overlays": {
+    "settings_dialog": {
+      "trigger": "BTN_SETTINGS / Ctrl+S",
+      "dom": ".settings-modal",
+      "close": ["Escape", "Cancel button"],
+      "tabs": ["general", "image", "batchgen", "styles", "pipeline", "tools", "popups", "history", "shortcuts"],
+      "tab_selector": ".settings-tab-button[data-tab-button='<id>']",
+      "footer": ["Cancel", "Save (primary)"],
+      "panes": {
+        "general": {
+          "sections": ["Guided setup", "🔐 Authentication", "📁 Storage", "🌐 Generation defaults", "🔧 Diagnostics"],
+          "elements": {
+            "BTN_FIRST_TIME_SETUP": { "type": "button", "visual_anchor": "🚀 Run first-time setup" },
+            "INPUT_API_KEY": { "type": "password_input", "placeholder": "sk-cp-xxxxxxxx (or your PAYG key)", "has_show_toggle": true },
+            "CB_NO_SAVE_KEY": { "type": "checkbox", "dom": "#api-key-no-save", "visual_anchor": "Don't save" },
+            "INPUT_OUTPUT_DIR": { "type": "text_input", "has_browse": true },
+            "INPUT_REPORT_DIR": { "type": "text_input", "has_browse": true },
+            "INPUT_CONFIG_PATH": { "type": "text_input", "state": "readonly" },
+            "SELECT_REGION": { "type": "dropdown", "options": ["global", "cn"] },
+            "SELECT_THEME": { "type": "dropdown", "options": ["Dark", "Light"] },
+            "BTN_TEST_CONNECTION": { "type": "button", "visual_anchor": "Test connection" },
+            "BTN_DIAGNOSE": { "type": "button", "visual_anchor": "Diagnose" }
+          }
+        },
+        "image_addons": { "elements": { "STATUS_REALESRGAN": { "type": "status_text" }, "BTN_REDETECT": { "type": "button", "visual_anchor": "🔄 Re-detect" }, "SELECT_UPSCALE_MODEL": { "type": "dropdown" }, "BTN_DOWNLOAD_REALESRGAN": { "type": "button", "visual_anchor": "⬇ Download Real-ESRGAN" }, "BTN_OPEN_ADDONS": { "type": "button", "visual_anchor": "🧩 Open add-ons installer" } } },
+        "batchgen": { "elements": { "SELECT_EXPORT_FORMAT": { "type": "dropdown", "visual_anchor": "📝 Markdown (.md)" }, "CB_AUTO_REMOVE": { "type": "checkbox", "dom": "#batches-auto-remove-cb", "default": true } } },
+        "styles": { "elements": { "STYLE_LIST": { "type": "list" }, "INPUT_STYLE_NAME": { "type": "text_input" }, "INPUT_STYLE_VALUE": { "type": "text_input" }, "BTN_SAVE_STYLE": { "type": "button" }, "BTN_SAVE_CURRENT": { "type": "button", "visual_anchor": "✚ Save current prompt as style…" } } },
+        "pipeline": { "elements": { "SELECT_AUDIO_FORMAT": { "type": "dropdown", "visual_anchor": "WAV (lossless)" } } },
+        "external_tools": { "elements": { "TOOL_LIST": { "type": "list" }, "BTN_ADD_TOOL": { "type": "button", "visual_anchor": "+ Add tool" } } },
+        "popups": { "elements": { "SELECT_POPUP_BEHAVIOUR": { "type": "dropdown" }, "BTN_RESET_POPUP_HISTORY": { "type": "button" } } },
+        "history": { "elements": { "INPUT_HISTORY_CAP": { "type": "number_input", "dom": "#history-cap-input", "range": "20-1000" }, "BTN_OPEN_ARCHIVE": { "type": "button", "visual_anchor": "Open archive…" }, "BTN_CLEAR_ARCHIVE": { "type": "button_danger", "visual_anchor": "Clear archive" } } },
+        "shortcuts": { "type": "readonly_table", "shortcuts": { "Ctrl+Enter": "Generate", "Ctrl+1/2/3/4": "Switch tab", "Ctrl+B": "BatchGen", "Ctrl+T": "Styles", "Ctrl+S": "Settings", "Ctrl+L": "Theme", "Ctrl+F": "Filter", "Ctrl+R": "Quota", "Ctrl+U": "Up folder" } }
+      }
+    },
+    "style_settings": { "trigger": "BTN_STYLES / Ctrl+T", "title": "Style Settings", "elements": { "STYLE_LIST": { "type": "list" }, "INPUT_NAME": { "type": "text_input" }, "INPUT_VALUE": { "type": "text_input" }, "BTN_CLOSE": { "type": "button" }, "BTN_SAVE_CURRENT": { "type": "button" }, "BTN_SAVE_STYLE": { "type": "button" } } },
+    "import_batch_overlay": {
+      "trigger": "BTN_IMPORT_BATCH",
+      "dom": "#modal-root .modal (id: import-batch-overlay)",
+      "title": "Import Batch",
+      "close": ["Escape", "Close button"],
+      "steps": {
+        "step1": { "title": "Step 1 · Get the AI instruction file", "BTN_SAVE_INSTRUCTION": { "type": "button", "visual_anchor": "Save instruction file…", "effect": "opens Save-As dialog for the instruction manual" } },
+        "step2": { "title": "Step 2 · Import the completed batch file", "BTN_IMPORT_FILE": { "type": "button", "visual_anchor": "Import batch file…", "effect": "opens file picker + review modal" } },
+        "step3": { "title": "Step 3 · Generate with M3 (no external AI)", "CB_M3_TOGGLE": { "type": "checkbox", "dom": "#ib-m3-toggle", "visual_anchor": "Let the tool generate the batch using MiniMax M3 directly" }, "M3_FORM": { "dom": "#ib-m3-form", "visible_when": "CB_M3_TOGGLE checked", "elements": { "INPUT_GDD_PATH": { "type": "text_input", "state": "readonly" }, "BTN_GDD_BROWSE": { "type": "button", "visual_anchor": "Browse…" }, "INPUT_STYLE_NAME": { "type": "text_input" }, "INPUT_STYLE_PREFIX": { "type": "text_input" }, "INPUT_VARIANTS": { "type": "number_input", "min": 1, "max": 5 }, "CB_AUTO_PIPELINE": { "type": "checkbox", "dom": "#ib-m3-pipeline" }, "BTN_M3_START": { "type": "button_primary", "visual_anchor": "Generate batch with M3" }, "BTN_M3_CANCEL": { "type": "button", "visual_anchor": "Cancel" }, "M3_PROGRESS": { "type": "text", "visual_anchor": "Step k/N — …" } } } }
+      }
+    },
+    "batchgen_dialog": { "trigger": "BTN_BATCH / Ctrl+B / BTN_BATCH_MODE", "title": "BatchGen — <Tab> Tab", "elements": { "QUEUE_LIST": { "type": "list", "max_items": 100, "row_controls": ["textarea", "↑", "↓", "✕"] }, "BTN_ADD_PROMPT": { "type": "button" }, "BTN_BULK_PASTE": { "type": "button" }, "BTN_CLEAR_ALL": { "type": "button", "confirm": true }, "BTN_CLOSE": { "type": "button" }, "BTN_SAVE": { "type": "button_primary", "visual_anchor": "Save (N)" } } },
+    "pipeline_overlay": {
+      "trigger": "BTN_PIPELINE",
+      "dom": "#pipeline-overlay",
+      "z_index": 200,
+      "close": ["Escape (when no input focused)", "✕ button", "click overlay background"],
+      "paste_from_clipboard": { "trigger": "Ctrl+V while pipeline overlay is open", "effect": "pasted images written to workspace/original/ and enqueued" },
+      "header": {
+        "TITLE": { "type": "text", "visual_anchor": "🛤 Pipeline" },
+        "DROPZONE": { "type": "dropzone", "dom": "#pipeline-dropzone-header", "visual_anchor": "Drag images here", "interaction": "drag-drop image files to import" },
+        "BTN_LOAD_DISC": { "type": "button_primary", "visual_anchor": "📁 Load from disc…" },
+        "BTN_LOAD_FOLDER": { "type": "button", "visual_anchor": "📂 Folder…", "tooltip": "Set the output folder for the whole pipeline" },
+        "SUMMARY": { "type": "text", "dom": "#pipeline-summary", "visual_anchor": "N images · N in Upscale · N running · N error" },
+        "BTN_FINAL_COLUMN": { "type": "dropdown_button", "visual_anchor": "📦 Final column ▾", "tooltip": "Clear or export the finalized images" },
+        "BTN_CLOSE": { "type": "button", "visual_anchor": "✕" },
+        "INPUT_FILTER": { "type": "text_input", "dom": "#pipeline-filter", "placeholder": "Filter cards…" }
+      },
+      "columns": {
+        "stages": ["original", "upscale", "removebg", "crop", "resize", "optimize", "final"],
+        "stage_titles": ["Original", "Upscale", "Remove BG", "Crop", "Resize", "Optimize / Convert", "Final"],
+        "per_column_header": ["title", "count badge (#pl-count-<id>)"],
+        "active_columns": ["upscale", "removebg", "crop", "resize", "optimize"],
+        "sink_column": "final"
+      },
+      "card": {
+        "dom": ".pipeline-card[data-card-id]",
+        "states": ["idle", "running (.running)", "error (.errored)", "missing (.missing)"],
+        "elements": {
+          "THUMBNAIL": { "type": "image", "interaction": "click opens image viewer overlay" },
+          "NAME": { "type": "text", "interaction": "click opens rename modal" },
+          "STATUS_BADGE": { "type": "text", "visual_anchor": "⟳ working… / ⚠ error / ✖ file missing" },
+          "PROGRESS_BAR": { "type": "progress", "visible_when": "status=running" },
+          "INFO_PANEL": { "type": "panel", "children": ["dims (W×H)", "info summary (column · ext · settings)", "warning line"] },
+          "LAST_CROP_LABEL": { "type": "link", "visible_when": "crop column + previous crop this session", "visual_anchor": "↩ reuse last crop (WxH)" }
+        },
+        "settings_expander": {
+          "trigger": "⚙ Settings <details> (active columns only)",
+          "upscale": ["multiplier (1-8)", "model dropdown", "canvas fallback checkbox"],
+          "removebg": ["model (IS-Net/BiRefNet Lite/BiRefNet/BiRefNet Portrait)", "GPU checkbox"],
+          "crop": ["W input", "H input", "anchor X (L/C/R)", "anchor Y (T/C/B)", "✂ Drag frame… button"],
+          "resize": ["W input", "🔗 chain toggle", "H input", "sharpen checkbox"],
+          "optimize": ["format (keep/jpeg/png/webp/avif)", "quality (1-100)", "preset buttons (60/75/82/95)", "strip metadata checkbox"]
+        },
+        "actions_original": ["⏭ to Upscale", "✓ Finalize", "↺ Replace…", "🔧 Open in…", "⧉ Duplicate", "🗑 Delete"],
+        "actions_active": ["⏪ Back", "⏭ Skip", "▶ Run", "✓ Finalize", "↺ Replace…", "🔧 Open in…", "⧉ Duplicate", "🗑 Delete"],
+        "actions_crop_extra": ["🩹 Correct (opens crop in editor)"],
+        "actions_final": ["⏪ Back", "👁 Open", "📂 Reveal", "↧ Export copy…", "💾 Save & Remove", "🗑 Remove", "⧉ Duplicate"],
+        "actions_running": ["✖ Cancel"]
+      },
+      "final_column_menu": {
+        "trigger": "BTN_FINAL_COLUMN click",
+        "title": "Final column operations",
+        "options": [
+          { "id": "EXPORT_ALL", "visual_anchor": "📦 Export all finals…", "effect": "copy to folder + remove from board" },
+          { "id": "EXPORT_ALL_REPORT", "visual_anchor": "📦📋 Export all + report…", "effect": "copy + markdown report + remove" },
+          { "id": "EXPORT_KEEP", "visual_anchor": "📥 Export all (keep on board)", "effect": "copy, images stay" },
+          { "id": "EXPORT_KEEP_REPORT", "visual_anchor": "📥📋 Export all + report (keep on board)", "effect": "copy + report, images stay" },
+          { "id": "CLEAR", "visual_anchor": "🗑 Clear final column", "effect": "remove all (to trash)" },
+          { "id": "CLEAR_REPORT", "visual_anchor": "📋 Clear with report", "effect": "remove + write report" }
+        ],
+        "BTN_CLOSE": { "type": "button", "visual_anchor": "Close" }
+      },
+      "rename_modal": { "trigger": "click card name", "title": "Rename Item", "elements": { "INPUT_NAME": { "type": "text_input" }, "BTN_SAVE": { "type": "button_primary" }, "BTN_CANCEL": { "type": "button" } } }
+    },
+    "image_editor": {
+      "trigger": "BTN_IMAGE_EDIT / ✏ in image viewer / context menu → ✏ Edit",
+      "dom": ".image-editor-modal",
+      "close": ["Escape", "✕ button", "Cancel button"],
+      "layout": "3-pane: left tool rail, center canvas, right Asset Composer",
+      "header": {
+        "BTN_FIT": { "type": "button", "visual_anchor": "Fit", "shortcut": "Ctrl+0" },
+        "BTN_ZOOM_OUT": { "type": "button", "visual_anchor": "−" },
+        "ZOOM_LABEL": { "type": "text", "visual_anchor": "100%" },
+        "BTN_ZOOM_IN": { "type": "button", "visual_anchor": "+" },
+        "BTN_100": { "type": "button", "visual_anchor": "100%", "shortcut": "Ctrl+1" },
+        "BTN_HELP": { "type": "button", "visual_anchor": "?" },
+        "BTN_CLOSE": { "type": "button", "visual_anchor": "✕" }
+      },
+      "tool_rail": {
+        "tools": [
+          { "id": "TOOL_PEN", "glyph": "🖊", "key": "B", "name": "pen" },
+          { "id": "TOOL_SPRAY", "glyph": "🌫", "key": "A", "name": "spray" },
+          { "id": "TOOL_ERASER", "glyph": "🧽", "key": "E", "name": "eraser" },
+          { "id": "TOOL_PIPETTE", "glyph": "💧", "key": "I", "name": "pipette" },
+          { "id": "TOOL_MOVE", "glyph": "✥", "key": "V", "name": "move" },
+          { "id": "TOOL_ZOOM", "glyph": "🔍", "key": "Z", "name": "zoom" },
+          { "id": "TOOL_HEAL", "glyph": "🩹", "key": "H", "name": "heal" },
+          { "id": "TOOL_SELECT", "glyph": "▭", "key": "M", "name": "select" },
+          { "id": "TOOL_BAR", "glyph": "─", "key": "L", "name": "bar (line tool, 2-click placement)" }
+        ],
+        "FG_SWATCH": { "type": "color_swatch", "default": "#000000" },
+        "BG_SWATCH": { "type": "color_swatch", "default": "#ffffff" },
+        "BTN_SWAP_COLORS": { "type": "button", "visual_anchor": "⇄", "shortcut": "X" },
+        "BTN_RESET_COLORS": { "type": "button", "visual_anchor": "⇅", "shortcut": "D" },
+        "SLIDER_SIZE": { "type": "range_slider", "min": 1, "max": 200, "default": 12, "shortcut": "[ ]" },
+        "SLIDER_OPACITY": { "type": "range_slider", "min": 0, "max": 100, "default": 100 }
+      },
+      "canvas": {
+        "empty_state": "No image loaded",
+        "BTN_LOAD_IMAGE": { "type": "button_primary", "visual_anchor": "📂 Load image…" },
+        "interaction": "Fabric.js canvas, drawing/objects, undo/redo (Ctrl+Z/Y), right-click context menu"
+      },
+      "objects_list": {
+        "location": "right panel below source tray",
+        "per_object": ["label (Image N / Bar N)", "↑ bring forward", "↓ send backward", "↔ flip H", "↕ flip V", "✖ delete"],
+        "interaction": "click row selects object on canvas; active row highlighted"
+      },
+      "queue_bar": {
+        "location": "bottom filmstrip (GIMP-style)",
+        "type": "thumbnail_strip",
+        "interaction": "click thumbnail switches active editing slot; shows modified indicator"
+      },
+      "asset_panel": {
+        "state": "collapsible (default collapsed)",
+        "BTN_EXPAND": { "type": "button", "visual_anchor": "«" },
+        "ASSET_TABS": { "type": "tab_buttons", "options": ["1", "2", "3"] },
+        "BTN_LOAD": { "type": "button", "visual_anchor": "📂 Load…" },
+        "BTN_GENERATE": { "type": "button", "visual_anchor": "✨ Generate…" },
+        "BTN_SEND_TO_CANVAS": { "type": "button_primary", "visual_anchor": "→ Send to canvas" },
+        "BTN_REMOVE_BG": { "type": "button", "visual_anchor": "✂ Remove BG" },
+        "BTN_SWAP": { "type": "button", "visual_anchor": "⇄ Swap" },
+        "BTN_EXPORT": { "type": "button", "visual_anchor": "💾 Export…" },
+        "BTN_HEAL": { "type": "button", "visual_anchor": "🩹 Heal" },
+        "SLIDER_ASSET_OPACITY": { "type": "range_slider", "min": 5, "max": 100 },
+        "SELECT_BLEND": { "type": "dropdown", "options": ["normal", "multiply", "screen", "overlay", "darken", "lighten"] },
+        "RESIZE_W": { "type": "number_input" },
+        "RESIZE_H": { "type": "number_input" },
+        "BTN_RESIZE_APPLY": { "type": "button", "visual_anchor": "Apply" },
+        "HISTORY_STRIP": { "type": "thumbnail_strip", "max_items": 8, "interaction": "click thumbnail to reload" }
+      },
+      "resize_canvas_section": {
+        "location": "right panel (source tray area)",
+        "title": "📐 Resize canvas",
+        "elements": {
+          "INPUT_W": { "type": "number_input", "min": 1 },
+          "CHAIN_LINK": { "type": "toggle_button", "visual_anchor": "🔗", "default": true },
+          "INPUT_H": { "type": "number_input", "min": 1 },
+          "BTN_APPLY": { "type": "button", "visual_anchor": "Apply" }
+        },
+        "behavior": "Lanczos3 resampling; >120% enlargement offers Real-ESRGAN upscale instead; pushes undo step"
+      },
+      "generate_popover": {
+        "trigger": "BTN_GENERATE in asset panel",
+        "elements": {
+          "INPUT_PROMPT": { "type": "textarea", "max_chars": 1500 },
+          "INPUT_WIDTH": { "type": "number_input", "range": "512-2048 (clamped to multiple of 8)" },
+          "INPUT_HEIGHT": { "type": "number_input", "range": "512-2048" },
+          "SELECT_COUNT": { "type": "dropdown", "options": ["1", "2", "3", "4"] },
+          "BTN_GENERATE": { "type": "button_primary", "visual_anchor": "Generate" }
+        },
+        "note": "Uses same mmx contract as Image tab. For --n > 1, shows 2×2 picker modal to choose result."
+      },
+      "heal_menu": {
+        "trigger": "BTN_HEAL_DROPDOWN in footer / 🩹 Heal ▾",
+        "title": "🩹 Heal / Inpaint",
+        "options": [
+          { "id": "HEAL_SELECTION", "visual_anchor": "🩹 Heal Selection", "desc": "Fill a selected rectangle from surrounding texture (fast, local)" },
+          { "id": "HEAL_TRANSPARENCY", "visual_anchor": "🩹 Heal Transparency", "desc": "Fill all transparent holes left by background removal" },
+          { "id": "RESYNTHESIZE", "visual_anchor": "✨ Resynthesize", "desc": "Stronger AI content-aware fill (LaMa/MI-GAN)" },
+          { "id": "MANAGE_MODELS", "visual_anchor": "🧠 Manage heal models…", "desc": "Check status, replace MI-GAN / LaMa with newer ONNX" }
+        ],
+        "BTN_CANCEL": { "type": "button" }
+      },
+      "heal_models_overlay": {
+        "trigger": "MANAGE_MODELS in heal menu",
+        "title": "🧠 Heal Models",
+        "elements": {
+          "MODEL_LIST": { "type": "list", "per_model": ["label", "license · size · bestFor", "presence status", "Replace file… button", "Restore bundled button (if override)"] },
+          "BTN_CLOSE": { "type": "button" }
+        }
+      },
+      "footer": {
+        "BTN_SAVE": { "type": "button_primary", "visual_anchor": "💾 Save", "shortcut": "Ctrl+S" },
+        "SELECT_FORMAT": { "type": "dropdown", "options": ["PNG (transparency)", "JPEG", "WebP"] },
+        "BTN_BAKE": { "type": "button", "visual_anchor": "↻ Bake" },
+        "BTN_HEAL_DROPDOWN": { "type": "dropdown_button", "visual_anchor": "🩹 Heal ▾" },
+        "BTN_REMOVE_BG": { "type": "button", "visual_anchor": "✂ Remove BG" },
+        "BTN_OPEN_IN": { "type": "button", "visual_anchor": "🔧 Open in…" },
+        "BTN_CANCEL": { "type": "button", "visual_anchor": "Cancel" }
+      },
+      "cheatsheet": { "trigger": "BTN_HELP (?)", "shortcuts": ["B/A/E/I/V/Z/H/M/L (tools)", "Space (pan)", "Wheel (zoom)", "[ ] (brush size)", "X (swap colors)", "D (reset colors)", "Ctrl+Z (undo)", "Ctrl+Y (redo)", "Ctrl+S (save)", "Ctrl+0 (fit)", "Ctrl+1 (100%)"] }
+    },
+    "image_viewer_overlay": {
+      "trigger": "click thumbnail in preview / pipeline card thumbnail / fb-list double-click image",
+      "dom": "#image-overlay",
+      "z_index": 250,
+      "close": ["Escape", "× button", "click background"],
+      "header": {
+        "FILENAME": { "type": "text", "dom": ".image-overlay-filename" },
+        "POSITION": { "type": "text", "dom": ".image-overlay-pos", "visual_anchor": "(3 / 12)", "visible_when": "multiple images in nav list" },
+        "SIZE": { "type": "text", "dom": ".image-overlay-size", "visual_anchor": "1024×768" },
+        "BTN_PREV": { "type": "button", "visual_anchor": "‹", "shortcut": "ArrowLeft" },
+        "BTN_NEXT": { "type": "button", "visual_anchor": "›", "shortcut": "ArrowRight" },
+        "BTN_EDIT": { "type": "button", "visual_anchor": "✏", "tooltip": "Edit this image in the pixel editor" },
+        "SELECT_ZOOM": { "type": "dropdown", "options": ["200%", "175%", "150%", "125%", "100% (1:1)", "75%", "50%", "25%", "Fit to window"], "default": "100% (1:1)" },
+        "BTN_CLOSE": { "type": "button", "visual_anchor": "×" }
+      },
+      "content": { "type": "image", "dom": ".image-overlay-img", "interaction": "Ctrl+wheel zooms, right-click opens save menu" },
+      "context_menu": { "trigger": "right-click on image", "dom": ".custom-context-menu", "options": ["Save to… (pick folder)", "Close"] },
+      "navigation": "Arrow keys wrap-around, nav list from preview batch or fb image files"
+    },
+    "audio_cutter": {
+      "trigger": "context menu → ✂ Audio cut… / bulk toolbar ✂ Trim",
+      "dom": ".audio-cutter-modal",
+      "title": "✂ Audio cut",
+      "elements": {
+        "META_FILENAME": { "type": "text", "dom": ".ac-filename" },
+        "ERROR_BOX": { "type": "error_banner", "dom": ".ac-error" },
+        "WAVEFORM_STAGE": { "type": "canvas", "dom": ".ac-canvas", "interaction": "drag to set selection, drag markers" },
+        "MARKER_START": { "type": "draggable_marker", "dom": ".ac-marker-start" },
+        "MARKER_END": { "type": "draggable_marker", "dom": ".ac-marker-end" },
+        "PLAY_CURSOR": { "type": "indicator", "dom": ".ac-play-cursor" },
+        "INPUT_START_TIME": { "type": "text_input", "dom": ".ac-time-inp", "format": "m:ss.mmm" },
+        "INPUT_END_TIME": { "type": "text_input", "dom": ".ac-time-inp", "format": "m:ss.mmm" },
+        "SELECTION_LABEL": { "type": "text", "dom": ".ac-playtime" },
+        "BTN_PLAY": { "type": "button", "visual_anchor": "▶ Play selection" },
+        "BTN_STOP": { "type": "button", "visual_anchor": "■ Stop" },
+        "BTN_AUTO_TRIM": { "type": "button", "visual_anchor": "✨ Auto-trim silence" },
+        "BTN_WHOLE_FILE": { "type": "button", "visual_anchor": "↺ Whole file" },
+        "CB_FADE": { "type": "checkbox", "visual_anchor": "Fade edges", "default": true },
+        "INPUT_FADE_MS": { "type": "number_input", "default": 5, "min": 0, "max": 200 },
+        "CB_LOSSLESS": { "type": "checkbox", "visual_anchor": "Lossless (stream copy)" },
+        "SELECT_FORMAT": { "type": "dropdown", "options": ["(keep source)", "mp3", "wav", "flac", "ogg", "m4a", "opus"] },
+        "INPUT_FILENAME": { "type": "text_input", "dom": ".ac-name-inp", "visual_anchor": "<name>_trim.<ext>" },
+        "BTN_EXPORT": { "type": "button_primary", "visual_anchor": "✂ Export trimmed clip" },
+        "AUTOCUT_SECTION": {
+          "title": "Auto-cut (batch segment detection)",
+          "INPUT_THRESHOLD": { "type": "number_input", "default": -35, "range": "-80 to -10" },
+          "INPUT_MIN_SILENCE": { "type": "number_input", "default": 250 },
+          "INPUT_MIN_SEGMENT": { "type": "number_input", "default": 0.15 },
+          "INPUT_MAX_SEGMENT": { "type": "number_input", "default": 3.0 },
+          "SELECT_POLICY": { "type": "dropdown", "options": ["truncate", "skip", "split"] },
+          "INPUT_PAD_MS": { "type": "number_input", "default": 25 },
+          "INPUT_MAX_SEGMENTS": { "type": "number_input", "default": 20 },
+          "BTN_AUTOCUT": { "type": "button", "visual_anchor": "🔪 Auto-cut segments" }
+        }
+      }
+    },
+    "active_jobs_widget": {
+      "trigger": "automatic when generation jobs are running",
+      "dom": "#active-jobs-widget",
+      "position": "fixed bottom-right of content area",
+      "elements": {
+        "HEADER": { "type": "text", "visual_anchor": "Running" },
+        "JOB_LIST": { "type": "list", "per_row": ["type icon (🖼/🗣/🎵/🎬/⬆/⚙/✂)", "title", "meta (tab · progress · age)", "✕ cancel button"] },
+        "interaction": "click row scrolls log to corresponding entry"
+      }
+    },
+    "archive_viewer": {
+      "trigger": "Settings → History → Open archive…",
+      "dom": "#archive-viewer-modal",
+      "title": "Archive (L3 history)",
+      "elements": {
+        "INPUT_SEARCH": { "type": "search_input", "dom": "#archive-viewer-search", "placeholder": "Filter by title, type, status…" },
+        "SELECT_STATUS": { "type": "dropdown", "dom": "#archive-viewer-status", "options": ["All", "OK", "Failed", "Partial", "Cancelled"] },
+        "INFO_LABEL": { "type": "text", "dom": "#archive-viewer-info" },
+        "LIST": { "type": "scrollable_list", "dom": "#archive-viewer-list", "pagination": "infinite scroll, 100 entries per page" },
+        "BTN_CLOSE": { "type": "button", "visual_anchor": "Close" }
+      }
+    },
+    "generation_error_panel": {
+      "trigger": "generation failure (any tab)",
+      "location": "status bar (top of content area) + toast + log entry",
+      "dom": "#statusbar.error",
+      "note": "F4/F5 redesign: errors route to the status bar (class .error) with inline action links + toast + log. No per-tab preview area.",
+      "elements": {
+        "STATUSBAR_ERROR": { "type": "text", "dom": "#statusbar.error", "visual_anchor": "Generation failed…" },
+        "ACTION_LINKS": { "type": "link_group", "dom": ".statusbar-action", "examples": ["Retry", "Diagnose"] }
+      }
+    },
+    "upscale_overlay": { "trigger": "context menu → 🔍 Upscale", "title": "🔍 Upscale image", "requires_image_load": true, "elements": { "SELECT_MULTIPLIER": { "type": "dropdown", "options": ["2×", "3×", "4×", "8×"] }, "SELECT_MODEL": { "type": "dropdown" }, "CB_AUTO_CROP": { "type": "checkbox" }, "INPUT_CROP_W": { "type": "number_input", "visible_when": "auto_crop checked" }, "INPUT_CROP_H": { "type": "number_input", "visible_when": "auto_crop checked" }, "ANCHOR_GRID": { "type": "3x3_grid", "visible_when": "auto_crop checked" }, "CB_REMOVE_BG_AFTER": { "type": "checkbox" }, "ADVANCED_SETTINGS": { "type": "details_collapsed", "children": ["tile_size", "tta_checkbox", "gpu_id"] }, "BTN_UPSCALE": { "type": "button_primary" }, "BTN_CANCEL": { "type": "button" } } },
+    "crop_overlay": { "trigger": "context menu → ✂ Crop / pipeline card ✂ Drag frame", "dom": "#image-crop", "requires_image_load": true, "elements": { "CB_AUTO_SIZE": { "type": "checkbox", "default": true }, "INPUT_WIDTH": { "type": "number_input" }, "INPUT_HEIGHT": { "type": "number_input" }, "BTN_APPLY": { "type": "button" }, "CROP_STAGE": { "type": "image_stage", "has_draggable_frame": true }, "BTN_CROP": { "type": "button_primary" }, "BTN_CANCEL": { "type": "button" } } },
+    "resize_overlay": { "trigger": "context menu → 📐 Resize", "dom": "#image-resize", "requires_image_load": true, "elements": { "INPUT_TARGET_W": { "type": "number_input" }, "BTN_ASPECT_CHAIN": { "type": "toggle_button", "visual_anchor": "🔗" }, "INPUT_TARGET_H": { "type": "number_input" }, "CB_SHARPEN": { "type": "checkbox", "default": true }, "BTN_RESIZE": { "type": "button_primary" }, "BTN_CANCEL": { "type": "button" } } },
+    "convert_overlay": { "trigger": "context menu → ⇄ Convert", "dom": "#image-convert", "elements": { "SELECT_OUTPUT_FORMAT": { "type": "dropdown", "options": ["PNG", "JPEG", "WebP"] }, "SLIDER_QUALITY": { "type": "range_slider", "min": 1, "max": 100, "default": 95 }, "BTN_CONVERT": { "type": "button_primary" }, "BTN_CANCEL": { "type": "button" } } },
+    "optimize_overlay": { "trigger": "context menu → 🗜 Optimize", "dom": "#image-optimize", "elements": { "SLIDER_QUALITY": { "type": "range_slider", "min": 1, "max": 100, "default": 82 }, "PRESET_BUTTONS": { "type": "button_group", "options": ["small (60)", "balanced (75)", "max quality (82)", "near-lossless (95)"] }, "SELECT_OUTPUT_FORMAT": { "type": "dropdown", "options": ["Keep source", "JPEG", "PNG", "WebP", "AVIF"] }, "CB_STRIP_EXIF": { "type": "checkbox", "default": true }, "BTN_OPTIMIZE": { "type": "button_primary" }, "BTN_CANCEL": { "type": "button" } } },
+    "remove_bg_overlay": { "trigger": "context menu → ✨ Remove BG", "dom": "#remove-bg", "elements": { "SELECT_MODEL": { "type": "dropdown", "options": ["IS-Net (fast)", "BiRefNet Lite (clean)", "BiRefNet (best)", "BiRefNet Portrait"] }, "CB_USE_GPU": { "type": "checkbox", "default": true }, "ADVANCED_ONNX": { "type": "details_collapsed" }, "BTN_REMOVE_BG": { "type": "button_primary" }, "BTN_CANCEL": { "type": "button" } } },
+    "upscale_settings_modal": { "trigger": "click Upscale label text", "title": "🔍 Upscale settings", "elements": { "SELECT_MULTIPLIER": { "type": "dropdown", "options": ["2×", "3×", "4×"] }, "CB_AUTO_CROP": { "type": "checkbox" }, "CB_REMOVE_BG": { "type": "checkbox" }, "BTN_ADDONS_MANAGER": { "type": "button" }, "CB_OPTIMIZE": { "type": "checkbox" }, "BTN_SAVE": { "type": "button_primary" }, "BTN_CANCEL": { "type": "button" } } },
+    "folder_options": { "trigger": "BTN_FB_OPTIONS", "title": "📁 Folder options", "elements": { "CB_THUMBNAILS": { "type": "checkbox" }, "CB_SHOW_ALL_FILES": { "type": "checkbox" }, "CB_COL_SIZE": { "type": "checkbox" }, "CB_COL_TYPE": { "type": "checkbox" }, "CB_COL_MODIFIED": { "type": "checkbox" }, "CB_COL_CREATED": { "type": "checkbox" }, "CB_COL_PATH": { "type": "checkbox" }, "CB_COL_NAME": { "type": "checkbox", "state": "disabled" }, "BTN_CLOSE": { "type": "button" } } },
+    "context_menu_file": {
+      "trigger": "right-click file in fb-list",
+      "type": "custom_modal (not native OS menu)",
+      "elements_image": ["👁 Open / Preview", "📂 Open in Explorer", "↗ Reveal", "🔍 Upscale", "✂ Crop", "📐 Resize", "⇄ Convert", "🗜 Optimize", "✨ Remove BG", "✏ Edit", "🛤 Add to Pipeline", "🔧 OPEN IN… (N)", "⚙ Manage tools…", "📋 Copy", "✂ Cut", "✎ Rename…", "➡ Move to…", "📥 Paste here", "🗑 Delete", "Close"],
+      "elements_folder": ["👁 Open / Preview", "📂 Open in Explorer", "↗ Reveal", "📋 Copy", "✂ Cut", "✎ Rename…", "➡ Move to…", "📥 Paste here", "🗑 Delete", "Close"],
+      "elements_audio": ["👁 Open / Preview", "📂 Open in Explorer", "↗ Reveal", "✂ Audio cut…", "📋 Copy", "✂ Cut", "✎ Rename…", "➡ Move to…", "📥 Paste here", "🗑 Delete", "Close"]
+    },
+    "diagnose_dialog": { "trigger": "Settings → Diagnose / error panel → 🩺 Diagnose", "title": "Diagnose", "elements": { "DIAG_OUTPUT": { "type": "monospace_text" }, "BTN_QUOTA_TEST": { "type": "button", "visual_anchor": "Run real quota test" }, "BTN_CLOSE": { "type": "button" } } },
+    "first_time_setup": { "trigger": "Settings → 🚀 Run first-time setup", "title": "First-time setup", "elements": { "INPUT_API_KEY": { "type": "password_input", "has_show_toggle": true }, "INPUT_OUTPUT_DIR": { "type": "text_input", "has_browse": true }, "SELECT_REGION": { "type": "dropdown" }, "BTN_SKIP": { "type": "button" }, "BTN_SAVE": { "type": "button_primary" } } },
+    "startup_modal": { "trigger": "app launch / click .brand", "elements": { "WELCOME_TEXT": { "type": "text" }, "BTN_OK": { "type": "button_primary", "visual_anchor": "OK" } }, "close": ["BTN_OK", "Escape"] }
+  },
+  "dynamic_elements": {
+    "tab_status_dots": {
+      "location": "on tab buttons (TAB_IMAGE/SPEECH/MUSIC/VIDEO)",
+      "states": ["tab-dot-red (generation running)", "tab-dot-green (done, user on different tab)", "none (idle or user viewing tab)"],
+      "trigger": "automatic via refreshTabStatusDots()"
+    },
+    "tab_eta_timer": {
+      "location": "next to active tab label",
+      "visual_anchor": "mm:ss countdown",
+      "visible_when": "generation running on that tab",
+      "behavior": "estimates remaining time from rolling average; includes batch queue items"
+    },
+    "tab_intro_popup": {
+      "trigger": "first visit to each tab (gated by popup policy)",
+      "title": "👋 Welcome to the <Tab> tab",
+      "elements": { "INTRO_TEXT": { "type": "text" }, "BTN_GOT_IT": { "type": "button_primary", "visual_anchor": "Got it" } },
+      "close": ["BTN_GOT_IT", "Escape"],
+      "note": "Deferred while startup popup chain is active"
+    },
+    "whats_new_toast": {
+      "trigger": "first launch of a new version (package.json version > lastSeenVersion)",
+      "dom": ".whats-new-toast",
+      "elements": { "HEADLINE": { "type": "text", "visual_anchor": "v1.0.0 is here", "interaction": "click expands bullet list" }, "BTN_X": { "type": "button", "visual_anchor": "×" }, "LIST": { "type": "bullet_list", "state": "collapsed by default" } },
+      "dismiss": "BTN_X click (persists lastSeenVersion)"
+    },
+    "batch_controls_bar": {
+      "location": "per-tab action bar (data-batch-controls)",
+      "states": {
+        "empty_queue": ["BTN_BATCH_MODE (⚙ Batch Mode)"],
+        "populated_queue": ["BTN_START_BATCH (▶ Start BatchGen (N))", "BTN_BATCH_EDIT (✎)"]
+      },
+      "shared_buttons": ["BTN_IMPORT_BATCH (Import Batch)", "BTN_BATGEN_ALL (▶ BatGen All Types (N))", "BTN_BATGEN_ALL_EDIT (✎)", "ALL_ETA (batch-all-eta span)"],
+      "BTN_BATGEN_ALL_visible_when": "total batch items across all tabs > 0"
+    },
+    "batch_progress_overlay": {
+      "trigger": "startBatchGen(tabKey) execution",
+      "dom": ".batch-overlay",
+      "location": "inserted before .preview in tab content",
+      "elements": {
+        "TITLE": { "type": "text", "visual_anchor": "BatchGen — <Tab>" },
+        "COUNTER": { "type": "text", "visual_anchor": "3 / 10" },
+        "PROGRESS_BAR": { "type": "determinate_bar" },
+        "CURRENT_PROMPT": { "type": "text", "max_chars": 200 },
+        "ELAPSED": { "type": "text", "visual_anchor": "Elapsed: 1m 23s" },
+        "LOG": { "type": "scrollable_list", "dom": ".batch-overlay-log", "per_line": ["✓ ok / ✗ err / ⚠ skipped"] },
+        "BTN_STOP": { "type": "button_danger", "visual_anchor": "■ Stop batch", "state_after": "Close (when done)" }
+      }
+    },
+    "batch_entry_params": {
+      "location": "per-entry in BatchGen dialog (object entries only)",
+      "elements": {
+        "PARAMS_INPUT": { "type": "text_input", "placeholder": "--model … --bitrate … (CLI-style flags)" },
+        "DEFECTIVE_WARNING": { "type": "text", "dom": ".batch-defective-reasons", "visual_anchor": "⚠ reason1 • reason2" }
+      },
+      "behavior": "editing params revalidates; valid values clear ⚠ flag"
+    },
+    "all_batch_dashboard": {
+      "trigger": "BTN_BATGEN_ALL_EDIT (✎ next to BatGen All Types)",
+      "title": "BatchGen Dashboard",
+      "elements": { "PER_TAB_SECTIONS": { "type": "list", "per_tab": ["tab label", "model", "style", "queued items", "ETA"] }, "BTN_CLOSE": { "type": "button" } },
+      "refresh": "1s interval while open"
+    },
+    "optional_addons_popup": {
+      "trigger": "first-run auto-open / Settings → Image upscaling → Re-open add-ons",
+      "dom": ".optional-addons-modal",
+      "title": "🧩 Optional add-ons",
+      "cards": [
+        { "id": "REALESRGAN", "title": "🔍 Real-ESRGAN upscaler (BSD-3-Clause)", "status_dom": ".addon-status", "actions": ["Download from GitHub", "Pick file…", "Open releases page"] },
+        { "id": "ISNET_BINARY", "title": "✨ IS-Net background removal — Node.js wrapper (MIT)", "actions": ["Pick binary… (optional)", "Open README"] },
+        { "id": "ISNET_MODEL", "title": "✨ IS-Net model — isnet-general-use.onnx (MIT, ~170 MB)", "actions": ["Pick model…", "Open HuggingFace"] }
+      ],
+      "footer": ["BTN_REDETECT (🔄 Re-detect)", "BTN_SKIP (Skip for now)", "BTN_NEVER (Don't ask again)"]
+    },
+    "style_preview_block": {
+      "location": "below style dropdown on each tab",
+      "dom": ".style-preview-details",
+      "type": "collapsible <details>",
+      "content": "Full prompt with style prefix highlighted (.prefix class)",
+      "state": "collapsed by default"
+    },
+    "lastcmd_tooltip": {
+      "trigger": "1s hover on .lastcmd elements",
+      "dom": ".long-hover-tooltip",
+      "type": "fixed-position popup",
+      "behavior": "shows full ellipsized text; text-selectable; dismisses on click/scroll/resize",
+      "note": "LEGACY: .lastcmd spans were removed in H3-B9; tooltip component exists but has no active targets in current UI"
+    }
+  },
+  "toasts": { "dom": "#toast-root .toast", "types": ["ok (green)", "err (red)", "warn (amber)", "info (blue)"], "auto_dismiss": "~6s" },
+  "help_system": { "trigger": "hover over ? icons (.help-btn)", "type": "tooltip (div.help-hover-tooltip, z-index 350)", "delay": "250ms", "dismiss": "mousedown/click/mouseout/Escape/blur" }
+}

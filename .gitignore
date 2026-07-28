@@ -1,0 +1,77 @@
+# ---- dependencies ----
+node_modules/
+
+# ---- archived workspace cleanup ----
+backup/
+
+# ---- runtime assets (downloaded by `npm run setup`) ----
+bin/
+
+# ---- runtime state (per-user) ----
+config.txt
+batches.json
+state.json
+generated/
+output/
+
+# ---- build artifacts ----
+dist/
+dist-build/
+dist-out/
+dist-final/
+dist-verify/
+out/
+build/
+ReleaseGithub/
+*.exe
+*.dmg
+*.AppImage
+*.snap
+*.deb
+*.rpm
+*.zip
+*.tar.gz
+
+# ---- test / debug output ----
+test-*.log
+*.log
+
+# ---- test coverage + e2e screenshots ----
+# Coverage reports (line / UI-surface / IPC) are generated artifacts.
+coverage/
+# Visual regression baselines (QA-031: committed so CI can enforce diffs).
+# tests/visual-baselines/ — no longer ignored
+# E2E screenshots live in os.tmpdir(), but never let a stray run drop them here.
+mmx-shots-*/
+*.png
+!assets/icon.png
+!tests/visual-baselines/*.png
+
+# ---- IDE / editor ----
+.idea/
+.vscode/
+.dbg/
+.e2e-shots/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+
+# ---- environment / secrets ----
+.env
+.env.local
+.env.*.local
+*.pem
+*.key
+
+# ---- dev scratch ----
+_*.md
+_*.js
+_*.txt
+_temp*.md
+_repro_*.js
+_verify_*.js
+commit_msg_*.txt
+settings.json
+test_out/

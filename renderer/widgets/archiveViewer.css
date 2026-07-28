@@ -1,0 +1,113 @@
+/* renderer/widgets/archiveViewer.css
+   Styles for the ArchiveViewer modal. The modal is launched from
+   ⚙ Settings → History → Open archive. Lazy-loaded: only requested
+   when the user first opens the viewer. */
+
+.archive-viewer-modal {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.55);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+}
+/* H10-8: the dialog styling now targets the single .archive-viewer-dialog
+   card that wraps header+list+footer. The previous `.archive-viewer-modal > *`
+   rule styled EACH direct child (header, list, footer) as a separate 720px
+   dialog box, producing three stacked boxes instead of one modal. */
+.archive-viewer-modal > .archive-viewer-dialog {
+  background: var(--bg-1);
+  color: var(--fg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 12px;
+  max-width: 720px;
+  width: 90vw;
+  max-height: 80vh;
+  display: flex;
+  flex-direction: column;
+}
+.archive-viewer-header h3 { color: var(--fg); }
+.archive-viewer-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 8px;
+}
+.archive-viewer-toolbar input:focus,
+.archive-viewer-toolbar select:focus {
+  outline: 2px solid var(--accent);
+  outline-offset: 0;
+}
+.archive-viewer-list {
+  flex: 1;
+  overflow: auto;
+  background: var(--bg-2);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 4px 0;
+  min-height: 200px;
+  scroll-behavior: smooth;
+}
+.archive-viewer-footer {
+  margin-top: 8px;
+  display: flex;
+  justify-content: flex-end;
+}
+
+.archive-row {
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--border);
+  border-left: 3px solid transparent;
+}
+.archive-row:last-child { border-bottom: none; }
+.archive-row.archive-status-ok { border-left-color: var(--ok); }
+.archive-row.archive-status-err { border-left-color: var(--danger); }
+.archive-row.archive-status-warn { border-left-color: var(--warn); }
+.archive-row.archive-status-cancel { border-left-color: var(--fg-3); }
+
+.archive-row-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 8px;
+}
+.archive-row-title {
+  font-weight: 500;
+  color: var(--fg);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex: 1;
+  min-width: 0;
+}
+.archive-row-meta {
+  font-size: 10.5px;
+  color: var(--fg-3);
+  font-variant-numeric: tabular-nums;
+  flex-shrink: 0;
+}
+.archive-row-body {
+  font-size: 11px;
+  color: var(--fg-2);
+  margin-top: 4px;
+  word-break: break-all;
+}
+.archive-row-body > div { margin: 1px 0; }
+.archive-row-out-head {
+  margin-top: 4px;
+  font-weight: 600;
+  color: var(--fg-2);
+}
+.archive-row-out {
+  color: var(--fg-3);
+  font-family: ui-monospace, Consolas, monospace;
+  font-size: 10.5px;
+}
+.archive-row-actions {
+  margin-top: 6px;
+  display: flex;
+  gap: 4px;
+  justify-content: flex-end;
+}

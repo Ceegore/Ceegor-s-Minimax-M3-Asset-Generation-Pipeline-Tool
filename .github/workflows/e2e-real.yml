@@ -1,0 +1,67 @@
+# .github/workflows/e2e-real.yml
+# ============================================================================
+# Tier 1 (contract, real API) and Tier 3 (E2E real, image/speech/music hit the
+# live API; video stays faked) run nightly and on manual dispatch. Requires the
+# MINIMAX_API_KEY repository secret. Cost is ~0 (image/speech/music); video
+# quota is protected by the fake, with ONE real video generation (the canary,
+# RUN_VIDEO_CANARY=1) on the nightly schedule only — never on manual dispatch.
+#
+# On failure: screenshots (kept only for failures) + the E2E JSON report are
+# uploaded as short-retention artifacts. On success the runner temp shots are
+# already deleted by the harness cleanup().
+# ============================================================================
+
+name: E2E Real (nightly)
+
+on:
+  schedule:
+    # 04:00 UTC daily.
+    - cron: '0 4 * * *'
+  workflow_dispatch:
+
+jobs:
+  real:
+    name: Contract + E2E (real API)
+    runs-on: windows-latest
+    timeout-minutes: 30
+    env:
+      MINIMAX_API_KEY: ${{ secrets.MINIMAX_API_KEY }}
+      RUN_CONTRACT_TESTS: '1'
+      # One real video generation on the nightly schedule only (1 of 3/day
+      # quota). Manual dispatch keeps video faked so it never burns quota.
+      RUN_VIDEO_CANARY: ${{ github.event_name == 'schedule' && '1' || '0' }}
+      MMX_SHOTS_DIR: ${{ runner.temp }}\mmx-shots
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Guard — skip cleanly when the API key secret is absent
+        run: |
+          if (-not $env:MINIMAX_API_KEY) {
+            Write-Host "MINIMAX_API_KEY secret is not set - skipping the real-generation run (this is not a failure)."
+            exit 0
+          }
+
+      - name: Contract tests (real API)
+        run: npm run test:contract
+
+      - name: E2E real (image/speech/music real, video faked unless canary)
+        run: |
+          if (-not $env:MINIMAX_API_KEY) { Write-Host "Skipped (no API key)."; exit 0 }
+          npm run test:e2e:real
+
+      - name: Upload failure screenshots
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-real-failure-screenshots
+          path: ${{ runner.temp }}\mmx-shots
+          if-no-files-found: ignore
+          retention-days: 7

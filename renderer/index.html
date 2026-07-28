@@ -1,0 +1,363 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <!-- CSP `connect-src` is tightened to 'self'. The renderer makes no
+     direct network calls - every external fetch (voice list, model run,
+     file download) goes through IPC to the main process, which has its
+     own node-side access. A broader `https:` token would let any
+     in-renderer script open a socket to any HTTPS origin, which a
+     compromised renderer (XSS via a future feature, malicious AI
+     prompt, etc.) could exploit. img-src / media-src stay as-is
+     (already exclude remote). -->
+  <!-- KGO7-014: `frame-ancestors` is deliberately NOT in this meta CSP.
+     Chromium ignores that directive when it arrives via <meta> and logs
+     "The Content Security Policy directive 'frame-ancestors' is ignored
+     when delivered via a <meta> element." as a console ERROR on every
+     single boot — noise that trains the console-error detectors (and
+     reviewers) to tolerate real errors. It is sent as a real response
+     header instead, from main/window/windowSecurity.js. -->
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; media-src 'self' data: blob:; connect-src 'self'; object-src 'none'; frame-src 'none'; base-uri 'none'; form-action 'none';" />
+  <title>MiniMax Asset Tool</title>
+  <link rel="stylesheet" href="styles.css" />
+  <link rel="stylesheet" href="jobs/jobs.css" />
+</head>
+<body>
+  <header id="topbar">
+      <div class="brand">MiniMax Assets Tool <span class="brand-version" id="brand-version"></span></div>
+    <nav id="tabs">
+      <button data-tab="image" class="tab active" data-help-topic="topbar.tabImage">Image</button>
+      <button data-tab="speech" class="tab" data-help-topic="topbar.tabSpeech">Speech</button>
+      <button data-tab="music" class="tab" data-help-topic="topbar.tabMusic">Music</button>
+      <button data-tab="video" class="tab" data-help-topic="topbar.tabVideo">Video</button>
+      <button data-tab="providers" class="tab" data-help-topic="topbar.tabProviders">Other APIs</button>
+    </nav>
+    <div id="quota" class="quota" data-help-topic="topbar.quota"><span class="quota-label">Quota —</span> <span id="quota-value">—</span> <button id="quota-refresh" class="btn-mini" title="Refresh quota">↻</button></div>
+    <button id="btn-styles" class="btn-mini" title="Style Settings — manage prompt-prefix presets" data-help-topic="topbar.styleBtn">🎨</button>
+    <button id="btn-theme" class="btn-mini" title="Toggle dark/light mode" data-help-topic="topbar.themeBtn">🌓</button>
+    <button id="btn-image-edit" class="btn-mini" title="Open the image editor (Ctrl+E)" data-help="Image editor — paint, erase to transparency, composite a 2nd image, and heal small mistakes">✏</button>
+    <button id="btn-settings" class="btn-mini" title="Settings / config" data-help-topic="topbar.settingsBtn">⚙</button>
+  </header>
+
+  <main id="layout">
+    <section id="content">
+          <div id="statusbar" class="statusbar" title="App status">Ready</div>
+      <div id="tab-image" class="tabpanel active"></div>
+      <div id="tab-speech" class="tabpanel"></div>
+      <div id="tab-music" class="tabpanel"></div>
+      <div id="tab-video" class="tabpanel"></div>
+      <div id="tab-providers" class="tabpanel"></div>
+    </section>
+    <div class="splitter splitter-v" id="splitter-sidebar" data-splitter="sidebar" title="Drag to resize the folder-browser column"></div>
+    <aside id="sidebar">
+      <div class="sidebar-head">
+        <button id="fb-up" class="btn-mini" title="Up one level">↑</button>
+        <span id="fb-path" class="path-label" title="">—</span>
+        <button id="fb-refresh" class="btn-mini" title="Refresh" data-help-topic="sidebar.refreshBtn">↻</button>
+      </div>
+      <div class="sidebar-toolbar">
+        <input id="fb-search" type="text" placeholder="Filter…" title="Filter file browser" data-help-topic="sidebar.filter" style="flex: 1;" />
+        <select id="fb-type-filter" class="fb-type-filter" title="Filter file browser by asset type"
+                data-help-topic="sidebar.typeFilter">
+          <!-- Asset-type filter so the user can hide everything except
+               images / audio / video / text / etc. The value is a
+               comma-separated list of lowercase extensions (no dot);
+               the file browser filter combines this with the free-text
+               search so "Images + 'foo'" works as expected. -->
+          <option value="">All types</option>
+          <option value="png,jpg,jpeg,webp,gif,bmp">🖼 Images</option>
+          <option value="mp3,wav,flac,ogg,m4a,opus,pcm">🎵 Audio</option>
+          <option value="mp4,webm,mov,mkv,avi">🎬 Video</option>
+          <option value="txt,srt,json,md,lrc">📝 Text</option>
+        </select>
+        <select id="fb-sort" class="fb-sort" title="Sort the file browser by…"
+                data-help-topic="sidebar.sort">
+          <option value="name-asc">Name ↑</option>
+          <option value="name-desc">Name ↓</option>
+          <option value="size-desc">Size ↓</option>
+          <option value="size-asc">Size ↑</option>
+          <option value="mtime-desc">Newest</option>
+          <option value="mtime-asc">Oldest</option>
+          <option value="created-desc">Created ↓</option>
+          <option value="created-asc">Created ↑</option>
+          <option value="type-asc">Type</option>
+        </select>
+        <button id="fb-pick" class="btn-mini" title="Navigate to a folder (opens the Windows folder-selection dialog)" data-help-topic="sidebar.pickBtn">📂</button>
+        <button id="fb-new" class="btn-mini" title="New folder" data-help-topic="sidebar.newFolderBtn">+ Folder</button>
+        <button id="fb-open" class="btn-mini" title="Open in Explorer" data-help-topic="sidebar.openExplorerBtn">↗</button>
+        <button id="fb-options" class="btn-mini" title="Folder options (columns, sort)" data-help-topic="sidebar.options">⚙ Options</button>
+      </div>
+      <!-- Bulk-action toolbar. Appears only when the user has ticked
+           at least one checkbox in the file list. Shows a count +
+           master checkbox + Move here / Delete buttons. The toolbar
+           lives in app.js (created dynamically so it can be reused
+           by other sections and so the index.html stays lean). -->
+      <div id="fb-bulk-toolbar" class="fb-bulk-toolbar" style="display: none;">
+        <label class="fb-bulk-master" title="Select / deselect all visible items">
+          <input type="checkbox" id="fb-bulk-master-cb" />
+          <span id="fb-bulk-count">0 selected</span>
+        </label>
+        <button id="fb-bulk-move" class="btn-mini" title="Move the selected items into the current folder">⤵ Move here</button>
+        <button id="fb-bulk-copy" class="btn-mini" title="Copy the selected items into the current folder">⎘ Copy here</button>
+        <button id="fb-bulk-trim" class="btn-mini" title="Trim the audio head/tail on the selected audio files" data-help-topic="sidebar.bulkTrim">✂ Trim</button>
+        <button id="fb-bulk-delete" class="btn-mini danger" title="Delete the selected items (asks for confirmation)">🗑 Delete</button>
+        <button id="fb-bulk-clear" class="btn-mini" title="Clear the selection">✕</button>
+      </div>
+      <ul id="fb-list" class="fb-list"></ul>
+    </aside>
+  </main>
+  <div class="splitter splitter-h" id="splitter-logbar" data-splitter="logbar" title="Drag to resize the log / picture-preview area"></div>
+
+  <footer id="logbar">
+    <div class="logbar-pane logbar-log">
+      <details open id="log-details">
+        <summary>
+          <span>Log</span>
+          <span class="logbar-buttons">
+            <!-- Jump to newest/oldest, expand/collapse all, autoscroll chip.
+                 The Copy / Clear / Collapse / help buttons stay so the
+                 existing keyboard shortcuts + help bindings keep working. -->
+            <button id="log-jump-newest" class="btn-mini" title="Jump to newest log row (Home)" data-help-topic="log.jumpNewest">▲ Newest</button>
+            <button id="log-jump-oldest" class="btn-mini" title="Jump to oldest log row (End)" data-help-topic="log.jumpOldest">▼ Oldest</button>
+            <span class="log-pane-toolbar">
+              <button id="log-collapse-all" class="btn-mini" title="Collapse every row" data-help-topic="log.collapseAll">− Collapse all</button>
+              <button id="log-expand-all" class="btn-mini" title="Expand every row" data-help-topic="log.expandAll">+ Expand all</button>
+            </span>
+            <span id="log-autoscroll-chip" class="log-autoscroll-chip on" title="Auto-scroll: jump to newest row on every new event">Auto: ON</span>
+            <button id="log-copy" class="btn-mini" title="Copy selected events (Ctrl+C) or all to the clipboard" data-help-topic="log.copy">📋 Copy</button>
+            <button id="log-clear" class="btn-mini" title="Clear the log" data-help-topic="log.clear">🗑 Clear</button>
+            <button id="log-toggle" class="btn-mini" title="Collapse / expand the log" data-help-topic="log.toggle">▲ Collapse</button>
+            <button id="log-help" class="btn-mini" title="About the log pane" data-help="The log pane shows everything the app does in real time: generation progress, mmx output, post-processing steps, errors, and the active-jobs widget for cancellable jobs. Click a row to expand its details (or collapse it). Ctrl+Click to select, Shift+Click to range-select, Ctrl+C to copy, Ctrl+A to select all. The column on the right (separated by a draggable splitter) is a picture preview for the currently selected file.">?</button>
+          </span>
+        </summary>
+        <div id="log-jump-pill" class="log-jump-pill" title="Click to jump to the newest row">↓ 0 new</div>
+        <div id="log" class="log-pane"></div>
+      </details>
+    </div>
+    <div class="splitter splitter-v" id="splitter-log-preview" data-splitter="log-preview" title="Drag to resize the picture-preview column"></div>
+    <div class="logbar-pane logbar-preview">
+      <div class="preview-pane-header">
+        <span>📦 Assets preview</span>
+        <button id="preview-clear" class="btn-mini" title="Clear preview" data-help-topic="preview.clear">✕</button>
+      </div>
+      <div class="preview-pane-content" id="fb-preview-content">
+        <div class="preview-pane-empty">Click an asset in the file browser to preview it here.</div>
+      </div>
+    </div>
+  </footer>
+
+  <!-- Modal dialogs -->
+  <div id="modal-root"></div>
+  <div id="toast-root"></div>
+
+  <!-- Core modules: logging, DOM helpers, API client, utils. -->
+  <script src="debugLog.js"></script>
+  <script src="core/DomHelpers.js"></script>
+  <script src="core/ToastService.js"></script>
+  <script src="core/ApiClient.js"></script>
+  <script src="utils/FormatUtils.js"></script>
+  <script src="utils/PathBuilder.js"></script>
+  <script src="utils/securityUtils.js"></script>
+  <script src="utils/fileUrl.js"></script>
+  <script src="utils/fbSort.js"></script>
+  <script src="utils/quotaFormatter.js"></script>
+  <script src="utils/ipcResult.js"></script>
+  <script src="services/LogCategories.js"></script>
+  <!-- LogService: the tracked file is services/LogService.js (capital
+       L). A lowercase include only works on case-insensitive Windows;
+       on a case-sensitive FS (macOS APFS case-sensitive, Linux, CI)
+       the script 404s and the entire log pane fails to load. -->
+  <script src="services/LogService.js"></script>
+  <!-- Multi-job runner. Must load AFTER LogService so JobRunner can
+       call into addLogEvent. Loads BEFORE tabs and app.js so it's
+       wired up by the time the gen handlers run. -->
+  <script src="jobs/JobRunner.js"></script>
+  <!-- Floating "active jobs" widget. Subscribes to JobRunner events
+       and renders a small list in the bottom-right of the content
+       area. Pure projection of state.jobs. -->
+  <script src="widgets/ActiveJobsWidget.js"></script>
+  <!-- Batch summary emission helper. Called by batchManager.js (or
+       any other multi-child orchestrator) when a batch finishes;
+       renders the "Batch finished: 18/20 ok, 2 failed" line in the
+       log pane. -->
+  <script src="jobs/JobSummary.js"></script>
+  <!-- On-demand archive viewer. Loaded eagerly (it's tiny) so the
+       Settings -> History -> Open archive button can open it
+       instantly. -->
+  <link rel="stylesheet" href="widgets/archiveViewer.css">
+  <script src="widgets/ArchiveViewer.js"></script>
+  <script src="utils/dropTarget.js"></script>
+  <script src="utils/tinyUtils.js"></script>
+  <script src="utils/pureFuncs.js"></script>
+  <script src="utils/fbColumns.js"></script>
+  <script src="utils/imageUtils.js"></script>
+  <!-- Shared GIMP/Photoshop chain-link aspect-ratio helpers for the resize UI. -->
+  <script src="utils/aspectLink.js"></script>
+  <!-- Enlargement warning popup (>120% offers the dedicated Upscale). -->
+  <script src="utils/resizeUpscaleDialog.js"></script>
+  <script src="specs/modelSpecs.js"></script>
+  <script src="components/ParamRow.js"></script>
+  <!-- H10: extracted helpers (kept standalone for the frozen per-file size budgets). -->
+  <script src="overlays/imageOverlayContextMenu.js"></script>
+  <script src="overlays/cropPreviewGeometry.js"></script>
+  <script src="sections/externalToolStatus.js"></script>
+  <!-- H3 Batch 7: full-screen image viewer overlay (extracted from musicTab.js). -->
+  <script src="overlays/imageViewerOverlay.js"></script>
+  <script src="tabs/imageTab.js"></script>
+  <script src="tabs/speechTabVoices.js"></script>
+  <script src="tabs/speechTab.js"></script>
+  <script src="tabs/musicOptions.js"></script>
+  <script src="tabs/musicTab.js"></script>
+  <script src="tabs/videoTab.js"></script>
+  <!-- Other APIs tab (non-MiniMax providers). Isolated: never joins the mmx 4-tab loop. -->
+  <script src="tabs/providersTab.js"></script>
+  <script src="tabs/styleHelpers.js"></script>
+  <script src="overlays/imageOverlays.js"></script>
+  <script src="overlays/imageOptimizeOverlay.js"></script>
+  <script src="overlays/removeBgOverlay.js"></script>
+  <!-- Free-target-resolution resize overlay (Lanczos3 + aspect link). -->
+  <script src="overlays/imageResizeOverlay.js"></script>
+  <!-- In-app pixel/image editor overlay. Fabric.js (MIT) is a vendored
+       UMD bundle - no bundler added (the app stays build-free). It must
+       load BEFORE imageEditorCanvas.js, which needs window.fabric.
+       imageEditorOverlay.js exposes showImageEditOverlay, called from
+       the context menu below + the #btn-image-edit header button. -->
+  <link rel="stylesheet" href="overlays/imageEditor.css">
+  <script src="vendor/fabric.min.js"></script>
+  <script src="overlays/imageEditorCanvas.js"></script>
+  <script src="overlays/imageEditorTools.js"></script>
+  <script src="overlays/imageEditorActions.js"></script>
+  <!-- Resize-canvas section for the editor's right-side (source) tray. -->
+  <script src="overlays/imageEditorResize.js"></script>
+  <script src="overlays/imageEditorSource.js"></script>
+  <!-- H8-F2: Asset Composer panel (primary right pane of the editor; the
+       old source tray remains inside imageEditorOverlay.js as a fallback). -->
+  <script src="overlays/imageEditorAssetPanel.js"></script>
+  <!-- H8-F2-P3: Generate… popover + history strip for the Asset panel. -->
+  <script src="overlays/imageEditorAssetGen.js"></script>
+  <!-- H8-F2-P4: ✂ Remove BG pipeline for the Asset panel. -->
+  <script src="overlays/imageEditorAssetBg.js"></script>
+  <!-- H8-F2 Section 3: Asset Composer extensions (tabs, placement, snap
+       guides, swap, context menu, export, heal entry). -->
+  <script src="overlays/imageEditorAssetExtras.js"></script>
+  <script src="overlays/imageEditorWorkDir.js"></script>
+  <script src="overlays/imageEditorSettings.js"></script>
+  <script src="overlays/imageEditorHeal.js"></script>
+  <!-- H8-005: marquee selection drag + persistent selection chip. -->
+  <script src="overlays/imageEditorSelect.js"></script>
+  <script src="overlays/imageEditorCropSelection.js"></script>
+  <!-- H8-002: bar (line) placement tool with editable endpoints. -->
+  <script src="overlays/imageEditorShapes.js"></script>
+  <!-- H8: shortcut cheatsheet popover. -->
+  <script src="overlays/imageEditorCheatsheet.js"></script>
+  <script src="overlays/imageEditorKeyboard.js"></script>
+  <script src="overlays/imageEditorOverlay.js"></script>
+  <script src="services/fileBrowser1.js"></script>
+  <script src="services/fileBrowser2a.js"></script>
+  <script src="services/fileBrowser2b.js"></script>
+  <!-- PRE-1: grantCache must load BEFORE batchPostprocess (which uses window.GrantCache). -->
+  <script src="services/grantCache.js"></script>
+  <!-- BGR-009: grantHelper must load AFTER grantCache (uses window.GrantCache). -->
+  <script src="utils/grantHelper.js"></script>
+  <!-- PE-018: central shortcut-scope stack (must load before app.js + editor). -->
+  <script src="services/shortcutScope.js"></script>
+  <script src="services/shortcutRegistry.js"></script>
+  <!-- R7.2b: capabilityGuard must load BEFORE app.js boot (which calls init()). -->
+  <script src="services/capabilityGuard.js"></script>
+  <!-- H9-005/018: standalone deterministic postprocess runner for batch rows. -->
+  <script src="services/batchPostprocess.js"></script>
+  <script src="components/HelpTooltip.js"></script>
+  <script src="components/HelpDelegation.js"></script>
+  <script src="components/CropFrameDrag.js"></script>
+  <!-- SplitterDrag wires the three [data-splitter] bars in the layout
+       so dragging them resizes the panes and persists the size to
+       state.layoutSettings (loaded back on the next launch by
+       SplitterDrag.applyLayoutSettings). -->
+  <script src="components/SplitterDrag.js"></script>
+  <!-- Audio-cutter modal (window.showAudioCutter). The right-click
+       "Audio cut..." menu + the bulk "Trim" button call this. -->
+  <script src="audioCutter.js"></script>
+  <!-- Column-based Pipeline workflow. Loaded BEFORE the sections +
+       app.js so window.Pipeline is defined before the image-tab
+       build() runs (which wires the Pipeline button). Order matters:
+       the model bridge -> ops -> import -> card -> board -> overlay,
+       each depends on the prior. -->
+  <link rel="stylesheet" href="pipeline/pipeline.css">
+  <script src="pipeline/pipelineModelBridge.js"></script>
+  <script src="pipeline/pipelineOps.js"></script>
+  <script src="pipeline/pipelineImport.js"></script>
+  <script src="pipeline/pipelineCardExtras.js"></script>
+  <!-- Reusable report writer + Final-column clear/export menu. -->
+  <script src="pipeline/pipelineReport.js"></script>
+  <script src="pipeline/pipelineClear.js"></script>
+  <script src="pipeline/pipelineCardCorrect.js"></script>
+  <!-- H10: extracted pipeline-card helpers (kept out of pipelineCard.js for its size budget). -->
+  <script src="pipeline/pipelineCardResizeCheck.js"></script>
+  <script src="pipeline/pipelineCardLastCrop.js"></script>
+  <script src="pipeline/pipelineCardDragFrame.js"></script>
+  <!-- H11-1: progress bar for running cards (+ determinate upscale wiring). -->
+  <script src="widgets/spinner.js"></script>
+  <script src="pipeline/pipelineCardProgress.js"></script>
+  <script src="pipeline/pipelineCard.js"></script>
+  <script src="pipeline/pipelineBoard.js"></script>
+  <script src="pipeline/pipelineOverlay.js"></script>
+  <!-- Sections: modular pieces of the app's main logic. -->
+  <script src="sections/section24_State.js"></script>
+  <script src="sections/section23_Centralized_help_system.js"></script>
+  <script src="sections/section21_API_key_masking.js"></script>
+  <script src="sections/section20_Structured_event_log.js"></script>
+  <script src="sections/section19_Modal.js"></script>
+  <script src="sections/section18_Startup_popup.js"></script>
+  <script src="sections/section17_First_time_setup_popup.js"></script>
+  <script src="sections/section16_Real_ESRGAN_first_run_popup.js"></script>
+  <script src="sections/section15_Optional_add_ons_popup__unified_.js"></script>
+  <script src="sections/section14_Form_helpers.js"></script>
+  <script src="sections/section13_Image_dim_guards.js"></script>
+  <script src="sections/section12_Prompt_character_counter.js"></script>
+  <script src="sections/section11_Variants_dropdown.js"></script>
+  <script src="sections/section10_Tab_intro_popups.js"></script>
+  <script src="sections/section09_Style_dropdown_refresh.js"></script>
+  <!-- Resilient addLog helper, extracted from section08 to keep the
+       main file under the lint line cap. Loaded BEFORE section08 so
+       window.Section08Helpers is defined when section08's script
+       runs. -->
+  <script src="sections/section08Helpers.js"></script>
+  <script src="sections/section08_Image_pipeline__Upscale___Crop___Convert_.js"></script>
+  <script src="sections/section07_Image_optimisation___compression.js"></script>
+  <!-- section06_File_browser.js removed: split into services/fileBrowser1.js + fileBrowser2.js -->
+  <script src="sections/section05_Context_menu_for_preview_thumbnails___overlay.js"></script>
+  <script src="sections/externalToolsHelpers.js"></script>
+  <script src="sections/section04_Settings.js"></script>
+  <script src="sections/section03_Settings_tab_panes.js"></script>
+  <!-- Advanced pipeline settings overlay exposed by the Image pane.
+       Loads AFTER section03 so its openAdvancedPipelineSettings() is
+       defined before the Image pane's button can be clicked. The
+       DOM-builder helpers (selRow, cbRow, numRow, sectionTitle) are
+       extracted to their own file to keep this overlay under the lint
+       line cap. They MUST load BEFORE the overlay. -->
+  <script src="sections/section25_Advanced_pipeline_settings_helpers.js"></script>
+  <!-- isnetbg availability probe, extracted from section08 to keep
+       that file under the lint line cap. Exposes
+       window.probeIsnetbgStatus so section08's existing call sites
+       keep working. -->
+  <script src="sections/section26_IsnetbgProbe.js"></script>
+  <script src="sections/section02_Popups_settings.js"></script>
+  <script src="sections/section01_Diagnose_dialog.js"></script>
+  <script src="bootstrap.js"></script>
+  <!-- Legacy modules, slated for incremental removal. -->
+  <script src="tabs/batchImportHelper.js"></script>
+  <!-- F2: Unified Import Batch overlay (merges Import + Examples into one guided modal). -->
+  <!-- F3: M3 in-tool document pipeline (loaded before the overlay that uses it). -->
+  <script src="services/m3DocPipeline.js"></script>
+  <script src="overlays/importBatchOverlay.js"></script>
+  <!-- H11-3: pure argv builders + direct (snapshot) batch runner. -->
+  <script src="tabs/argvBuilders.js"></script>
+  <script src="tabs/batchDirectRunner.js"></script>
+  <script src="tabs/batchManager.js"></script>
+  <!-- R2.5: close-handshake. Loaded BEFORE app.js so
+       globalThis.installCloseHandshake is defined when app.js
+       calls it during the close event setup. -->
+  <script src="closeHandshake.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>

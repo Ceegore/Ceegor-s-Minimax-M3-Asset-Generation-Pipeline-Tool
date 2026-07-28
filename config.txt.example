@@ -1,0 +1,11 @@
+# MiniMax Assets Tool configuration
+# Put your MiniMax Token Plan API key on the line below, save as config.txt next to the .exe
+
+api_key=
+
+# Default output directory for generated assets (created if missing).
+# Leave blank to use ./generated/ next to the executable.
+output_dir=
+
+# Region: global (default) or cn
+region=global

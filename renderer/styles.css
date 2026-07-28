@@ -1,0 +1,3924 @@
+/* renderer/styles.css — native Windows 11 look, high contrast, no blur. */
+
+/* ========== DARK theme (default) ==========
+   Uses Windows 11 system colors as a baseline. Solid backgrounds, sharp
+   1px borders, no transparency on text, no animations on text/color.
+   Text colors were previously almost-pure-white (#ffffff / #f5f5fa /
+   #e8e8f0) — that made the dark theme feel stark and high-contrast.
+   They are now a clear grey scale (#cfcfd6 / #b8b8c0 / #888892) so
+   the text is readable but doesn't feel like it's "glowing" on top
+   of the dark background. The success / danger / warn accents stay
+   bright so they still pop on the darker fg. */
+:root,
+:root[data-theme="dark"] {
+  --bg:        #1f1f23;
+  --bg-1:      #1f1f23;   /* primary surface (alias of --bg) */
+  --bg-2:      #2a2a30;
+  --bg-3:      #38383f;
+  --bg-4:      #4a4a52;
+  --border:    #4a4a52;
+  --border-2:  #6a6a74;
+  --fg:        #cfcfd6;   /* main text — clear grey, not white */
+  --fg-1:      #e8e8ef;   /* primary/highlight text — brightest grey for emphasis */
+  --fg-2:      #b8b8c0;   /* secondary text — slightly darker grey */
+  --fg-3:      #888892;   /* muted text — medium grey for hints/metadata */
+  --accent:    #4d9aff;
+  --accent-2:  #3a7ce0;
+  --accent-3:  #2a5fae;
+  --primary:   #4d9aff;   /* legacy alias of --accent */
+  --primary-2: #3a7ce0;   /* legacy alias of --accent-2 */
+  --success:   #6ee0a8;
+  --ok:        #6ee0a8;   /* alias of --success */
+  --danger:    #ff8a8a;
+  --err:       #ff8a8a;   /* alias of --danger */
+  --warn:      #f8c47a;
+  --log-wip:    #4d9aff;  /* job log state accents (track --accent) */
+  --log-ok:     #6ee0a8;  /* tracks --success */
+  --log-warn:   #f8c47a;  /* tracks --warn */
+  --log-err:    #ff8a8a;  /* tracks --danger */
+  --log-cancel: #888892;  /* tracks --fg-3 */
+  --radius:    4px;
+  --radius-sm: 3px;
+  --font-mono: "Cascadia Code", "Consolas", "SF Mono", "Menlo", monospace;
+}
+
+/* ========== LIGHT theme ==========
+   Windows 11 light defaults: light gray window bg, near-white cards.
+   --bg-2 (used for cards, modals, popups) was previously pure white
+   (#ffffff) which clashed with the soft grey --bg and felt too bright.
+   It's now #f5f5f5 (off-white, barely grey) so the card surfaces
+   still read as "lighter than the page" but no longer look like a
+   printed sheet. Text colors stay explicit shades of dark — pure
+   black for primary text (#000) down through medium gray for muted
+   text (#5a5a62) — so the hierarchy is visible on the bright
+   background. */
+:root[data-theme="light"] {
+  --bg:        #f3f3f3;
+  --bg-1:      #f3f3f3;   /* primary surface (alias of --bg) */
+  --bg-2:      #f5f5f5;
+  --bg-3:      #f0f0f0;
+  --bg-4:      #e2e2e5;
+  --border:    #d0d0d4;
+  --border-2:  #9aa3b2;
+  --fg:        #000000;   /* main text — pure black */
+  --fg-1:      #000000;   /* primary/highlight text — pure black */
+  --fg-2:      #1a1a1f;   /* secondary text — near-black, distinguishable */
+  --fg-3:      #5a5a62;   /* muted text — medium gray for hints/metadata */
+  --accent:    #0078d4;
+  --accent-2:  #006bbd;
+  --accent-3:  #005ba1;
+  --primary:   #0078d4;   /* legacy alias of --accent */
+  --primary-2: #006bbd;   /* legacy alias of --accent-2 */
+  --success:   #0a7c2e;
+  --ok:        #0a7c2e;   /* alias of --success */
+  --danger:    #b91c1c;
+  --err:       #b91c1c;   /* alias of --danger */
+  --warn:      #92400e;
+  --log-wip:    #0078d4;  /* job log state accents (track --accent) */
+  --log-ok:     #0a7c2e;  /* tracks --success */
+  --log-warn:   #92400e;  /* tracks --warn */
+  --log-err:    #b91c1c;  /* tracks --danger */
+  --log-cancel: #5a5a62;  /* tracks --fg-3 */
+  --radius:    4px;
+  --radius-sm: 3px;
+  --font-mono: "Cascadia Code", "Consolas", "SF Mono", "Menlo", monospace;
+}
+
+* { box-sizing: border-box; }
+html, body {
+  margin: 0; padding: 0; height: 100%;
+  background: var(--bg);
+  color: var(--fg);
+  font: 14px/1.5 "Segoe UI", "Segoe UI Variable", system-ui, -apple-system, "Helvetica Neue", sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  text-rendering: optimizeLegibility;
+  overflow: hidden;
+}
+body { display: flex; flex-direction: column; height: 100vh; overflow: hidden; }
+
+/* ========== Base elements ========== */
+button {
+  font: inherit; color: var(--fg);
+  background: var(--bg-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 5px 12px; cursor: pointer;
+  /* A tiny scale-down on :active simulates a physical press.
+     The transform is GPU-only (safe for 60fps) and the 80ms
+     duration matches the rest of the motion language. */
+  transition: background-color 120ms ease, transform 80ms ease;
+}
+button:hover { background: var(--bg-4); }
+button:active { transform: scale(0.98); }
+button:disabled { opacity: 0.45; cursor: not-allowed; }
+button:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+
+button.primary {
+  background: var(--accent-2); border-color: var(--accent-2); color: #fff;
+  font-weight: 600;
+}
+button.primary:hover { background: var(--accent-3); border-color: var(--accent-3); }
+button.primary:disabled { background: var(--bg-3); border-color: var(--border); color: var(--fg-3); }
+
+button.danger { background: var(--bg-3); border-color: var(--danger); color: var(--danger); }
+button.danger:hover { background: var(--danger); color: #fff; }
+
+.btn-mini { padding: 3px 9px; font-size: 12px; }
+
+/* Modal sizing for the new (wider) settings dialogs. The default
+   .modal is 420px, which is too narrow for the Real-ESRGAN
+   settings (status + model + install button) and the first-time
+   setup (greetings + 3 form fields). */
+.realesrgan-settings-modal, .first-time-setup-modal { width: min(560px, 92vw); }
+/* Multi-tab settings dialog (replaces the old single-modal +
+   two-stacked-sub-modals design). The dialog needs to be wider
+   than the default .modal so the sidebar of tabs + the pane
+   content fit side by side without horizontal scroll. */
+.settings-modal { width: min(820px, 96vw); max-height: 88vh; overflow: hidden; display: flex; flex-direction: column; }
+.settings-modal h2 { flex-shrink: 0; }
+.settings-modal > p { flex-shrink: 0; }
+.settings-tabs {
+  display: grid;
+  grid-template-columns: 180px 1fr;
+  gap: 0;
+  flex: 1;
+  min-height: 0;
+  margin-top: 4px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+}
+.settings-tabs-sidebar {
+  background: var(--bg-2);
+  border-right: 1px solid var(--border);
+  padding: 6px 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  overflow-y: auto;
+}
+.settings-tab-button {
+  background: transparent;
+  border: none;
+  border-radius: 0;
+  text-align: left;
+  padding: 9px 14px;
+  color: var(--fg-2);
+  font-size: 13px;
+  cursor: pointer;
+  transition: background-color 120ms ease, color 120ms ease;
+}
+.settings-tab-button:hover { background: var(--bg-3); color: var(--fg); }
+.settings-tab-button.active {
+  background: var(--bg-3);
+  color: var(--fg);
+  font-weight: 600;
+  border-left: 3px solid var(--accent);
+  padding-left: 11px;
+}
+.settings-tabs-panehost {
+  position: relative;
+  overflow: auto;
+  padding: 14px 18px;
+}
+.settings-tab-pane {
+  display: none;
+}
+.settings-tab-pane.active {
+  display: block;
+}
+.settings-pane-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 12px;
+  padding-top: 10px;
+  border-top: 1px solid var(--border);
+}
+.settings-footer {
+  flex-shrink: 0;
+  margin-top: 8px;
+}
+
+/* Real-ESRGAN status row in ⚙ Settings. Mono font + small size
+   so the long "Detected: C:\path\realesrgan-ncnn-vulkan.exe
+   (v0.2.5.0)" string fits on one line at this width. */
+.re-status { font-family: var(--font-mono); font-size: 12px; }
+.re-progress { font-size: 11px; color: var(--fg-2); }
+.re-install { font-weight: 500; }
+
+/* Visual delimiter for the auto-crop rows (W / H inputs, 3×3 grid,
+   crop preview) inside the upscale dialog. The .auto-crop-only
+   class is set on the W / H row only (the 3×3 grid is always
+   shown, so it doesn't need the class). The left border in
+   accent-3 gives a clear "this is the auto-crop sub-section"
+   visual hint without adding extra padding. */
+.auto-crop-only {
+  padding-left: 12px;
+  border-left: 2px solid var(--accent-3);
+  margin-top: 4px;
+  margin-left: 4px;
+}
+
+/* ========== Batch controls (in tab action bar) ==========
+   Empty queue:   single "⚙ Batch Mode" button.
+   Has entries:   "Start BatchGen (N)" + a small "✎" edit icon button. */
+.batch-controls { display: inline-flex; gap: 4px; align-items: center; }
+.batch-controls .batch-setup { font-weight: 500; }
+.batch-controls .batch-start { font-weight: 600; }
+.batch-controls .batch-edit { padding: 3px 7px; line-height: 1; }
+.btn-compact { padding-left: 7px; padding-right: 7px; font-size: 12px; }
+.variants-row-highlight { background: rgba(77,154,255,0.08); border-left: 3px solid var(--accent); border-radius: var(--radius-sm); padding: 4px 8px; }
+
+/* "+ Add" button that sits LEFT of Generate on every tab. It
+   captures the current form state into the batch queue (new
+   "snapshot" entry shape). Visually distinct from the primary
+   Generate button (which is the dominant action) but still
+   clearly a button. */
+button.batch-add {
+  /* Slight tint to read as a "constructive" action — same
+     accent family as the primary, but a stop lighter so it
+     doesn't compete with Generate for attention. */
+  background: var(--bg-3);
+  border-color: var(--border-2);
+  color: var(--fg-2);
+  font-weight: 500;
+}
+button.batch-add:hover {
+  background: var(--bg-4);
+  border-color: var(--accent-2);
+  color: var(--fg);
+}
+
+/* The BatchGen popup entry editor. Each entry is a row containing
+   the row-number, a vertical "editor" stack (textarea + optional
+   snapshot tag), and the reorder / delete buttons. */
+.batch-row { display: flex; gap: 6px; align-items: stretch; margin-bottom: 6px; }
+.batch-row-editor { display: flex; flex-direction: column; gap: 4px; flex: 1; min-width: 0; }
+.batch-row-editor textarea { min-height: 70px; }
+.batch-snapshot-tag {
+  display: inline-block;
+  font-size: 11px;
+  color: var(--fg-2);
+  background: var(--bg-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 2px 8px;
+  align-self: flex-start;
+  font-family: var(--font-mono);
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+input, select, textarea {
+  font: inherit; color: var(--fg);
+  background: var(--bg);
+  border: 1px solid var(--border-2);
+  border-radius: var(--radius-sm);
+  padding: 5px 9px;
+  outline: none;
+  /* A clear focus ring on every form control. The outline is kept
+     off only on mouse focus (`:focus`) and a 2px accent ring is
+     added on keyboard focus (`:focus-visible`).
+     The ring is `inset` so the layout doesn't shift by 2px
+     when an input gets focused. */
+  transition: border-color 120ms ease, background-color 120ms ease, box-shadow 120ms ease;
+}
+input:focus-visible, select:focus-visible, textarea:focus-visible {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px var(--accent-3);
+}
+/* Subtle scrollbar styling on webkit (Chromium / Edge). The default
+   17px scrollbar is too visually heavy and competes with the 1px
+   borders. Slim, themed, and the same colors as the folder-browser
+   so it doesn't draw the eye. */
+::-webkit-scrollbar { width: 10px; height: 10px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb {
+  background: var(--border-2);
+  border-radius: 5px;
+  border: 2px solid var(--bg-2);
+}
+::-webkit-scrollbar-thumb:hover { background: var(--fg-3); }
+input[type="text"], input[type="number"], textarea { width: 100%; }
+textarea {
+  resize: vertical;
+  min-height: 140px;
+  font-family: inherit;
+  line-height: 1.45;
+  /* The 64px default was too small — selecting text in a tiny box routinely
+     grabbed the scrollable #content container instead and dragged the view.
+     140px comfortably fits 4-5 lines of prompt without scrolling, and the
+     user can still resize down if they prefer. */
+  user-select: text;
+  -webkit-user-select: text;
+}
+/* The main prompt / text / lyrics textareas get a bit more room by default
+   so the user can comfortably edit longer content and mark text without
+   the view jumping. (All textareas in .row are still resizable.) */
+.row > textarea {
+  min-height: 160px;
+}
+input:focus, select:focus, textarea:focus { border-color: var(--accent); }
+input::placeholder, textarea::placeholder { color: var(--fg-3); }
+input:disabled, select:disabled, textarea:disabled { opacity: 0.55; cursor: not-allowed; }
+select { padding-right: 24px; background-image: linear-gradient(45deg, transparent 50%, var(--fg-2) 50%), linear-gradient(135deg, var(--fg-2) 50%, transparent 50%); background-position: calc(100% - 13px) 50%, calc(100% - 8px) 50%; background-size: 5px 5px, 5px 5px; background-repeat: no-repeat; appearance: none; -webkit-appearance: none; }
+
+label { color: var(--fg); font-weight: 500; }
+
+/* ========== Top bar ========== */
+#topbar {
+  display: flex; align-items: center; gap: 10px;
+  padding: 8px 14px;
+  background: var(--bg-2);
+  border-bottom: 1px solid var(--border);
+  /* A softer, less noisy bottom border. A 1px solid border with
+     the bg-2/border-2 pairing reads as a hairline and doesn't
+     compete with the tab indicator. */
+  border-bottom-color: var(--border-2);
+}
+/* Brand gets a hairline divider from the tab group so the tabs
+   don't crowd the title. */
+#topbar .brand { font-weight: 700; font-size: 14px; color: var(--fg); padding-right: 12px; border-right: 1px solid var(--border-2); margin-right: 2px; letter-spacing: 0.01em; }
+/* Issue-10: the brand is clickable (re-shows the welcome popup).
+   Pointer cursor signals it; no button chrome (it stays plain text).
+   user-select:none so rapid clicks don't select the title text. */
+#topbar .brand { cursor: pointer; user-select: none; -webkit-user-select: none; }
+#topbar .brand:hover { color: var(--accent); }
+#topbar .brand:hover .brand-version { color: var(--accent); opacity: 0.8; }
+#topbar .brand .brand-version { color: var(--fg-3); font-weight: 500; font-size: 11px; margin-left: 6px; font-family: var(--font-mono); }
+#tabs { display: flex; gap: 2px; }
+.tab {
+  background: transparent; border: 1px solid transparent;
+  color: var(--fg-2);
+  padding: 5px 14px; border-radius: var(--radius-sm);
+  font-weight: 500;
+  position: relative;
+  /* Smooth color transitions on hover/active. 120ms is fast
+     enough to feel instant but slow enough that the eye
+     registers the change. */
+  transition: background-color 120ms ease, color 120ms ease, border-color 120ms ease;
+}
+/* Status dots overlaid on tab buttons. Red = generation in progress, green =
+   generation finished (only when the user is not currently on that tab).
+   Bumped from 8px → 10px and given a darker outline so they're visible
+   against both dark and light themes. */
+.tab::after {
+  content: "";
+  position: absolute;
+  top: 5px; right: 5px;
+  width: 10px; height: 10px;
+  border-radius: 50%;
+  display: none;
+  box-shadow: 0 0 0 2px var(--bg-2), 0 0 4px rgba(0, 0, 0, 0.6);
+}
+.tab.tab-dot-red::after {
+  display: block;
+  background: var(--danger);
+  animation: tab-dot-pulse 1.2s ease-in-out infinite;
+  z-index: 2;
+}
+.tab.tab-dot-green::after { display: block; background: var(--success); z-index: 2; }
+@keyframes tab-dot-pulse { 0%, 100% { opacity: 0.55; } 50% { opacity: 1; } }
+/* Per-tab ETA timer shown next to the tab label while a generation is
+   running. Made more visible (12px, brighter) so the user actually sees it. */
+.tab .tab-eta {
+  display: inline-block;
+  margin-left: 6px;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--fg-2);
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+  vertical-align: 1px;
+}
+.tab.tab-dot-red .tab-eta { color: var(--danger); opacity: 0.85; }
+.tab:hover { background: var(--bg-3); color: var(--fg); }
+/* The active tab has a deliberate "lifted" feel — a 2px accent
+   underline PLUS a subtle inset shadow PLUS a slightly stronger
+   background. The combo is the design standard every native app
+   uses (Edge tabs, VS Code tabs, etc.). */
+.tab.active {
+  background: var(--bg-3);
+  border-color: var(--border-2);
+  color: var(--fg);
+  font-weight: 600;
+  border-bottom: 2px solid var(--accent);
+  padding-bottom: 3px;
+  box-shadow: inset 0 1px 0 0 var(--accent-3);
+}
+/* Focus ring on tabs (and on all .btn-mini below) for keyboard
+   navigation. */
+.tab:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+.quota { margin-left: auto; display: flex; align-items: center; gap: 6px; color: var(--fg-2); font-size: 12px; }
+.quota-label { opacity: 0.75; }
+#quota-value { font-variant-numeric: tabular-nums; color: var(--fg); font-weight: 500; }
+#quota-value .quota-warn { color: var(--warn); font-weight: 600; }
+#quota-value .quota-low { color: var(--danger); font-weight: 600; }
+#quota-value .quota-not-in-plan { color: var(--fg-3); font-style: italic; }
+#quota-value .quota-in-plan { color: var(--fg); font-weight: 600; }
+#quota-value span small { color: var(--fg-3); font-weight: 400; opacity: 0.85; }
+/* Issue-5: the compact one-line summary. nowrap keeps it on a single
+   header line; cursor:help signals that hovering reveals the full
+   per-model breakdown tooltip. */
+#quota-value .quota-compact { white-space: nowrap; cursor: help; }
+
+/* Issue-8: top status line — a single non-scrolling line at the TOP of
+   the tab area (sticky inside #content, mirroring the sticky .tab-footer
+   at the bottom). Replaces the old #status div in the header. */
+.statusbar {
+  position: sticky;
+  top: 0;
+  z-index: 6;
+  /* negative side margins pull the bar into #content's horizontal padding
+     so it spans the full width. No negative top margin needed now that
+     #content has no vertical padding. */
+  margin: 0 -18px 12px;
+  padding: 6px 18px;
+  background: var(--bg);
+  border-bottom: 1px solid var(--border);
+  /* small shadow so the user sees content scrolling behind the bar */
+  box-shadow: 0 8px 12px -10px rgba(0, 0, 0, 0.45);
+  color: var(--fg-2);
+  font-size: 12px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.statusbar.busy { color: var(--accent); font-weight: 600; }
+.statusbar.busy::before {
+  content: "● ";
+  animation: status-blink 1.2s linear infinite;
+}
+.statusbar.error { color: var(--danger); font-weight: 600; white-space: normal; }
+.statusbar-action { color: var(--accent); text-decoration: underline; cursor: pointer; margin-right: 4px; }
+@keyframes status-blink { 0%, 100% { opacity: 0.4; } 50% { opacity: 1; } }
+/* Slight top breathing room for the first section now that #content
+   has no vertical padding (scrolls with content, cannot create a sticky gap). */
+.tabpanel > .section:first-of-type { margin-top: 2px; }
+
+/* ========== Layout ==========
+   The 4 main areas of the app are arranged in a 2×2-ish grid:
+     ┌──────────── #content (tab panels) ──────┬──── #sidebar (folder browser) ────┐
+     │                                          │                                 │
+     ├──────────── #log (the log pane) ─────────┼──────── #preview (image preview) ┤
+   The horizontal split between rows (#content/#log) is the
+   `splitter-logbar` handle. The vertical splits are
+   `splitter-sidebar` (between #content and #sidebar) and
+   `splitter-log-preview` (between #log and #preview).
+
+   All four sizes are driven by CSS variables that the splitter
+   drag handlers in app.js update on the fly. The variables are
+   seeded from `state.layoutSettings` on startup (so the user's
+   preferred sizes survive a restart) and clamped to a sensible
+   min/max range in both the JS and the CSS (so a runaway drag
+   can't shrink an area to 0px and lock the UI). */
+:root {
+  --sidebar-w: 360px;     /* folder-browser column width (right)  */
+  --logbar-h: 280px;      /* log + picture-preview row height    */
+  --log-w: 1fr;           /* log column width inside #logbar     */
+  --preview-w: 360px;     /* picture-preview column width         */
+  /* Bounds (in px) used by both the JS drag handler and the
+     CSS to keep the 4 areas usable. The same numbers are
+     referenced in renderer/app.js (SPLITTER_LIMITS) so the
+     two sides stay in sync. */
+  --sidebar-min: 200px;   --sidebar-max: 70%;
+  --logbar-min: 80px;     --logbar-max: 70vh;
+  --log-min: 240px;       --preview-min: 200px;
+}
+
+/* #layout is a horizontal flex (content + sidebar) inside the
+   vertical flex of the body. The body's flex direction is
+   column, so #layout takes the remaining vertical space and
+   #logbar takes a fixed height driven by --logbar-h. */
+#layout {
+  flex: 1;
+  display: flex;
+  flex-direction: row;
+  min-height: 0;
+  min-width: 0;
+}
+/* #content: horizontal padding only. Vertical padding removed so the sticky
+   status bar (top:0) and sticky .tab-footer (bottom:0) pin flush to the true
+   top/bottom edge. With vertical padding, Chromium sticks them at the
+   content-box edge (inside the padding), leaving a padding-height strip through
+   which the scrolling prompt/param fields showed (markers 4 + 5). */
+#content {
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 0;
+  overflow: auto;
+  padding: 0 18px;
+}
+#sidebar {
+  flex: 0 0 var(--sidebar-w);
+  width: var(--sidebar-w);
+  min-width: var(--sidebar-min);
+  max-width: var(--sidebar-max);
+  border-left: 1px solid var(--border);
+  background: var(--bg-2);
+  display: flex; flex-direction: column; min-height: 0; min-width: 0;
+  overflow: hidden;
+}
+.tabpanel { display: none; }
+.tabpanel.active { display: block; }
+
+/* ========== Resizable splitters ==========
+   The 3 splitters are 4-px-wide (or -tall) bars that sit
+   between the 4 main areas. They're invisible until the user
+   hovers, then they light up with the accent colour so the
+   user knows where the drag handle is. Cursors change to the
+   appropriate resize cursor per orientation.
+   The "grip" indicator (::before pseudo-element) is more
+   pronounced on hover/dragging so the user can clearly see
+   the splitter is interactive. */
+.splitter {
+  flex: 0 0 4px;
+  background: var(--border);
+  position: relative;
+  z-index: 4;
+  /* Prevent the splitter from intercepting mouse events that
+     were meant for the elements behind it; we attach drag
+     listeners on the splitter itself in JS. */
+  user-select: none;
+  -webkit-user-select: none;
+  /* A wider invisible "hit area" (16px) so the user can grab the
+     splitter even when the cursor isn't pixel-perfect. The visible
+     bar stays 4px so the layout doesn't change; the 6px on each
+     side is a transparent extension that captures mouse events. */
+  /* (Hit area implemented via padding so the visible
+     element keeps its 4px size; the padded area
+     forwards events to the splitter.) */
+}
+.splitter::after {
+  /* Invisible 16px hit area on top of the visible 4px bar.
+     Captures mouseover / mousedown even when the cursor is a
+     few pixels off the bar. */
+  content: "";
+  position: absolute;
+  inset: -6px 0;
+  background: transparent;
+  z-index: -1;
+  /* Re-forward pointer events to the parent splitter
+     element so the existing listeners still fire. */
+  pointer-events: auto;
+}
+.splitter:hover,
+.splitter.dragging {
+  background: var(--accent);
+}
+.splitter-v {
+  cursor: col-resize;
+  width: 4px;
+  height: 100%;
+  align-self: stretch;
+}
+.splitter-h {
+  cursor: row-resize;
+  height: 4px;
+  width: 100%;
+}
+.splitter::before {
+  /* Subtle "grip" indicator in the middle of the splitter so the
+     user can see where to click. 2 short dashes for vertical
+     splitters, 2 short dashes for horizontal. Thicker, more
+     visible, and uses the accent colour on hover/drag so the user
+     can't miss it. */
+  content: "";
+  position: absolute;
+  background: var(--accent);
+  opacity: 0.5;
+  border-radius: 1px;
+  transition: opacity 0.15s ease, background 0.15s ease, width 0.15s ease, height 0.15s ease;
+}
+.splitter:hover::before,
+.splitter.dragging::before {
+  opacity: 1;
+  background: #fff;
+}
+.splitter-v::before {
+  left: 50%; top: 50%;
+  width: 3px; height: 28px;
+  transform: translate(-50%, -50%);
+  background:
+    linear-gradient(var(--accent), var(--accent)) center/3px 28px no-repeat;
+}
+.splitter-h::before {
+  left: 50%; top: 50%;
+  width: 28px; height: 3px;
+  transform: translate(-50%, -50%);
+  background:
+    linear-gradient(var(--accent), var(--accent)) center/28px 3px no-repeat;
+}
+/* Suppress the "grabbed" cursor on the splitters' children
+   so the resize cursor stays put. The body has a global
+   "grab / grabbing" cursor override during drag (set by the
+   JS drag handler) so the user gets continuous feedback. */
+.splitter, .splitter * { cursor: inherit; }
+/* During a drag, the body gets a "resizing-width" /
+   "resizing-height" class so the cursor stays the right
+   resize cursor even when the pointer drifts over a
+   different element (log pane, preview pane, etc.). */
+body.resizing-width, body.resizing-width * { cursor: col-resize !important; }
+body.resizing-height, body.resizing-height * { cursor: row-resize !important; }
+body.resizing-width, body.resizing-height { user-select: none; -webkit-user-select: none; }
+
+/* ========== Sticky tab footer (actions + preview) ==========
+   The lower part of every tab (the Generate row and the preview area) is
+   pinned to the bottom of the scrollable #content. The user can scroll the
+   parameter sections above and always see the Generate button + result. */
+.tabpanel { padding-bottom: 0; }
+.tab-footer {
+  position: sticky;
+  bottom: 0;
+  background: var(--bg);
+  /* Issue-7 fix: NO bottom padding — pre-fix the 4px bottom padding left
+     a visible gap under the actions row through which the scrolling
+     content behind showed. The actions row now sits flush against the
+     container's bottom edge. */
+  padding: 10px 0 0;
+  margin-top: 10px;
+  border-top: 1px solid var(--border);
+  z-index: 5;
+  /* small shadow so the user sees content scrolling behind the footer */
+  box-shadow: 0 -8px 12px -10px rgba(0, 0, 0, 0.45);
+  /* Preview now sits ABOVE the actions row (per the user feedback
+     "move the +Add/Generate row down, no small area below it
+     showing scrolling content"). Use a flex column so the
+     actions row stays anchored to the very bottom of the
+     sticky footer, and the preview fills the remaining space
+     without leaving a "gap" under the actions. */
+  display: flex;
+  flex-direction: column;
+}
+.tab-footer .preview {
+  /* Preview sits at the top of the footer, takes whatever
+     vertical space it needs (min 0), and the actions row
+     below it gets pushed to the bottom. */
+  margin-bottom: 8px;
+  flex: 0 0 auto;
+}
+.tab-footer .actions {
+  margin-bottom: 0;
+  margin-top: 4px;
+  /* Anchor the actions row to the bottom of the footer so
+     the Generate / +Add controls sit flush against the
+     bottom edge of the tab. */
+  flex: 0 0 auto;
+}
+
+/* ========== Sections / forms ========== */
+.section {
+  background: var(--bg-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 12px 14px;
+  margin-bottom: 12px;
+}
+.section h3 {
+  margin: 0 0 10px;
+  font-size: 11px;
+  color: var(--fg-2);
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+.grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 6px 10px; }
+.row { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.row > label { font-size: 11px; }
+.row input[type="text"], .row input[type="number"], .row select { font-size: 12px; padding: 3px 6px; }
+/* The "Target file prefix" row is shown on every tab's Parameters
+   section above the per-field grid. Give it a faint background and a
+   little extra padding so it reads as a "this is a global setting,
+   not just another per-tab option". The four mirrored inputs across
+   the tabs all carry the .file-prefix-input class so the buildFilePrefixRow
+   helper can keep them in sync via class querySelectorAll. */
+.row.file-prefix-row {
+  background: var(--bg-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 8px 10px;
+  margin-bottom: 8px;
+  flex-direction: row;
+  align-items: center;
+  gap: 12px;
+}
+.row.file-prefix-row > label {
+  margin: 0;
+  flex: 0 0 auto;
+  white-space: nowrap;
+}
+.row.file-prefix-row > input.file-prefix-input {
+  flex: 1;
+  min-width: 0;
+}
+.row.file-prefix-row > .plus-one-btn {
+  flex: 0 0 auto;
+  font-family: var(--font-mono);
+  font-weight: 700;
+  padding: 2px 8px;
+  font-size: 11px;
+  letter-spacing: 0.04em;
+}
+
+/* "Don't save" row under the API-key input. Indented to match the
+   input row, with a small bold "Don't save" + an explanatory
+   caption. When the checkbox is checked we add
+   `.api-key-no-save-active` to the input itself so the user gets a
+   subtle visual cue
+   that the key will be discarded on the next launch. */
+.row.api-key-no-save-row {
+  margin-top: -2px;  /* hug the API-key row above */
+  margin-bottom: 10px;
+  padding-left: 0;
+}
+.row.api-key-no-save-row label.api-key-no-save-label {
+  display: inline-flex;
+  align-items: flex-start;
+  gap: 6px;
+  font-size: 11.5px;
+  color: var(--fg-2);
+  cursor: pointer;
+  font-weight: 500;  /* override the generic .row > label font-weight */
+}
+.row.api-key-no-save-row label.api-key-no-save-label input[type="checkbox"] {
+  margin: 1px 0 0 0;
+  cursor: pointer;
+  accent-color: var(--warn, #d9a300);
+}
+.row.api-key-no-save-row label.api-key-no-save-label span strong {
+  color: var(--fg);
+}
+.combo > input.api-key-no-save-active {
+  /* Subtle "will be discarded" tint. Not a disable — the
+     user may still want to keep typing or test the
+     connection before deciding. */
+  background: rgba(217, 163, 0, 0.10);
+  border-color: var(--warn, #d9a300);
+}
+
+.row > label {
+  font-size: 11px; color: var(--fg);
+  display: flex; align-items: center; gap: 5px;
+  font-weight: 600;
+}
+/* Help "?" icons (the helpButton factories render <button class="help-btn">,
+   ParamRow renders <button class="help-button">, older call sites render
+   <span class="help">). Issue-11: ONE unified size definition for ALL
+   help buttons — form labels, asset-panel header, settings captions,
+   context menus: 16×16px (50% smaller than the former 24×24), per
+   explicit user request. */
+.help,
+.help-btn,
+.help-button {
+  color: var(--fg-2);
+  background: var(--bg-3);
+  border: 1px solid var(--border-2);
+  border-radius: 50%;
+  width: 16px; height: 16px; min-width: 16px; min-height: 16px;
+  box-sizing: border-box;
+  text-align: center; font-size: 10px; line-height: 14px;
+  cursor: help; font-weight: 700;
+  /* Override the default button chrome so the icon is
+     visually consistent with the rest of the form. */
+  padding: 0; margin: 0; outline: none;
+  font-family: inherit;
+  display: inline-flex; align-items: center; justify-content: center;
+  vertical-align: middle;
+  transition: background 0.15s ease, color 0.15s ease, border-color 0.15s ease;
+}
+.help:hover,
+.help-btn:hover,
+.help-btn:focus,
+.help-btn:focus-visible,
+.help-button:hover,
+.help-button:focus,
+.help-button:focus-visible {
+  background: var(--accent);
+  color: #fff;
+  border-color: var(--accent);
+  outline: none;
+}
+/* Help modal — wider than the default modal so the longer
+   explanations fit on a single screen on most monitors. */
+.modal.help-modal { max-width: 640px; }
+.modal.help-modal .help-modal-body { font-size: 13px; line-height: 1.55; color: var(--fg); }
+.modal.help-modal .help-modal-body p { margin: 0 0 10px; }
+.modal.help-modal .help-modal-body p:last-child { margin-bottom: 0; }
+.modal.help-modal h2 { margin-bottom: 6px; }
+.row .combo { display: flex; gap: 4px; align-items: stretch; }
+/* "row-flex" is a tiny inline-row used in the right-click
+   context menu: a button + a help "?" icon side by side.
+   The standard `.row` is a full grid row; the inner div
+   is just a flex container. */
+.row .row-flex { display: inline-flex; gap: 6px; align-items: center; }
+.row .row-flex .help-btn { margin-left: 2px; }
+.row .combo select { flex: 1; min-width: 0; }
+.row .combo input { flex: 2; min-width: 0; }
+.row .combo button { flex: 0 0 auto; }
+.row .check { display: flex; align-items: center; gap: 8px; padding: 6px 0; }
+.row .check input { width: auto; }
+
+/* When a dropdown is set to "Custom…", make the input the dominant element. */
+.row .combo.has-custom select { flex: 1 1 80px; max-width: 110px; }
+.row .combo.has-custom input { flex: 1 1 60%; min-width: 140px; }
+
+/* The "Custom…" enum option
+   needs a different layout than the 'has-custom' combo
+   above. Per the user spec, when Custom is selected:
+     - The dropdown shrinks to 50% width
+     - The text input takes the other 50%
+     - An OK button sits next to the input
+   Without the .enum-custom-active class, the dropdown
+   takes 100% (default) and the input + OK button are
+   hidden. The transition between the two states is
+   instantaneous (no animation) so the user can rapidly
+   switch between dropdown options without flicker. */
+.combo-select-enum > select {
+  flex: 1 1 100%;
+  min-width: 0;
+}
+.combo-select-enum > input.enum-custom-input {
+  flex: 0 0 0;
+  display: none;
+  min-width: 0;
+}
+.combo-select-enum > button.enum-custom-ok {
+  flex: 0 0 0;
+  display: none;
+  margin: 0;
+}
+/* The .enum-custom-active class flips the layout to 50/50.
+   The dropdown becomes exactly 50% (with a min-width so
+   long option labels like "speech-2.8-turbo (faster, lower
+   latency)" don't get clipped to 2 characters). The text
+   input + OK button take the other 50%. */
+.combo-select-enum.enum-custom-active > select {
+  flex: 1 1 50%;
+  min-width: 140px;
+}
+.combo-select-enum.enum-custom-active > input.enum-custom-input {
+  flex: 1 1 calc(50% - 60px);
+  display: block;
+  min-width: 80px;
+}
+.combo-select-enum.enum-custom-active > button.enum-custom-ok {
+  flex: 0 0 50px;
+  display: block;
+}
+
+/* The 'number' kind gets the same 50/50 + OK affordance as 'enum'
+   above - same shape, just targeting the number input's own classes.
+   The wrapper itself keeps the 'combo-select-number' class (NOT
+   renamed to combo-select-enum): batchImportHelper.js's
+   getTabInputValue/setTabInputValue match on that exact class
+   name. */
+.combo-select-number > select {
+  flex: 1 1 100%;
+  min-width: 0;
+}
+.combo-select-number > input.number-custom-input {
+  flex: 0 0 0;
+  display: none;
+  min-width: 0;
+}
+.combo-select-number > button.number-custom-ok {
+  flex: 0 0 0;
+  display: none;
+  margin: 0;
+}
+.combo-select-number.number-custom-active > select {
+  flex: 1 1 50%;
+  min-width: 100px;
+}
+.combo-select-number.number-custom-active > input.number-custom-input {
+  flex: 1 1 calc(50% - 60px);
+  display: block;
+  min-width: 80px;
+}
+.combo-select-number.number-custom-active > button.number-custom-ok {
+  flex: 0 0 50px;
+  display: block;
+}
+
+/* The file browser's Up button is disabled when the user is at the
+   drives list (the lowest navigable point). We dim the button +
+   change the cursor so the disabled state is visually obvious. The
+   native `disabled` HTML attribute is also set, which blocks the
+   click — the .fb-up-disabled class is purely cosmetic. */
+button.fb-up-disabled,
+button.fb-up-disabled:hover,
+button.fb-up-disabled:focus {
+  opacity: 0.4;
+  cursor: not-allowed;
+  /* Suppress the default hover/active backgrounds the .btn-mini
+     style applies so the dimmed state reads as "inert". */
+  background: var(--bg-2);
+  border-color: var(--border-2);
+  color: var(--fg-2);
+}
+
+/* Advanced pipeline settings overlay: a "Custom…" entry on every
+   select dropdown. When the user picks it, the dropdown shrinks to
+   50% and the text input + OK button take the other 50%. Same
+   pattern as the ParamRow combo-select-enum / combo-select-number
+   rules above, scoped to the section25 wrapper so the two CSS rules
+   don't fight each other. */
+.section25-sel-row > select {
+  flex: 1 1 100%;
+  min-width: 0;
+}
+.section25-sel-row > input.section25-custom-input {
+  flex: 0 0 0;
+  display: none;
+  min-width: 0;
+}
+.section25-sel-row > button.section25-custom-ok {
+  flex: 0 0 0;
+  display: none;
+  margin: 0;
+}
+.section25-sel-row.section25-custom-active > select {
+  flex: 1 1 50%;
+  min-width: 100px;
+}
+.section25-sel-row.section25-custom-active > input.section25-custom-input {
+  flex: 1 1 calc(50% - 60px);
+  display: block;
+  min-width: 80px;
+}
+.section25-sel-row.section25-custom-active > button.section25-custom-ok {
+  flex: 0 0 50px;
+  display: block;
+}
+
+/* ========== Action bar ========== */
+.actions { display: flex; gap: 8px; align-items: center; margin-bottom: 12px; flex-wrap: wrap; }
+.batch-start { background: var(--accent); color: #fff; border-color: var(--accent); font-weight: 600; }
+.batch-start:hover { background: var(--accent-2); border-color: var(--accent-2); }
+/* Locked state — the Start button is disabled while a
+   generation on the same tab is running (see
+   _refreshBatchButtons in app.js). The accent colour stays
+   (so the user still sees it as the primary action) but the
+   background is dimmed to a "busy / pending" grey and the
+   hover effect is suppressed. The native `disabled` HTML
+   attribute also blocks clicks, but we style the class
+   explicitly so the visual state is consistent across
+   Electron / Chromium versions. */
+.batch-start.disabled,
+.batch-start:disabled {
+  background: var(--bg-2, #2a2a30);
+  color: var(--fg-2, #aaa);
+  border-color: var(--border, #444);
+  cursor: not-allowed;
+  opacity: 0.65;
+}
+.batch-start.disabled:hover,
+.batch-start:disabled:hover {
+  background: var(--bg-2, #2a2a30);
+  border-color: var(--border, #444);
+}
+
+/* ========== Style-preview ========== */
+.style-preview { margin-top: 8px; padding: 8px 10px; background: var(--bg-2); border: 1px solid var(--border-2); border-radius: var(--radius-sm); font-size: 12px; color: var(--fg-2); white-space: pre-wrap; word-break: break-word; max-height: 160px; overflow: auto; line-height: 1.5; }
+.style-preview .prefix { color: var(--accent); font-weight: 600; }
+.style-preview .empty { color: var(--fg-3); font-style: italic; }
+/* Collapsible wrapper around .style-preview. Default: collapsed — the
+   full prompt preview takes vertical space the user doesn't always
+   want, so they expand the details element on demand. The summary
+   label is muted to read as a "click to inspect" affordance, not
+   an active button. */
+.style-preview-details { margin-top: 6px; }
+.style-preview-details > summary {
+  cursor: pointer;
+  font-size: 11px;
+  color: var(--fg-3);
+  padding: 2px 4px;
+  user-select: none;
+  list-style: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+.style-preview-details > summary::before {
+  content: '▸';
+  display: inline-block;
+  font-size: 10px;
+  transition: transform 0.12s;
+}
+.style-preview-details[open] > summary::before { transform: rotate(90deg); }
+.style-preview-details[open] > summary { color: var(--fg-2); }
+.style-preview-details > summary:hover { color: var(--fg); }
+
+/* ========== Prompt character counter ==========
+   Small "X / 2000" readout placed right under the prompt + style preview.
+   Counts only what would be sent in the --prompt argument (style + manual
+   + optional prefix). Goes orange near the limit, red when over. */
+.prompt-counter {
+  margin-top: 6px;
+  font-size: 11px;
+  color: var(--fg-3);
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+  user-select: none;
+}
+.prompt-counter .prompt-counter-val { font-weight: 700; color: var(--fg-2); }
+.prompt-counter .prompt-counter-max { color: var(--fg-3); }
+.prompt-counter.warn .prompt-counter-val { color: var(--warn); }
+.prompt-counter.warn .prompt-counter-max { color: var(--warn); }
+.prompt-counter.err  .prompt-counter-val { color: var(--danger); }
+.prompt-counter.err  .prompt-counter-max { color: var(--danger); }
+.prompt-counter.err  .prompt-counter-label { color: var(--danger); }
+
+/* ========== Variants dropdown ==========
+   H10-10.2/10.3: the bespoke .variants-row / .variants-label / .variants-select
+   overrides were removed so the variants element renders identically to a
+   normal .row parameter (same column layout, same select sizing, same
+   help-icon circle outline). The ONLY remaining difference is the blue tint,
+   applied by .variants-row-highlight (defined earlier in this file). The
+   disabled styling for the select now falls through to the generic
+   select:disabled rule used everywhere else. */
+
+/* ========== Preview area ==========
+   The left-side preview used to hold the generated image (now lives
+   in the right-side folder-explorer's preview pane), so this
+   element only needs to carry a short status line during a run.
+   Compact, one-line, aligned to the bottom of the action row.
+*/
+.preview {
+  background: var(--bg-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 4px 10px;
+  min-height: 0;
+  font-size: 12px;
+  line-height: 1.4;
+}
+.preview img, .preview video {
+  max-width: 100%; max-height: 60vh; display: block; margin: 0 auto;
+  background: var(--bg-3); border-radius: var(--radius-sm);
+}
+.preview img.preview-thumb {
+  /* Generation preview is now a thumbnail (max 400×400) instead of a
+     full-size image. Clicking the thumbnail opens the image overlay
+     at 1:1 pixel mode. We use object-fit: contain so the aspect ratio
+     is preserved and the image is rendered completely (no crop). */
+  max-width: 400px;
+  max-height: 400px;
+  object-fit: contain;
+  cursor: zoom-in;
+  transition: transform 0.12s ease, box-shadow 0.12s ease;
+}
+.preview img.preview-thumb:hover {
+  transform: scale(1.02);
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.4);
+}
+.preview audio { width: 100%; }
+.preview .empty { color: var(--fg-2); text-align: left; padding: 2px 0; }
+/* Error preview (generation failed): show the message + a Retry button
+   so the user can re-trigger the same generation without re-entering
+   parameters. */
+.preview .empty .preview-error-title {
+  color: var(--danger);
+  font-weight: 600;
+  font-size: 14px;
+  margin-bottom: 8px;
+}
+.preview .empty .preview-error-message {
+  color: var(--fg);
+  font-size: 13px;
+  margin-bottom: 10px;
+  word-break: break-word;
+  font-family: var(--font-mono);
+}
+.preview .empty .preview-error-tips {
+  text-align: left;
+  max-width: 560px;
+  margin: 0 auto 12px;
+  padding: 8px 14px;
+  background: var(--bg-3);
+  border: 1px solid var(--border-2);
+  border-left: 3px solid var(--warn);
+  border-radius: var(--radius-sm);
+  font-size: 12px;
+  line-height: 1.5;
+}
+.preview .empty .preview-error-tip {
+  color: var(--fg-2);
+  padding: 1px 0;
+}
+.preview .empty .preview-error-actions {
+  margin-top: 12px;
+  display: flex;
+  justify-content: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.preview .meta { color: var(--fg-2); font-size: 12px; margin-top: 8px; word-break: break-all; font-family: var(--font-mono); }
+
+/* ========== Sidebar / file browser ========== */
+.sidebar-head, .sidebar-toolbar {
+  display: flex; align-items: center; gap: 4px;
+  padding: 6px 8px;
+  border-bottom: 1px solid var(--border);
+}
+/* The toolbar packs a filter input + 2 selects + 4 buttons onto one
+   row with no wrap, so a narrow sidebar pushes the rightmost buttons
+   (Open, Options) off-screen. Allow the row to wrap so every control
+   stays reachable at any sidebar width. */
+.sidebar-toolbar { flex-wrap: wrap; }
+.sidebar-toolbar input[type="text"] {
+  padding: 3px 7px; font-size: 12px;
+}
+/* Sort selector in the folder-browser toolbar. Compact: a small
+   <select> with a short label per option (Name ↑, Size ↓, …).
+   The 100ms-wide native dropdown arrow is a bit chunky for the
+   narrow column, so we trim the right padding to match the
+   surrounding .btn-mini buttons. */
+.sidebar-toolbar .fb-sort {
+  padding: 3px 7px;
+  font-size: 12px;
+  width: auto;
+  min-width: 88px;
+  max-width: 110px;
+  flex: 0 0 auto;
+}
+/* Asset-type filter (#fb-type-filter). Same compact styling as the
+   sort dropdown but a touch wider so the emoji-prefixed labels
+   (Images, Audio, …) don't get clipped. */
+.sidebar-toolbar .fb-type-filter {
+  padding: 3px 7px;
+  font-size: 12px;
+  width: auto;
+  min-width: 110px;
+  max-width: 140px;
+  flex: 0 0 auto;
+}
+.path-label { flex: 1; font-size: 12px; color: var(--fg-2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+/* Per-type icon tinting. Each file type gets a per-type class
+   (.fb-icon-image, .fb-icon-audio, etc.) that tags the icon cell
+   with a subtle coloured background so the user can spot the type
+   at a glance even on the dark theme (the music-note emoji is
+   nearly invisible as a dark-blue glyph on a near-black row).
+   The class is set by iconClassForFile() in utils/pureFuncs.js. */
+.fb-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 3px;
+  padding: 1px 2px;
+  min-width: 18px;
+  min-height: 18px;
+  font-size: 14px;
+  line-height: 1;
+}
+.fb-icon.fb-icon-image {
+  /* Image: a soft accent-blue tint that suggests "media". */
+  background: rgba(77, 154, 255, 0.12);
+}
+.fb-icon.fb-icon-audio {
+  /* The music-note icon needs a brighter background to be visible
+     on the dark theme. Use a soft success-green tint to
+     differentiate it from images. */
+  background: rgba(110, 224, 168, 0.18);
+  /* Slightly bigger to draw attention. */
+  font-size: 15px;
+}
+.fb-icon.fb-icon-video {
+  background: rgba(248, 196, 122, 0.15);
+}
+.fb-icon.fb-icon-text {
+  background: rgba(184, 184, 192, 0.10);
+}
+.fb-icon.fb-icon-other {
+  background: rgba(184, 184, 192, 0.08);
+}
+/* The folder-browser list is now a CSS grid (not flex) so we
+   can have a stable column layout that scrolls horizontally
+   when the user enables enough columns to exceed the available
+   width. overflow-x: auto + min-width: max-content on the
+   <ul> is what enables the horizontal scroll. The
+   grid-template-columns string is set per-render by
+   buildFbGridTemplate() in app.js (so the live list picks up
+   the user's column choices immediately). */
+.fb-list {
+  list-style: none; margin: 0; padding: 0;
+  overflow: auto; flex: 1;
+  display: grid;
+  /* The default (no optional columns visible) - icon + name.
+     The renderer overrides this with buildFbGridTemplate() on
+     every render. 18px select column at the leftmost position
+     holds the multi-select checkboxes. */
+  grid-template-columns: 18px 16px minmax(120px, 1fr) minmax(70px, auto);
+  /* Critical for horizontal scrolling: the grid's intrinsic
+   width must be at least the sum of the column min-widths,
+   even when that exceeds the parent's width. min-width:
+   max-content + overflow-x: auto on the parent then makes
+   the scroll bar appear. */
+  align-content: start;
+  /* Hint to the browser that the contents of this grid are
+     independent of the surrounding layout. The browser can paint
+     the list in a separate compositor layer, so resizing the
+     window (which triggers a full layout pass on the ancestors)
+     doesn't have to re-measure every row. The "layout"
+     containment specifically stops the list from triggering an
+     ancestor layout when it reflows internally. */
+  contain: layout style;
+}
+.fb-item {
+  display: grid;
+  /* Column template is set by the JS per render (via
+   buildFbGridTemplate on the parent ul). The grid inherits
+   the parent's column structure. */
+  grid-column: 1 / -1;
+  align-items: center;
+  gap: 10px;
+  padding: 5px 10px; cursor: pointer; user-select: none;
+  border-left: 2px solid transparent;
+  /* Default row height. The thumbnails-on rule below overrides
+   this so the row is tall enough to show the actual image —
+   even when every column is enabled at once. */
+  min-height: 28px;
+}
+/* When thumbnails are on, give every row the same generous height so
+   the thumbnail is fully visible regardless of how many columns are
+   also rendered. Without this, adding the path + mtime + created
+   columns at once would force the row height to a value that clipped
+   the thumbnail from the top/bottom. */
+.fb-list.fb-thumbs-on .fb-item {
+  min-height: 52px;
+  padding-top: 6px;
+  padding-bottom: 6px;
+}
+.fb-item:hover { background: var(--bg-3); }
+
+/* Leftmost checkbox cell. The .fb-cb-cell is the container so the
+   row's CSS-grid layout doesn't try to make the checkbox span 2+
+   columns by accident. The checkbox itself is small (14x14) and
+   centred. Click is stopped at the checkbox so it doesn't also
+   trigger the row's normal click handler (which would change
+   state._selected and load a preview). */
+.fb-item .fb-cb-cell {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 18px;
+  max-width: 18px;
+  cursor: default; /* the row's own cursor:pointer still applies; this just makes the checkbox area not advertise itself as a link */
+}
+.fb-item .fb-cb-cell .fb-select-cb {
+  margin: 0;
+  width: 14px;
+  height: 14px;
+  cursor: pointer;
+  accent-color: var(--accent);
+}
+
+/* Bulk-action toolbar. Hidden by default; app.js shows it when at
+   least one checkbox is ticked. Sits in its own row between the
+   regular toolbar (#fb-search etc.) and the list, so the list
+   height shrinks slightly while the toolbar is visible. Background
+   is the same as the toolbar so the two rows read as one toolbar
+   group. */
+.fb-bulk-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 10px;
+  background: var(--bg-2);
+  border-bottom: 1px solid var(--border);
+  font-size: 12px;
+  flex-wrap: wrap;
+}
+.fb-bulk-toolbar .fb-bulk-master {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 12px;
+  color: var(--fg-2);
+  margin-right: 4px;
+  user-select: none;
+}
+.fb-bulk-toolbar #fb-bulk-count {
+  font-variant-numeric: tabular-nums;
+  color: var(--fg-2);
+}
+.fb-bulk-toolbar .btn-mini { font-size: 11px; padding: 2px 8px; }
+.fb-bulk-toolbar .btn-mini.danger { color: var(--danger); }
+
+/* When at least one checkbox is ticked, give the matching
+   row a subtle left-bar accent so the user can scan the
+   selection at a glance. */
+.fb-item.fb-selected-row { border-left-color: var(--accent) !important; }
+.fb-item.fb-selected-row .name { font-weight: 600; }
+/* Zebra striping: every second row gets a subtle background
+   so a long folder list scans as separate items even when no
+   row is hovered. We use a slightly tinted bg-2 (a hair
+   lighter than the base) so it works in both the dark and
+   light themes — bg-3 is the hover colour and would clash.
+   The pattern restarts cleanly when the filter hides rows
+   because CSS counts DOM children regardless of visibility,
+   so a filtered list may show two adjacent "even" rows; that
+   is acceptable trade-off for the simplicity of pure CSS. */
+.fb-item:nth-child(even):not(.selected):not(.fb-drop-target) {
+  background: rgba(255, 255, 255, 0.025);
+}
+:root[data-theme="light"] .fb-item:nth-child(even):not(.selected):not(.fb-drop-target) {
+  background: rgba(0, 0, 0, 0.035);
+}
+/* The hover rule must mirror the zebra selector's structure (same
+   :not() guards), otherwise the zebra selector wins on every second
+   row by specificity and hover is invisible there. Cascade order
+   (this rule comes after the zebra rule) lets it win once the
+   specificity matches. Both themes get the same selector pattern,
+   so the dark + light hover overlays stay in sync. */
+.fb-item:nth-child(even):not(.selected):not(.fb-drop-target):hover {
+  background: var(--bg-3);
+}
+:root[data-theme="light"] .fb-item:nth-child(even):not(.selected):not(.fb-drop-target):hover {
+  background: var(--bg-3);
+}
+/* Empty-state cell for the file browser. The hint cell uses
+   grid-column: 1 / -1 to span the full row width regardless of
+   the user's column layout. */
+.fb-empty {
+  grid-column: 1 / -1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 28px 16px;
+  color: var(--fg-3);
+  font-size: 12.5px;
+  text-align: center;
+  border: none !important;
+  cursor: default;
+}
+.fb-empty:hover { background: transparent !important; }
+.fb-empty-title { font-size: 13px; color: var(--fg-2); font-weight: 500; margin-bottom: 4px; }
+.fb-empty-hint { color: var(--fg-3); font-size: 12px; }
+/* Selected state: a 3px accent left bar plus a deliberate blue
+   background so the active row stands out when scanning the list.
+   Uses accent-3 (a clearly blue-tinted background) with white text
+   and a 3px accent bar. */
+.fb-item.selected {
+  background: var(--accent-3);
+  border-left-color: var(--accent);
+  border-left-width: 3px;
+  color: #fff;
+}
+.fb-item.fb-drop-target { background: var(--accent-3); border-left-color: var(--accent); color: #fff; }
+/* Focus ring on folder-browser rows for keyboard navigation. */
+.fb-item:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+.fb-item .icon {
+  /* Plain (non-thumbnail) icon. The user explicitly asked for
+   left-alignment when thumbnails are off, so the regular
+   emoji icon reads like a normal Explorer row instead of a
+   centred badge. The centred alignment is reserved for the
+   thumbnail cell (.fb-thumb) defined below. */
+  text-align: left;
+  opacity: 0.9;
+  font-size: 14px;
+  line-height: 1;
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  min-width: 0;
+}
+/* Thumbnail cell: a centered preview of the actual image file.
+   We constrain the image to 36×36 so it stays a chip — not the
+   full row — even when the row is otherwise tall. The <img>
+   uses object-fit: cover so a portrait and a landscape both
+   fill the slot without distorting the row height. */
+.fb-item .icon.fb-thumb {
+  justify-content: center;
+}
+.fb-item .icon.fb-thumb img {
+  width: 36px;
+  height: 36px;
+  object-fit: cover;
+  border-radius: 3px;
+  background: var(--bg-3);
+  display: block;
+  border: 1px solid var(--border);
+}
+.fb-item .name {
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--fg);
+  /* Allow long file names to be selected with the mouse for
+   copy-paste; the elided text is still readable via the
+   title attribute. */
+  user-select: text;
+  -webkit-user-select: text;
+}
+/* All optional cells share a common style. Per-column tweaks
+   (alignment, font) follow below. */
+.fb-item .col-size,
+.fb-item .col-type,
+.fb-item .col-mtime,
+.fb-item .col-created,
+.fb-item .col-path {
+  color: var(--fg-2);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  user-select: text;
+  -webkit-user-select: text;
+}
+.fb-item .col-size { text-align: right; }
+.fb-item .col-type { text-align: left; text-transform: uppercase; opacity: 0.85; }
+.fb-item .col-mtime,
+.fb-item .col-created { text-align: left; font-family: var(--font-mono); font-size: 10.5px; }
+.fb-item .col-path { color: var(--fg-3); font-family: var(--font-mono); font-size: 10.5px; }
+/* Brief blink on a folder-browser row whose file was just
+   generated. Driven by the .fb-item-new class, which is set
+   by notifyImageGenerated() (via the gen handler) and by the
+   1s startGenPolling() tick. The animation runs once per class
+   application; a re-render that strips the class and re-adds
+   it later re-triggers the animation. ~1.5s total so the user
+   has time to notice it without it feeling intrusive. */
+@keyframes fb-item-blink {
+  0%   { background-color: var(--accent-3); border-left-color: var(--accent); }
+  60%  { background-color: var(--accent-3); border-left-color: var(--accent); }
+  100% { background-color: transparent;      border-left-color: transparent; }
+}
+.fb-item.fb-item-new { animation: fb-item-blink 1.5s ease-out; }
+/* The .selected class is applied alongside .fb-item-new on the
+   active row; the two together (animation + persistent background)
+   would clash, so we keep the .selected background and let the
+   animation only animate the border-left. The combination
+   reads as "this is the new active row". */
+.fb-item.selected.fb-item-new {
+  animation-name: fb-item-blink-selected;
+}
+@keyframes fb-item-blink-selected {
+  0%   { background-color: var(--bg-4); border-left-color: var(--accent); }
+  60%  { background-color: var(--bg-4); border-left-color: var(--accent); }
+  100% { background-color: var(--bg-4); border-left-color: var(--accent); }
+}
+
+/* ========== Log bar ==========
+   Layout: horizontal flex with 2 panes — left = the existing log
+   (with its Copy / Clear / Collapse buttons), right = the
+   "Picture preview" pane that shows the asset the user clicked
+   in the file browser. The `splitter-log-preview` handle sits
+   between them; the user can drag it to change the ratio
+   independently of the row's height (which is controlled by
+   the `splitter-logbar` handle above the row).
+
+   The picture-preview pane is locked to the RIGHT edge of the
+   window: it has no margin/padding on its right side and its
+   border-right is 0 so there's never empty space right of it.
+   The log pane can be collapsed (via the Collapse button or
+   clicking its <details> summary) — when collapsed, the log
+   shrinks to a small bar on the LEFT side and the preview
+   expands to take the rest of the row. The default state is
+   "expanded" with a 50/50 split (state.layoutSettings.previewW
+   is initialised from state.layoutSettings which we
+   recalculate below). */
+#logbar {
+  display: flex;
+  flex-direction: row;
+  flex: 0 0 var(--logbar-h);
+  height: var(--logbar-h);
+  min-height: var(--logbar-min);
+  max-height: var(--logbar-max);
+  border-top: 1px solid var(--border);
+  background: var(--bg-2);
+  overflow: hidden;
+}
+.logbar-pane {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  min-height: 0;
+  min-width: 0;
+}
+.logbar-log {
+  flex: 1 1 var(--log-w);
+  width: var(--log-w);
+  min-width: var(--log-min);
+  border-right: 0;  /* the splitter provides the visual separator */
+  min-width: 0;
+}
+/* When the user collapses the log (via the Collapse button or
+   the <details> summary), shrink the log pane to a small
+   header bar on the LEFT side of the row. The preview pane
+   expands to take the rest. The bar stays wide enough for the
+   four buttons to remain clickable. We use display:none on the
+   body via :not([open]) below — combined with the inline
+   style in the JS we keep the summary always visible. */
+#logbar.log-collapsed .logbar-log {
+  flex: 0 0 auto;
+  width: auto;
+  min-width: 0;
+}
+#logbar.log-collapsed .logbar-log details > #log,
+#logbar.log-collapsed .logbar-log details > .log-event-chev,
+#logbar.log-collapsed .logbar-log details > .log-event {
+  display: none !important;
+}
+#logbar.log-collapsed .logbar-log summary {
+  /* When collapsed, show only the buttons (no "Log" label, no
+     copy-all-text-of-the-collapsed-pane clutter). The "Log"
+     label disappears because we hide the first <span>. */
+}
+#logbar.log-collapsed .logbar-log summary > span:first-child {
+  display: none;
+}
+/* When collapsed, the splitter between log and preview also
+   collapses (no point dragging a splitter next to a 50px
+   header). */
+#logbar.log-collapsed #splitter-log-preview {
+  display: none;
+}
+.logbar-log details {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+}
+.logbar-log summary {
+  flex-shrink: 0;
+}
+/* Even though `.logbar-log details` computes as display:flex, the
+   Chromium that Electron ships does NOT actually size a <details>'s
+   flex children - #log (flex:1, min-height:0) grows to its full
+   content height instead of shrinking, so the overflowing rows are
+   clipped by the logbar's overflow:hidden and unreachable. This is
+   the long-standing "<details> can't be a real flex container" quirk;
+   the flex declarations below are kept as a best-effort for engines
+   that do honour them, but the height is pinned explicitly so
+   scrolling works regardless. --logbar-h is the single source of
+   truth for the logbar height (set on :root, updated live by the
+   splitter drag), so a calc() off it tracks every resize with no JS.
+   The subtracted 42px covers the summary (~31px) + the logbar's top
+   border + a small breathing gap so #log never exceeds the logbar
+   (which would re-clip it). #log is border-box, so its own padding
+   is already inside this height; the rows scroll within via
+   overflow-y:scroll. */
+.logbar-log #log {
+  flex: 1;
+  min-height: 0;
+  max-height: calc(var(--logbar-h, 280px) - 42px);
+}
+.logbar-preview {
+  /* Locked to the right edge: no border, no right margin, full
+     height. flex: 0 0 with explicit width means the pane keeps
+     its width no matter what the log pane does — and there is
+     always exactly zero empty space right of it. */
+  flex: 0 0 var(--preview-w);
+  width: var(--preview-w);
+  min-width: var(--preview-min);
+  /* When the log is collapsed, the preview expands to take all
+     the remaining width (the log pane has flex: 0 0 auto so it
+     shrinks to its content). */
+}
+#logbar.log-collapsed .logbar-preview {
+  flex: 1 1 auto;
+  width: auto;
+}
+#logbar summary {
+  padding: 5px 14px;
+  cursor: pointer;
+  user-select: none;
+  color: var(--fg-2);
+  font-size: 12px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+#logbar summary:hover { color: var(--fg); }
+.logbar-buttons { display: inline-flex; gap: 4px; }
+.logbar-buttons .btn-mini { padding: 1px 8px; font-size: 11px; }
+/* When the <details> is closed, show a hint that the log is collapsed —
+   keep a small footprint. */
+#logbar details:not([open]) > summary { padding: 4px 14px; }
+
+/* ========== Picture preview pane (right side of the log bar) ==========
+   Shows the asset the user clicked in the file browser. The image is
+   constrained to fit within the pane (object-fit: contain) so a giant
+   screenshot is shrunk to fit and a tiny icon stays at its natural
+   size — both rendered completely, no cropping. */
+.logbar-preview {
+  background: var(--bg);
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+.preview-pane-header {
+  padding: 4px 10px;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--fg-2);
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-2);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+.preview-pane-header .btn-mini { padding: 0 7px; font-size: 11px; line-height: 1.4; }
+.preview-pane-content {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  overflow: auto;
+  padding: 8px;
+  min-height: 0;
+  gap: 4px;
+  /* Hint to the browser that the preview pane's contents (images,
+     audio widget, video) can be painted in a separate compositor
+     layer. Resizing the tool window then doesn't have to re-paint
+     the image on every frame; only the pane's container layer is
+     re-painted. */
+  contain: layout style paint;
+  /* Same scrollbar style as the log pane so the
+     two panes match. */
+  scrollbar-width: thin;
+  scrollbar-color: var(--border-2) transparent;
+}
+.preview-pane-content::-webkit-scrollbar { width: 10px; }
+.preview-pane-content::-webkit-scrollbar-track { background: transparent; }
+.preview-pane-content::-webkit-scrollbar-thumb {
+  background: var(--border-2);
+  border-radius: 5px;
+}
+.preview-pane-content::-webkit-scrollbar-thumb:hover {
+  background: var(--fg-3);
+}
+.preview-pane-empty {
+  color: var(--fg-3);
+  font-style: italic;
+  text-align: center;
+  padding: 12px;
+  font-size: 12px;
+  line-height: 1.4;
+}
+.preview-pane-content img {
+  max-width: 100%;
+  max-height: calc(100% - 18px);
+  object-fit: contain;
+  display: block;
+  cursor: zoom-in;
+  background: var(--bg-3);
+  border-radius: var(--radius-sm);
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+/* Audio preview. The image preview uses <img> with
+   `object-fit: contain`; the audio preview mirrors that with a
+   centred card showing an icon + the filename + a primary Play
+   button. The audio element itself is hidden (driven by JS via
+   the Play/Stop button), so the user only sees the friendly card.
+   The whole card is centred in the pane and respects the pane
+   height. */
+.preview-pane-audio {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  flex: 1 1 auto;
+  min-height: 0;
+  padding: 12px;
+  text-align: center;
+}
+.preview-pane-audio-icon { font-size: 56px; line-height: 1; opacity: 0.85; }
+.preview-pane-audio-name {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--fg-2);
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  word-break: break-all;
+}
+.preview-pane-audio-btn {
+  font-size: 14px;
+  padding: 8px 22px;
+  min-width: 140px;
+  background: var(--primary, #d9a300);
+  color: var(--bg-1);
+  font-weight: 600;
+  border: none;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+}
+.preview-pane-audio-btn:hover { filter: brightness(1.08); }
+.preview-pane-audio-btn.playing {
+  background: var(--warn, #d9a300);
+}
+.preview-pane-audio-btn:disabled { opacity: 0.6; cursor: wait; }
+.preview-pane-audio-status {
+  font-size: 11px;
+  color: var(--fg-3);
+  min-height: 14px;
+}
+
+/* Video preview (thumb in the file-browser preview pane). Same
+   fit-aspect-ratio behaviour as the <img> in the image preview.
+   The cursor is "zoom-in" so the user knows the thumbnail is
+   clickable for the full-size overlay. */
+.preview-pane-video {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.preview-pane-video-el {
+  max-width: 100%;
+  max-height: 100%;
+  cursor: zoom-in;
+  background: var(--bg-3);
+  border-radius: var(--radius-sm);
+}
+
+/* Full-size video overlay. Reuses the same modal primitive as the
+   image overlay. The stage is the dark backdrop; the <video> fills
+   it and keeps aspect ratio; the Play button sits centred on top
+   of the video and hides itself once playback starts. Esc /
+   click-outside / Close button all close the modal cleanly. */
+.video-overlay {
+  width: min(92vw, 1100px);
+  max-height: 92vh;
+  display: flex;
+  flex-direction: column;
+}
+.video-overlay-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 8px 14px;
+  border-bottom: 1px solid var(--border);
+}
+.video-overlay-filename {
+  font-family: var(--font-mono);
+  font-size: 13px;
+  color: var(--fg-2);
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.video-overlay-stage {
+  position: relative;
+  flex: 1 1 auto;
+  min-height: 0;
+  background: var(--bg-3);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.video-overlay-el {
+  max-width: 100%;
+  max-height: 100%;
+  object-fit: contain;
+}
+.video-overlay-playbtn {
+  position: absolute;
+  top: 50%; left: 50%;
+  transform: translate(-50%, -50%);
+  font-size: 22px;
+  padding: 14px 28px;
+  background: rgba(0, 0, 0, 0.7);
+  color: #fff;
+  border: 2px solid rgba(255, 255, 255, 0.6);
+  border-radius: var(--radius);
+  cursor: pointer;
+  pointer-events: auto;
+  transition: opacity 120ms ease, transform 120ms ease;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+}
+.video-overlay-playbtn:hover { background: rgba(0, 0, 0, 0.85); transform: translate(-50%, -50%) scale(1.05); }
+.video-overlay-meta {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--fg-3);
+  padding: 6px 14px 10px;
+  border-top: 1px solid var(--border);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.preview-pane-filename {
+  font-size: 11px;
+  color: var(--fg-3);
+  font-family: var(--font-mono);
+  text-align: center;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  direction: ltr;
+  flex-shrink: 0;
+}
+.capability-note {
+  color: var(--warn);
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+/* ========== Multi-image preview (--n > 1, batch variants) ==========
+   When a single Generate click produces more than one image, we
+   divide the preview pane into N equal-width slots so the user can
+   see all of them at once. Each slot is a clickable thumbnail that
+   opens the same image overlay as the single-image case. The grid
+   wraps so very large N (e.g. 5×5=25) doesn't horizontally
+   overflow the pane. */
+.preview-pane-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(110px, 1fr));
+  gap: 6px;
+  width: 100%;
+  align-items: start;
+  justify-items: stretch;
+}
+.preview-pane-thumb {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  background: var(--bg-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  cursor: zoom-in;
+  overflow: hidden;
+  transition: border-color 0.1s, transform 0.1s;
+  min-width: 0;
+}
+.preview-pane-thumb:hover {
+  border-color: var(--accent);
+  transform: translateY(-1px);
+}
+/* The currently-active thumbnail in the multi-image preview pane.
+   Mirrors the .selected style on the folder-explorer's active row
+   so the user can see at a glance which image will be opened by a
+   click / Enter / arrow-key. Toggled by the thumbnail click handler
+   in previewImagesFromFiles and by the image-overlay's arrow keys. */
+.preview-pane-thumb.preview-active {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px var(--accent-3);
+}
+/* "Just generated" highlight on a preview-pane thumbnail. Set
+   by notifyImageGenerated() so the user can see at a glance
+   which thumbnail was just added. Same 1.5s duration as the
+   folder-explorer row blink, so the two stay in sync. */
+.preview-pane-thumb.preview-new {
+  animation: preview-thumb-blink 1.5s ease-out;
+}
+@keyframes preview-thumb-blink {
+  0%   { box-shadow: 0 0 0 3px var(--accent); }
+  60%  { box-shadow: 0 0 0 3px var(--accent); }
+  100% { box-shadow: 0 0 0 0 var(--accent); }
+}
+.preview-pane-thumb img {
+  /* The thumbnail is constrained to a square so the grid stays
+     uniform — a 1920×1080 landscape and a 1080×1920 portrait both
+     fill the slot without distorting the row height. object-fit
+     crops to the slot but the underlying image is preserved
+     (clicking opens the full-resolution overlay). */
+  width: 100%;
+  aspect-ratio: 1 / 1;
+  object-fit: cover;
+  display: block;
+  background: var(--bg-2);
+  max-height: none;
+  flex: 0 0 auto;
+  border-radius: 0;
+  cursor: zoom-in;
+}
+.preview-pane-thumb-caption {
+  font-size: 10px;
+  color: var(--fg-3);
+  font-family: var(--font-mono);
+  text-align: center;
+  padding: 3px 4px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  border-top: 1px solid var(--border);
+  background: var(--bg-2);
+}
+.preview-pane-summary {
+  font-size: 11px;
+  color: var(--fg-3);
+  text-align: center;
+  margin-top: 4px;
+  flex-shrink: 0;
+}
+
+/* ========== Image overlay (1:1 + zoom dropdown) ==========
+   Full-screen modal that opens when the user clicks a thumbnail. Shows
+   the image at its natural pixel size (1:1) by default, with a zoom
+   dropdown that scales to 75% / 50% / 25% / Fit-to-window. */
+.image-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.92);
+  z-index: 250;
+  display: flex;
+  flex-direction: column;
+}
+.image-overlay-header {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 8px 16px;
+  background: var(--bg-2);
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+}
+.image-overlay-filename {
+  flex: 1;
+  font-size: 12px;
+  color: var(--fg-2);
+  font-family: var(--font-mono);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* Position counter (e.g. " (3 / 12)") in the image overlay's
+   header. Shown when the overlay can navigate to other images
+   (multi-image batch or the current folder has > 1 image).
+   Subtle: small, monospace, fg-3 colour so it doesn't compete
+   with the filename. */
+.image-overlay-pos {
+  font-size: 11px;
+  color: var(--fg-3);
+  font-family: var(--font-mono);
+  flex-shrink: 0;
+}
+/* Prev / next arrow buttons in the image overlay header. Slightly
+   bigger padding than the regular .btn-mini so the arrow glyphs
+   are easy to click. */
+.image-overlay-prev,
+.image-overlay-next {
+  font-size: 18px;
+  line-height: 1;
+  padding: 0 10px;
+  flex-shrink: 0;
+  font-weight: 700;
+}
+.image-overlay-size {
+  font-size: 11px;
+  color: var(--fg-3);
+  font-family: var(--font-mono);
+  flex-shrink: 0;
+}
+.image-overlay-zoom {
+  width: auto;
+  padding: 4px 8px;
+  font-size: 12px;
+  flex-shrink: 0;
+}
+.image-overlay-close {
+  font-size: 22px;
+  padding: 0 14px;
+  line-height: 1;
+  flex-shrink: 0;
+}
+.image-overlay-content {
+  flex: 1;
+  overflow: auto;
+  display: flex;
+  /* H10-2.3: `safe center` centres the image when it fits, but falls back to
+     flex-start when it overflows — so the top/left edges of a 100%-zoomed
+     image larger than the viewport stay reachable by scrolling. (Chromium
+     supports the `safe` keyword, which is what this Electron renderer uses.) */
+  align-items: safe center;
+  justify-content: safe center;
+  padding: 16px;
+  min-height: 0;
+}
+.image-overlay-img {
+  display: block;
+  image-rendering: auto;
+  /* H10-9: checkerboard background shows through transparent PNG pixels so the
+     app UI no longer bleeds through the 0.92-opacity overlay backdrop. An
+     <img> element paints its background behind its rendered content, so this
+     sits directly under the image's transparent areas. */
+  background-color: #000;
+  background-image:
+    linear-gradient(45deg, #2a2a30 25%, transparent 25%),
+    linear-gradient(-45deg, #2a2a30 25%, transparent 25%),
+    linear-gradient(45deg, transparent 75%, #2a2a30 75%),
+    linear-gradient(-45deg, transparent 75%, #2a2a30 75%);
+  background-size: 16px 16px;
+  background-position: 0 0, 0 8px, 8px -8px, -8px 0px;
+}
+.image-overlay-img.zoom-100 {
+  width: auto;
+  height: auto;
+  max-width: none;
+  max-height: none;
+  image-rendering: pixelated;
+}
+/* Issue-1: zoom levels ABOVE 100% — CSS `zoom` scales the image's
+   natural size (width/height attributes set by the viewer) and affects
+   layout, so .image-overlay-content grows scrollbars. `pixelated`
+   rendering keeps single pixels crisp for edge inspection (remove-bg
+   clean-edge check). */
+.image-overlay-img.zoom-125 { zoom: 1.25; image-rendering: pixelated; }
+.image-overlay-img.zoom-150 { zoom: 1.5; image-rendering: pixelated; }
+.image-overlay-img.zoom-175 { zoom: 1.75; image-rendering: pixelated; }
+.image-overlay-img.zoom-200 { zoom: 2; image-rendering: pixelated; }
+.image-overlay-img.zoom-75 { width: 75%; height: auto; }
+.image-overlay-img.zoom-50 { width: 50%; height: auto; }
+.image-overlay-img.zoom-25 { width: 25%; height: auto; }
+.image-overlay-img.zoom-fit {
+  max-width: 100%;
+  max-height: 100%;
+  object-fit: contain;
+  width: auto;
+  height: auto;
+  image-rendering: auto;
+}
+
+/* ========== Crop overlay ========== */
+.crop-dim-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 12px;
+  flex-wrap: wrap;
+}
+.crop-dim-row label { font-size: 12px; color: var(--fg-2); }
+.crop-dim-row input[type="number"] { width: 90px; }
+/* "auto-size" checkbox in the crop overlay. Sits at the start of the
+   crop-dim-row, before Width/Height/Apply. Wrapped in a label so
+   clicking the text toggles the checkbox too. */
+.crop-dim-row .auto-size-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  margin-right: 10px;
+  cursor: pointer;
+  user-select: none;
+  font-size: 12px;
+  color: var(--fg-2);
+}
+.crop-dim-row .auto-size-cb {
+  margin: 0;
+  cursor: pointer;
+}
+
+/* "auto-crop" checkbox in the upscale dialog. Sits between the
+   multiplier selector and the W/H inputs (which are revealed by
+   the checkbox). Reuses the crop overlay's label/cb styling. */
+.auto-crop-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  cursor: pointer;
+  user-select: none;
+  font-size: 13px;
+  color: var(--fg);
+}
+.auto-crop-cb {
+  margin: 0;
+  cursor: pointer;
+}
+
+/* 3×3 anchor grid for the auto-crop "phone-dial" anchor
+   selector. Nine equally-sized cells, the center one (idx 4) is
+   the default and uses an accent-coloured background; corner cells
+   use directional arrows so the user can see at a glance which
+   side the crop frame will be pushed to. */
+.anchor-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 40px);
+  grid-template-rows: repeat(3, 40px);
+  gap: 4px;
+  justify-content: center;
+  margin: 12px auto;
+  padding: 10px;
+  background: var(--bg-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+.anchor-cell {
+  width: 40px;
+  height: 40px;
+  background: var(--bg-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 18px;
+  color: var(--fg-2);
+  transition: background 0.1s, border-color 0.1s, color 0.1s;
+}
+.anchor-cell:hover {
+  background: var(--bg-4);
+  border-color: var(--border-2);
+}
+.anchor-cell.selected {
+  background: var(--accent);
+  color: #fff;
+  border-color: var(--accent-2);
+}
+
+/* ========== Image-dim guards (aspect ratio + div-by-8) ==========
+   Shown below the W × H row in the image tab when the user
+   types a value that doesn't fit the chosen aspect ratio or
+   isn't a multiple of 8 (which mmx rejects with a cryptic
+   400). The warning has a "Correct" button that auto-fills
+   the offending field. */
+.image-dim-warning {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  background: rgba(248, 196, 122, 0.12);
+  border: 1px solid var(--warn);
+  color: var(--warn);
+  border-radius: var(--radius);
+  padding: 6px 10px;
+  font-size: 12px;
+  margin-top: 4px;
+}
+.image-dim-warning .correct-btn {
+  background: var(--warn);
+  border-color: var(--warn);
+  color: #1a1a1f;
+  font-weight: 600;
+  padding: 2px 8px;
+  font-size: 12px;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+}
+.image-dim-warning .correct-btn:hover {
+  background: #f8c47a;
+  border-color: #f8c47a;
+}
+
+/* Subject-ref "path or URL" validity warning. Same style as the
+   dim-warning but for a different field, so the user can spot
+   the source at a glance. */
+.subject-ref-warning {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  background: rgba(248, 196, 122, 0.12);
+  border: 1px solid var(--warn);
+  color: var(--warn);
+  border-radius: var(--radius);
+  padding: 6px 10px;
+  font-size: 12px;
+  margin-top: 4px;
+}
+
+/* ========== Upscale-dialog crop preview ==========
+   A blank "image" with a green crop frame overlay that updates
+   whenever the user picks a different anchor in the 3×3 grid.
+   The whole stage is a fixed size (200×150) so the layout is
+   predictable; the frame is computed from the chosen anchor and
+   the current W × H settings. */
+.crop-preview {
+  background: var(--bg-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 10px;
+  margin: 8px 0 4px;
+  text-align: center;
+}
+.crop-preview-stage {
+  position: relative;
+  /* H10-3.1: dimensions are now set inline by JS to match the source's aspect
+     ratio (square source → square stage, etc.). These are just sensible
+     fallbacks for the rare case JS hasn't run yet. */
+  width: 200px;
+  height: 150px;
+  margin: 0 auto 6px;
+  background: linear-gradient(135deg, #4a4a52 0%, #2a2a30 100%);
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+}
+.crop-preview-image {
+  /* The "blank image" — a subtle gradient with corner marks so
+     the user can see the four corners of the source. */
+  position: absolute;
+  inset: 0;
+  background:
+    linear-gradient(135deg, transparent 49%, rgba(255,255,255,0.15) 49%, rgba(255,255,255,0.15) 51%, transparent 51%),
+    linear-gradient(45deg, transparent 49%, rgba(255,255,255,0.15) 49%, rgba(255,255,255,0.15) 51%, transparent 51%);
+}
+.crop-preview-image::before,
+.crop-preview-image::after {
+  content: "";
+  position: absolute;
+  background: rgba(255, 255, 255, 0.25);
+  width: 10px;
+  height: 1px;
+  top: 50%;
+}
+.crop-preview-image::before { left: 0; }
+.crop-preview-image::after  { right: 0; }
+.crop-preview-frame {
+  position: absolute;
+  border: 2px solid #4ec98b;
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.4);
+  transition: left 0.15s, top 0.15s, width 0.15s, height 0.15s;
+}
+.crop-preview-legend {
+  font-size: 11px;
+  color: var(--fg-2);
+  font-family: var(--font-mono);
+}
+.crop-preview-anchor-name {
+  color: var(--fg);
+  font-weight: 600;
+}
+
+/* Help text for the cropping section in the upscale dialog. */
+.crop-explanation {
+  font-size: 12px;
+  color: var(--fg-2);
+  line-height: 1.5;
+  background: var(--bg-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 8px 10px;
+  margin: 6px 0;
+}
+.crop-explanation code {
+  font-family: var(--font-mono);
+  background: var(--bg-3);
+  padding: 0 4px;
+  border-radius: 3px;
+  font-size: 11px;
+}
+
+/* "Image ready" placeholder shown in the per-tab preview after
+   we removed the in-tab thumbnail (the actual image is now in
+   the right-side folder-explorer's preview pane). */
+.preview-ready-msg {
+  text-align: center;
+  color: var(--fg-2);
+  padding: 20px 10px;
+  font-size: 13px;
+}
+.preview-ready-msg strong {
+  color: var(--fg);
+}
+/* Actions row under the preview-ready message. Holds the
+   "Regenerate" button (and any future post-success actions).
+   Centered, with the same breathing room as the message above. */
+.preview-ready-actions {
+  display: flex;
+  justify-content: center;
+  gap: 8px;
+  margin-top: 6px;
+}
+.preview-regen-btn {
+  font-size: 12px;
+  padding: 4px 12px;
+}
+
+/* File-info block at the top of the right-click context menu.
+   Shows type / size / modified / (for images) dimensions in a
+   compact two-column grid. The Dimensions cell starts with
+   "detecting…" and is filled in once loadImageFromFile resolves. */
+.fb-item-info {
+  background: var(--bg-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 8px 12px;
+  margin-bottom: 12px;
+  font-size: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.fb-info-row {
+  display: grid;
+  grid-template-columns: 84px 1fr;
+  gap: 8px;
+  align-items: baseline;
+}
+.fb-info-key {
+  color: var(--fg-3);
+  font-weight: 500;
+  text-transform: uppercase;
+  font-size: 10px;
+  letter-spacing: 0.4px;
+}
+.fb-info-dim {
+  color: var(--fg-2);
+  font-family: var(--font-mono);
+  font-size: 12px;
+}
+.crop-stage {
+  position: relative;
+  display: inline-block;
+  max-width: 100%;
+  max-height: 60vh;
+  overflow: auto;
+  background: var(--bg-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 4px;
+}
+.crop-image { display: block; max-width: none; image-rendering: auto; }
+.crop-frame {
+  position: absolute;
+  border: 2px solid #4ec98b;
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.4);
+  cursor: move;
+  pointer-events: auto;
+}
+.crop-frame::before {
+  /* Faint inner highlight so the frame reads as "selectable" against
+     bright or busy images. */
+  content: "";
+  position: absolute;
+  inset: -1px;
+  border: 1px solid rgba(255, 255, 255, 0.35);
+  pointer-events: none;
+}
+
+/* ========== Upscale checkbox in the image tab action bar ========== */
+.upscale-checkbox {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 12px;
+  color: var(--fg-2);
+  cursor: pointer;
+  user-select: none;
+  padding: 4px 8px;
+  border: 1px solid var(--border-2);
+  border-radius: var(--radius-sm);
+  background: var(--bg);
+}
+.upscale-checkbox input { margin: 0; cursor: pointer; }
+.upscale-checkbox:hover { background: var(--bg-3); }
+.upscale-checkbox.active {
+  background: var(--accent-3);
+  border-color: var(--accent);
+  color: #fff;
+}
+.upscale-checkbox .upscale-mult {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  opacity: 0.85;
+}
+#log {
+  margin: 0; padding: 6px 14px 12px;
+  /* The pane is allowed to grow to fill the available logbar height
+     (the .logbar-log #log override below sets max-height: none), with
+     an explicit scrollbar so it's obvious there's more content to
+     scroll to. The thumb is tinted in the accent color so it stands
+     out against the dark logbar background. */
+  max-height: 100%;
+  flex: 1;
+  min-height: 120px;
+  /* On Windows + Electron the native overlay scrollbar is invisible
+     by default. Use `overflow-y: scroll` (not auto) so the scrollbar
+     is always shown - the user can see at a glance that there's more
+     content to scroll to, even when the log is short. Combined with
+     the visible `::-webkit-scrollbar` rule below, the scrollbar is
+     always usable. */
+  overflow-y: scroll;
+  overflow-x: hidden;
+  scrollbar-width: thin;
+  scrollbar-color: var(--accent) transparent;
+  font-family: var(--font-mono); font-size: 12px;
+  color: var(--fg-2); white-space: pre-wrap;
+}
+/* Webkit (Electron) scrollbar styling. The standard scrollbar-width
+   declaration above is for Firefox; Chromium needs the explicit
+   pseudo-elements. 14px + brighter thumb + a visible track so the
+   scrollbar is always obvious on a 4K display. */
+#log::-webkit-scrollbar { width: 14px; }
+#log::-webkit-scrollbar-track { background: rgba(255, 255, 255, 0.04); }
+#log::-webkit-scrollbar-thumb {
+  background: var(--accent);
+  border-radius: 7px;
+  border: 2px solid var(--bg-2);
+}
+#log::-webkit-scrollbar-thumb:hover { background: var(--accent-2); }
+.log-pane::-webkit-scrollbar { width: 14px; }
+.log-pane::-webkit-scrollbar-track { background: rgba(255, 255, 255, 0.04); }
+.log-pane::-webkit-scrollbar-thumb {
+  background: var(--accent);
+  border-radius: 7px;
+  border: 2px solid var(--bg-2);
+}
+.log-pane::-webkit-scrollbar-thumb:hover { background: var(--accent-2); }
+/* ========== Structured event log ==========
+   Each event is a single row in the .log-pane. The row is a
+   CSS grid with explicit columns so the time stamp, category
+   icon, result icon, headline, and chevron always line up
+   (no matter the headline length). Multi-select state is
+   applied via .selected; expand state via .expanded. */
+.log-pane {
+  display: flex;
+  flex-direction: column-reverse;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--fg-2);
+  white-space: normal;       /* per-row overflow is handled in the row */
+  /* The whole pane is selectable so standard click-drag highlight +
+     Ctrl+C works on any row text, including the expanded detail lines
+     (file paths, error JSON). The interactive controls (chevron /
+     cancel button) opt back OUT below so a drag that ends on a button
+     doesn't select its glyph, and the click-to-expand handler bails
+     when the user actually selected text (see setupLogClicks). */
+  user-select: text;
+  -webkit-user-select: text;
+  cursor: text;
+  /* overflow-y: scroll (not auto) makes the scrollbar always visible
+     so the user can see when more entries are available even when the
+     log is short. Windows + Electron default to overlay-invisible
+     scrollbars. */
+  overflow-y: scroll;
+  overflow-x: hidden;
+  /* flex-direction: column-reverse keeps the newest entry at the top
+     visually (the LAST appended child sits at the TOP), with overflow
+     anchored to the bottom = scrollTop=0 in the reversed layout, where
+     the newest row sits. */
+  /* Visible-but-subtle scrollbar so the user can see when more entries
+     are available even when the log is short. The native Chromium
+     scrollbar is invisible by default in dark mode without this. */
+  scrollbar-width: thin;
+  scrollbar-color: var(--border-2) transparent;
+}
+.log-pane::-webkit-scrollbar {
+  width: 10px;
+}
+.log-pane::-webkit-scrollbar-track {
+  background: transparent;
+}
+.log-pane::-webkit-scrollbar-thumb {
+  background: var(--border-2);
+  border-radius: 5px;
+}
+.log-pane::-webkit-scrollbar-thumb:hover {
+  background: var(--fg-3);
+}
+.log-pane .log-event {
+  display: grid;
+  /* Columns: timestamp | type icon | headline (fills) | progress |
+     wip-dots | cancel | chev. The headline is the only flexible
+     column; the rest are fixed-width so the grid lines up across
+     every row regardless of headline length. */
+  grid-template-columns: 72px 18px 1fr 48px 24px 18px 18px;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 4px;
+  border-left: 2px solid transparent;
+  border-radius: 2px;
+  cursor: default;
+}
+.log-pane .log-event:hover { background: var(--bg-3); }
+/* Interactive controls opt back OUT of text selection so a drag that ends
+   on the chevron / cancel button doesn't select its glyph, and they keep
+   the pointer cursor instead of the I-beam the selectable pane now uses. */
+.log-pane .log-event-chev,
+.log-pane .log-cancel-btn,
+.log-pane .log-wip-dots,
+.log-pane .log-type-icon { user-select: none; -webkit-user-select: none; cursor: pointer; }
+.log-pane .log-event.selected {
+  background: var(--accent-3);
+  color: #fff;
+  border-left-color: var(--accent);
+}
+.log-pane .log-event.selected .log-event-ts,
+.log-pane .log-event.selected .log-event-cat,
+.log-pane .log-event.selected .log-event-res { color: #fff; }
+.log-pane .log-event-ts {
+  color: var(--fg-3);
+  font-size: 10.5px;
+  font-variant-numeric: tabular-nums;
+  user-select: text;
+  -webkit-user-select: text;
+}
+.log-pane .log-event-cat {
+  color: var(--fg-2);
+  font-weight: 700;
+  text-align: center;
+  font-size: 13px;
+  line-height: 1;
+}
+.log-pane .log-event-res {
+  text-align: center;
+  font-weight: 700;
+  font-size: 13px;
+  line-height: 1;
+}
+.log-pane .log-event-res.ok  { color: var(--success); }
+.log-pane .log-event-res.err { color: var(--danger);  }
+.log-pane .log-event-res.none { color: transparent; }
+/* The entire log row is tinted by the result so the user can scan
+   the log at a glance and see which lines were successful (green)
+   vs failed (red). The success / danger / info tints are subtle
+   (the headline stays the main colour, only a thin left-bar + a
+   soft row tint changes) so the log still reads as a normal log
+   but failures are spottable without scanning every icon. The
+   category colour (gen / upscale / bg / optimize / batch / error /
+   cancel) takes precedence on the left border when the row is NOT
+   marked as success / failure (so plain "info" rows still get the
+   category colour). */
+/* The result rules need higher specificity than the .log-group-N
+   rules further down. With the same specificity (0,0,3,0), the
+   later rule wins - so the group-0 red tint would paint over the
+   result green. Use higher-specificity selectors here
+   (`.log-event.log-result-ok.log-group-N`) so the result always
+   wins, regardless of declaration order. The combined selector
+   `result.group-N` has specificity 0,0,4,0 vs the standalone
+   group rule's 0,0,3,0. */
+.log-pane .log-event.log-result-ok,
+.log-pane .log-event.log-result-ok.log-group-0,
+.log-pane .log-event.log-result-ok.log-group-1,
+.log-pane .log-event.log-result-ok.log-group-2,
+.log-pane .log-event.log-result-ok.log-group-3,
+.log-pane .log-event.log-result-ok.log-group-4,
+.log-pane .log-event.log-result-ok.log-group-5,
+.log-pane .log-event.log-result-ok.log-group-6,
+.log-pane .log-event.log-result-ok.log-group-7,
+.log-pane .log-event.log-result-ok.log-group-8,
+.log-pane .log-event.log-result-ok.log-group-9,
+.log-pane .log-event.log-result-ok.log-group-10,
+.log-pane .log-event.log-result-ok.log-group-11 {
+  /* Soft success tint on the row background, plus a
+     green left border that's bolder than the
+     category-tint border. The headline stays the
+     regular fg colour so the text reads normally. */
+  background: rgba(110, 224, 168, 0.12);
+  border-left-color: var(--success);
+  border-left-width: 3px;
+}
+.log-pane .log-event.log-result-ok .log-event-headline,
+.log-pane .log-event.log-result-ok.log-group-0 .log-event-headline,
+.log-pane .log-event.log-result-ok.log-group-1 .log-event-headline,
+.log-pane .log-event.log-result-ok.log-group-2 .log-event-headline,
+.log-pane .log-event.log-result-ok.log-group-3 .log-event-headline,
+.log-pane .log-event.log-result-ok.log-group-4 .log-event-headline,
+.log-pane .log-event.log-result-ok.log-group-5 .log-event-headline,
+.log-pane .log-event.log-result-ok.log-group-6 .log-event-headline,
+.log-pane .log-event.log-result-ok.log-group-7 .log-event-headline,
+.log-pane .log-event.log-result-ok.log-group-8 .log-event-headline,
+.log-pane .log-event.log-result-ok.log-group-9 .log-event-headline,
+.log-pane .log-event.log-result-ok.log-group-10 .log-event-headline,
+.log-pane .log-event.log-result-ok.log-group-11 .log-event-headline {
+  color: var(--success);
+  font-weight: 500;
+}
+.log-pane .log-event.log-result-err,
+.log-pane .log-event.log-result-err.log-group-0,
+.log-pane .log-event.log-result-err.log-group-1,
+.log-pane .log-event.log-result-err.log-group-2,
+.log-pane .log-event.log-result-err.log-group-3,
+.log-pane .log-event.log-result-err.log-group-4,
+.log-pane .log-event.log-result-err.log-group-5,
+.log-pane .log-event.log-result-err.log-group-6,
+.log-pane .log-event.log-result-err.log-group-7,
+.log-pane .log-event.log-result-err.log-group-8,
+.log-pane .log-event.log-result-err.log-group-9,
+.log-pane .log-event.log-result-err.log-group-10,
+.log-pane .log-event.log-result-err.log-group-11 {
+  background: rgba(255, 138, 138, 0.14);
+  border-left-color: var(--danger);
+  border-left-width: 3px;
+}
+.log-pane .log-event.log-result-err .log-event-headline {
+  color: var(--danger);
+  font-weight: 500;
+}
+.log-pane .log-event-headline {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  user-select: text;
+  -webkit-user-select: text;
+  color: var(--fg);
+}
+.log-pane .log-event-chev {
+  background: transparent;
+  border: 0;
+  padding: 0;
+  width: 16px;
+  height: 16px;
+  line-height: 1;
+  color: var(--fg-3);
+  cursor: pointer;
+  font-size: 10px;
+  text-align: center;
+}
+.log-pane .log-event-chev:hover { color: var(--fg); background: var(--bg-4); border-radius: 2px; }
+.log-pane .log-event-chev-empty { visibility: hidden; cursor: default; }
+.log-pane .log-event-details {
+  /* The details block is rendered as a child of the row but
+     positioned via grid-column: 1 / -1 so it spans the full
+     row width. The headline / icons stay visible above it
+     when the row is expanded. */
+  grid-column: 1 / -1;
+  padding: 4px 0 6px 96px;
+  background: var(--bg-2);
+  border-top: 1px solid var(--border);
+  margin-top: 4px;
+  font-size: 11.5px;
+  color: var(--fg-2);
+  white-space: pre-wrap;
+  word-break: break-word;
+  user-select: text;
+  -webkit-user-select: text;
+}
+.log-pane .log-event-detail-line { padding: 1px 0; }
+.log-pane .log-event-detail-raw {
+  font-style: italic;
+  color: var(--fg-3);
+  border-left: 2px solid var(--border-2);
+  padding-left: 8px;
+  margin-top: 4px;
+}
+/* Category-specific tints. Subtle: a 2px left border in the
+   category colour, applied to the .log-event's left edge.
+   The "selected" class above still wins (accent border on
+   the left), so the category tint shows up only when the
+   row is NOT selected. */
+.log-pane .log-event[data-log-cat="gen"]      { border-left-color: var(--accent-2); }
+.log-pane .log-event[data-log-cat="upscale"]  { border-left-color: var(--accent-3); }
+.log-pane .log-event[data-log-cat="bg"]       { border-left-color: var(--warn); }
+.log-pane .log-event[data-log-cat="optimize"] { border-left-color: var(--success); }
+.log-pane .log-event[data-log-cat="batch"]    { border-left-color: var(--accent); }
+.log-pane .log-event[data-log-cat="error"]    { border-left-color: var(--danger); }
+.log-pane .log-event[data-log-cat="cancel"]   { border-left-color: var(--fg-3); }
+.log-pane .log-event.selected { border-left-color: var(--accent) !important; }
+
+/* The per-group 12-hue colour tints are intentionally not styled
+   here. Each generation run cycled through 12 background/border
+   hues, so a long session's log rendered as confetti stripes - the
+   opposite of the legible result/state colour coding the user
+   actually wants. The `log-group-N` class is still applied by
+   LogService (data-log-group is read elsewhere) but carries no
+   colour. */
+
+/* ========== Startup modal ========== */
+.startup-modal { width: min(560px, 92vw); }
+/* Issue 0: logo shown at the top of the welcome window. */
+.startup-modal .startup-logo {
+  display: block;
+  width: min(192px, 100%);
+  height: auto;
+  margin: 0 auto 12px;
+  border-radius: var(--radius);
+  user-select: none;
+  -webkit-user-drag: none;
+}
+.startup-modal .startup-title {
+  width: 100%;
+  text-align: center;
+}
+.startup-modal .startup-version-wrapper {
+  display: flex;
+  justify-content: center;
+  width: 100%;
+  margin-bottom: 10px;
+}
+.startup-modal .startup-version {
+  display: inline-block;
+  margin: 0;
+  padding: 3px 8px;
+  background: var(--bg-3);
+  border: 1px solid var(--border-2);
+  border-radius: var(--radius-sm);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--fg);
+}
+.startup-modal .startup-info {
+  color: var(--fg-2);
+  line-height: 1.55;
+  margin: 0 0 14px;
+}
+
+/* ========== Style manager (modal) ========== */
+.style-list { list-style: none; margin: 0; padding: 0; max-height: 50vh; overflow: auto; border: 1px solid var(--border); border-radius: var(--radius); }
+.style-list li { display: grid; grid-template-columns: 1fr auto; gap: 8px; padding: 8px 12px; border-bottom: 1px solid var(--border); }
+.style-list li:last-child { border-bottom: none; }
+.style-list li:hover { background: var(--bg-3); }
+.style-list .sname { font-weight: 600; color: var(--fg); }
+.style-list .sval { color: var(--fg-2); font-size: 12px; word-break: break-word; margin-top: 2px; }
+.style-list .sactions { display: flex; gap: 4px; align-items: flex-start; }
+.style-list .empty-row { color: var(--fg-2); font-style: italic; padding: 18px; text-align: center; }
+
+/* ========== BatchGen modal ========== */
+.batch-list { display: flex; flex-direction: column; gap: 6px; max-height: 50vh; overflow: auto; padding: 4px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--bg-2); }
+.batch-row { display: grid; grid-template-columns: 30px 1fr auto auto auto; gap: 4px; align-items: stretch; }
+.batch-row textarea { min-height: 32px; max-height: 80px; font-size: 12px; }
+.batch-num {
+  display: flex; align-items: center; justify-content: center;
+  background: var(--bg-3); color: var(--fg-2);
+  border-radius: var(--radius-sm); font-size: 12px; font-variant-numeric: tabular-nums;
+  font-weight: 600;
+}
+.batch-empty { color: var(--fg-2); font-style: italic; padding: 16px; text-align: center; }
+/* Per-entry wrapper: the prompt row + an optional params editor +
+   defective-reason line, stacked. */
+.batch-entry { display: flex; flex-direction: column; gap: 3px; padding: 4px; border-radius: var(--radius-sm); }
+.batch-entry .batch-params-input {
+  font-family: var(--font-mono); font-size: 11px;
+  padding: 3px 6px; margin-left: 34px; /* align under the textarea, past the number cell */
+}
+.batch-defective-reasons {
+  margin-left: 34px; color: var(--danger); font-size: 11.5px; line-height: 1.35;
+}
+.batch-defective-reasons:empty { display: none; }
+/* A defective entry is tinted + edged red so it stands out in the list. */
+.batch-entry-defective {
+  background: rgba(255, 138, 138, 0.07);
+  outline: 1px solid var(--danger);
+}
+.batch-entry-defective .batch-num { background: var(--danger); color: #fff; }
+
+/* ========== BatchGen overlay ========== */
+/* BatchGen "All Types" dashboard modal. Shown when the user
+   clicks the pen icon next to the BatchGen All Types button. The
+   modal shows: active batch + per-tab queued items + per-tab
+   settings. Wide enough for 4 tab cards side-by-side on a normal
+   screen; max-height caps so it never overflows the viewport. */
+.batch-dashboard-modal { width: min(94vw, 1180px); max-height: 90vh; display: flex; flex-direction: column; }
+.batch-dashboard-header {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 10px 14px; border-bottom: 1px solid var(--border);
+}
+.batch-dashboard-body {
+  flex: 1 1 auto; min-height: 0; overflow-y: auto;
+  padding: 10px 14px;
+}
+.batch-dashboard-section { margin-bottom: 14px; }
+.batch-dashboard-section h3 {
+  margin: 0 0 8px; font-size: 12px;
+  color: var(--fg-2); font-weight: 700; letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+.batch-dashboard-list {
+  list-style: none; margin: 0; padding: 0;
+  background: var(--bg-3); border-radius: var(--radius-sm);
+  padding: 8px 12px;
+}
+.batch-dashboard-list li { padding: 2px 0; color: var(--fg-2); }
+.batch-dashboard-list li strong { color: var(--fg); }
+.batch-dashboard-empty {
+  margin: 0; padding: 10px 12px;
+  background: var(--bg-3); border-radius: var(--radius-sm);
+  color: var(--fg-3); font-size: 12px;
+}
+.batch-dashboard-grand-total {
+  margin-top: 6px; padding: 6px 12px;
+  background: var(--bg-2); border: 1px solid var(--border);
+  border-radius: var(--radius-sm); font-size: 13px;
+  color: var(--fg);
+  font-variant-numeric: tabular-nums;
+}
+.batch-dashboard-cards {
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 10px;
+}
+.batch-dashboard-card {
+  background: var(--bg-3); border: 1px solid var(--border);
+  border-radius: var(--radius-sm); padding: 10px 12px;
+}
+.batch-dashboard-card-header {
+  display: flex; align-items: baseline; gap: 6px;
+  margin-bottom: 6px; font-size: 13px;
+  color: var(--fg);
+}
+.batch-dashboard-card-header strong { color: var(--accent-2); }
+.batch-dashboard-count {
+  color: var(--fg-3); font-size: 12px; font-family: var(--font-mono);
+}
+.batch-dashboard-settings {
+  font-size: 11px; color: var(--fg-2);
+  background: var(--bg-2); border-radius: 4px;
+  padding: 6px 8px; margin: 6px 0 8px;
+  border-left: 2px solid var(--accent-3);
+}
+.batch-dashboard-settings div { padding: 1px 0; word-break: break-word; }
+.batch-dashboard-items {
+  list-style: none; margin: 0; padding: 0;
+  max-height: 220px; overflow-y: auto;
+  background: var(--bg-2); border-radius: 4px; padding: 4px 8px;
+  font-family: var(--font-mono); font-size: 11.5px;
+}
+.batch-dashboard-item {
+  display: flex; align-items: baseline; gap: 6px;
+  padding: 2px 0; color: var(--fg);
+}
+.batch-dashboard-item-done {
+  color: var(--fg-3); text-decoration: line-through; opacity: 0.65;
+}
+.batch-dashboard-item-num { color: var(--fg-3); flex: 0 0 auto; }
+.batch-dashboard-item-text { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.batch-dashboard-item-params { color: var(--accent); flex: 0 0 auto; }
+.batch-dashboard-item-actions {
+  flex: 0 0 auto;
+  margin-left: 6px;
+  display: inline-flex;
+  gap: 4px;
+}
+.batch-dashboard-item-actions .btn-mini {
+  padding: 0 6px;
+  font-size: 11px;
+  line-height: 1.4;
+}
+
+/* Settings pane group titles that split a single tab into logical
+   sections (e.g. "Example export" + "Queue cleanup" inside the
+   BatchGen tab). Sits above each section's content, with the
+   help-button + caption row right below it. */
+.settings-group-title {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--fg-2);
+  margin: 14px 0 0;
+  padding: 0 0 4px;
+  border-bottom: 1px solid var(--border);
+}
+.settings-group-title:first-of-type { margin-top: 0; }
+/* Per-pane checkbox rows with an explanation inline (the API-key
+   "Don't save" row + the BatchGen "Auto-remove" row share this
+   layout). */
+.row.batches-auto-remove-row label {
+  display: inline-flex;
+  align-items: flex-start;
+  gap: 6px;
+  font-size: 11.5px;
+  color: var(--fg-2);
+  cursor: pointer;
+  font-weight: 500;
+}
+.row.batches-auto-remove-row input[type="checkbox"] {
+  margin: 1px 0 0 0;
+  cursor: pointer;
+  accent-color: var(--accent, #d9a300);
+}
+.row.batches-auto-remove-row label strong { color: var(--fg); }
+.batch-dashboard-footer {
+  margin-top: 10px; padding-top: 8px; border-top: 1px solid var(--border);
+  color: var(--fg-2); font-size: 12px;
+}
+
+.batch-overlay {
+  position: relative;
+  background: var(--bg-2);
+  border: 1px solid var(--accent);
+  border-radius: var(--radius);
+  padding: 14px;
+  display: flex; flex-direction: column; gap: 8px;
+  margin: 6px 0;
+}
+.batch-overlay-title { font-weight: 700; font-size: 14px; color: var(--fg); }
+.batch-overlay-counter {
+  font-family: var(--font-mono);
+  font-size: 22px; font-weight: 700; color: var(--accent);
+  font-variant-numeric: tabular-nums;
+}
+.batch-overlay-prompt {
+  background: var(--bg-2); border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 6px 8px; font-size: 12px;
+  color: var(--fg); max-height: 60px; overflow: auto;
+  font-family: var(--font-mono);
+}
+.batch-overlay-elapsed { color: var(--fg-2); font-size: 12px; font-family: var(--font-mono); }
+.batch-overlay-log {
+  max-height: 140px; overflow: auto;
+  background: var(--bg-2); border: 1px solid var(--border);
+  border-radius: var(--radius-sm); padding: 6px 8px;
+  font-family: var(--font-mono); font-size: 11px;
+}
+.batch-log-line { padding: 1px 0; color: var(--fg-2); }
+.batch-log-line.ok { color: var(--success); }
+.batch-log-line.err { color: var(--danger); }
+.batch-log-line.warn { color: var(--warn); }
+
+/* ========== Tooltips (data-help) ==========
+   Bigger, more readable, Windows-style.
+
+   The old implementation was a pure-CSS ::after pseudo-element
+   positioned `absolute` next to the icon. The tooltip was
+   contained by the icon's nearest positioned ancestor — which,
+   for the parameter rows in the left-side generation panels,
+   sits inside the scrollable #content (overflow: auto). A long
+   tooltip for e.g. --width (max-width: 460px) extended past the
+   right edge of the content panel and was clipped by its
+   overflow:auto, leaving the meaningful text invisible behind
+   the folder-explorer area.
+
+   The new implementation is a single fixed-positioned tooltip
+   element (`.help-hover-tooltip`) created and managed by
+   setupHoverHelpTooltips() in app.js. The tooltip is positioned
+   with `position: fixed` so it is NEVER clipped by any parent
+   container, and the JS re-positions it on scroll/resize so it
+   always tracks the hovered icon. */
+[data-help] { position: relative; }
+.help-hover-tooltip {
+  position: fixed;
+  z-index: 350;
+  background: var(--bg-2);
+  color: var(--fg);
+  border: 1px solid var(--border-2);
+  border-left: 3px solid var(--accent);
+  border-radius: var(--radius-sm);
+  padding: 10px 14px;
+  font-size: 13px;
+  line-height: 1.55;
+  white-space: pre-wrap;
+  width: max-content;
+  min-width: 240px;
+  max-width: min(460px, calc(100vw - 24px));
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.45);
+  pointer-events: none;
+  font-weight: 400;
+}
+
+/* ========== File-browser right-click context menu ==========
+   The right-click modal has a 2-column body. The left column holds
+   the action list (Open / Preview, Open in Explorer, image pipeline,
+   file ops). The right column holds an image preview (when the file
+   is an image) or a small "no preview" placeholder. */
+.fb-context-menu-modal {
+  /* Keep the modal compact and guarantee no scrollbars appear. The
+     body is the action grid (auto-fit / minmax), the right column is
+     the image preview. The modal width caps at 640px and the inner
+     grid wraps as many buttons as fit. The 96vw fallback covers very
+     narrow windows (e.g. an old laptop on 1024x768). */
+  width: min(640px, 96vw);
+  max-height: 92vh;
+  overflow: hidden;
+}
+.fb-context-menu-body {
+  display: grid;
+  grid-template-columns: minmax(260px, 1fr) 220px;
+  gap: 12px;
+  align-items: start;
+  margin-top: 6px;
+  /* Defensive: the body never produces horizontal scrollbars
+     because the grid wraps; the explicit overflow:hidden
+     stops a future regression from adding one. */
+  overflow: hidden;
+}
+.fb-context-menu-left {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  /* Cap the left column's height so a long action list
+     grows the modal UP TO the .fb-context-menu-modal
+     max-height, then scrolls the inner grid only —
+     the modal itself never scrolls. */
+  max-height: calc(92vh - 140px);
+  overflow: hidden;
+}
+.fb-context-menu-left .row {
+  margin-bottom: 6px;
+}
+
+/* 2-column action grid. Each cell is a
+   <button class="fb-context-menu-action">; the grid auto-flows
+   them into 2, 3, or 4 columns depending on the modal's width and
+   the buttons' intrinsic size. The minmax() makes the grid "fail
+   to 1 column on a narrow viewport" rather than overflow. */
+.fb-context-menu-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: 6px;
+  margin-top: 8px;
+  /* The grid scrolls internally if the action list is
+     long; the modal itself never scrolls. */
+  max-height: calc(92vh - 200px);
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding: 2px;
+}
+.fb-context-menu-action {
+  /* Override the default btn-mini look so the action
+     buttons read as a tight, equal-width grid. */
+  width: 100%;
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  padding: 5px 8px;
+  font-size: 11.5px;
+  text-align: left;
+  justify-content: flex-start;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+.fb-context-menu-section-header {
+  /* Non-button strip that visually separates the
+     "Open in <tool>" group from the file-level
+     actions. Span the full grid width so it never
+     lands in the middle of a row. */
+  grid-column: 1 / -1;
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--fg-2);
+  padding: 6px 2px 2px;
+  border-top: 1px solid var(--border);
+  margin-top: 4px;
+}
+.fb-context-menu-section-header:first-child {
+  border-top: 0;
+  margin-top: 0;
+}
+.fb-context-menu-right {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  justify-content: flex-start;
+  min-height: 200px;
+  background: var(--bg);
+  border: 1px solid var(--border-2);
+  border-radius: var(--radius-sm);
+  padding: 8px;
+}
+.fb-context-menu-preview {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  min-height: 100%;
+}
+.fb-context-menu-thumb {
+  display: block;
+  max-width: 100%;
+  max-height: 320px;
+  object-fit: contain;
+  cursor: zoom-in;
+  background: var(--bg-3);
+  border-radius: var(--radius-sm);
+  flex: 1 1 auto;
+  min-height: 0;
+}
+.fb-context-menu-thumb-caption {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--fg-2);
+  text-align: center;
+  word-break: break-all;
+  max-width: 100%;
+  /* Don't grow the caption — the image owns the flex
+     growth so a tall image can fill the right column. */
+  flex: 0 0 auto;
+}
+.fb-context-menu-preview-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  min-height: 100%;
+  color: var(--fg-3);
+  font-size: 12px;
+  text-align: center;
+}
+.fb-context-menu-preview-icon {
+  font-size: 56px;
+  line-height: 1;
+  opacity: 0.5;
+}
+.fb-context-menu-preview-label {
+  font-style: italic;
+  color: var(--fg-3);
+  font-size: 12px;
+}
+
+/* File-prefix row: the "force prefix only" label sits to the
+   right of the input. Compact styling so the row doesn't get
+   noticeably wider than before. */
+.file-prefix-force-only-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 12px;
+  color: var(--fg-2);
+  white-space: nowrap;
+  cursor: pointer;
+  user-select: none;
+}
+.file-prefix-force-only-cb {
+  margin: 0;
+  cursor: pointer;
+}
+
+/* ========== Keyboard shortcuts box (inside modal) ========== */
+.shortcuts-box {
+  background: var(--bg-2);
+  border: 1px solid var(--border-2);
+  border-radius: var(--radius);
+  padding: 8px 12px;
+  margin: 12px 0 8px;
+}
+.shortcuts-box h4 {
+  margin: 0 0 6px;
+  font-size: 11px;
+  color: var(--fg-2);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  font-weight: 700;
+}
+.shortcut-row {
+  display: flex; align-items: center; gap: 10px;
+  padding: 2px 0;
+  font-size: 12px;
+}
+.shortcut-row kbd {
+  display: inline-block;
+  background: var(--bg-3);
+  border: 1px solid var(--border-2);
+  border-bottom-width: 2px;
+  border-radius: 3px;
+  padding: 1px 6px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--fg);
+  min-width: 110px;
+  text-align: center;
+}
+.shortcut-row span { color: var(--fg-2); }
+
+/* ========== Modal / Toasts ==========
+   Stack: jobs 100 < pipeline 200 < image viewer 250 < modal 300 <
+   help tooltip 350 < context menu 500 < toast 600 < archive viewer 1000.
+   The dark backdrop overlay (rgba(0,0,0,0.55)) only applies when a
+   modal is actually open — the .active class is added by showModal()
+   on first show and removed when the last modal closes. Previously the
+   backdrop was on #modal-root unconditionally, so the page stayed
+   dimmed even when no modal was visible. */
+#modal-root { position: fixed; inset: 0; pointer-events: none; z-index: 300; }
+#toast-root { position: fixed; inset: 0; pointer-events: none; z-index: 600; }
+#modal-root { display: flex; align-items: center; justify-content: center; }
+#modal-root.active { pointer-events: auto; background: rgba(0, 0, 0, 0.55); }
+#modal-root > .modal { position: absolute; }
+.modal {
+  background: var(--bg-2);
+  border: 1px solid var(--border-2);
+  border-radius: var(--radius);
+  padding: 18px 22px;
+  width: min(720px, 92vw);
+  max-height: 88vh;
+  overflow: auto;
+  color: var(--fg);
+}
+.modal h2 { margin: 0 0 6px; font-size: 17px; color: var(--fg); }
+.modal p { color: var(--fg-2); line-height: 1.55; }
+.modal .row { margin-bottom: 10px; }
+.modal .row > label { color: var(--fg); font-weight: 500; }
+.modal .footer { display: flex; gap: 8px; justify-content: flex-end; margin-top: 14px; }
+#toast-root { display: block; pointer-events: none; }
+.toast {
+  position: fixed; right: 16px; bottom: 16px;
+  background: var(--bg-2);
+  color: var(--fg);
+  border: 1px solid var(--border-2);
+  border-left: 3px solid var(--accent);
+  padding: 10px 14px;
+  border-radius: var(--radius);
+  max-width: 360px;
+  pointer-events: auto;
+  font-size: 13px;
+}
+.toast.err { border-left-color: var(--danger); }
+.toast.ok { border-left-color: var(--success); }
+.toast.warn { border-left-color: var(--warn); }
+
+/* The "What's new" toast. A compact card that anchors to the
+   bottom-right but above the regular toasts (which are 16px from the
+   bottom - this one is 80px so they don't visually collide). Collapsed
+   by default (just the headline + X button visible); clicking the
+   headline expands the bullet list of what changed in the current
+   version. Slightly bigger and more deliberate than a regular toast so
+   the user registers it as a special "new build" event, not a
+   transient notification. */
+.whats-new-toast {
+  position: fixed; right: 16px; bottom: 80px;
+  background: var(--bg-2);
+  color: var(--fg);
+  border: 1px solid var(--border-2);
+  border-left: 3px solid var(--success);
+  padding: 0;
+  border-radius: var(--radius);
+  /* 380px wide with a 14px font so the headline + the X button + a
+     future one-line subhead all fit comfortably. The size matches a
+     typical 14px / 380px toast card (Slack / GitHub release-note
+     style). */
+  width: 380px;
+  max-width: calc(100vw - 32px);
+  pointer-events: auto;
+  font-size: 14px;
+  line-height: 1.4;
+  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.45);
+  /* Slide-up + fade-in on mount, 240ms. The toast appears in the
+     top-right of the corner stack so it doesn't jump. */
+  animation: whats-new-enter 240ms ease-out;
+}
+@keyframes whats-new-enter {
+  from { opacity: 0; transform: translateY(8px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+.whats-new-header {
+  display: flex; align-items: center; gap: 10px;
+  padding: 10px 14px;
+  cursor: pointer;
+  user-select: none;
+  font-weight: 600;
+  border-radius: var(--radius) var(--radius) 0 0;
+}
+.whats-new-header:hover { background: var(--bg-3); }
+.whats-new-headline {
+  flex: 1;
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--fg);
+  /* Make sure long version strings like "v1.1.1 is here"
+     don't clip if the user has a smaller window. The
+     min-width: 0 lets flex shrink correctly within a
+     fixed-width parent. */
+  min-width: 0;
+  overflow: visible;
+}
+.whats-new-x {
+  padding: 0 8px;
+  font-size: 16px;
+  line-height: 1;
+  color: var(--fg-3);
+}
+.whats-new-x:hover { color: var(--fg); }
+.whats-new-list {
+  list-style: none;
+  margin: 0;
+  padding: 0 12px 10px 22px;
+  /* Collapsed by default (max-height 0 + hidden overflow).
+     The .expanded class on the toast (toggled by clicking
+     the header) opens it with a smooth transition. */
+  max-height: 0;
+  overflow: hidden;
+  transition: max-height 220ms ease;
+  color: var(--fg-2);
+}
+.whats-new-toast.expanded .whats-new-list {
+  max-height: 360px;
+}
+.whats-new-list li {
+  /* Bullets inherit the toast's 14px font so the expanded
+     content stays readable. Long bullets wrap inside the
+     toast's fixed width (no horizontal scroll needed). */
+  font-size: 13.5px;
+  line-height: 1.45;
+  padding: 4px 0;
+  position: relative;
+}
+.whats-new-list li::before {
+  content: "·";
+  position: absolute;
+  left: -10px;
+  color: var(--accent);
+  font-weight: 700;
+}
+
+/* ========== Folder options modal ==========
+   Two-column checkbox grid for the optional columns + a locked
+   "name" row at the bottom. */
+.folder-options-modal { width: min(520px, 92vw); }
+.folder-options-cols {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px 16px;
+  margin: 12px 0 4px;
+}
+.folder-options-col-label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  color: var(--fg);
+  cursor: pointer;
+  user-select: none;
+  padding: 4px 0;
+}
+.folder-options-col-locked {
+  color: var(--fg-3);
+  cursor: not-allowed;
+}
+.folder-options-col-cb {
+  margin: 0;
+  width: auto;
+}
+/* Image-thumbnail toggle row inside the folder-options modal.
+   Visually distinct from the columns grid above so the user
+   doesn't confuse "show thumbnails" with "show a column".
+   We render it as a single full-width labelled checkbox with
+   a short hint line beneath it. */
+.folder-options-thumbnail-label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  color: var(--fg);
+  cursor: pointer;
+  user-select: none;
+  padding: 8px 10px;
+  margin: 12px 0 4px;
+  background: var(--bg-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+}
+.folder-options-thumbnail-cb {
+  margin: 0;
+  width: auto;
+}
+
+/* ========== Info banner inside sections ========== */
+.info-banner {
+  background: var(--bg-2);
+  border: 1px solid var(--warn);
+  border-left: 3px solid var(--warn);
+  border-radius: var(--radius-sm);
+  padding: 8px 12px;
+  color: var(--fg);
+  font-size: 12px;
+  line-height: 1.5;
+  margin-bottom: 8px;
+}
+
+/* ========== Tab-intro modal (per-tab first-time popup) ==========
+   A short, friendly "what's this tab about" message shown the
+   first time the user opens each tab. Styled like the existing
+   .first-time-setup-modal so the look-and-feel matches. */
+.tab-intro-modal { width: min(520px, 92vw); }
+.tab-intro-modal h2 { margin-top: 0; }
+
+/* ========== Popups settings modal ==========
+   The popup-behaviour dropdown lives inside a small modal that
+   itself lives inside ⚙ Settings (a layered modal). Match the
+   .realesrgan-settings-modal size so the two are visually
+   consistent. */
+.popup-settings-modal { width: min(540px, 92vw); }
+.popup-settings-modal .popup-policy-select { width: 100%; }
+.info-banner .info-banner-title { font-weight: 700; color: var(--warn); margin-bottom: 4px; }
+
+/* ========== Instrumental (voice-less) section in Music tab ==========
+   Highlighted so the user can immediately see the option. */
+.instrumental-section {
+  border: 1px solid var(--accent);
+  background: linear-gradient(180deg, var(--bg-2), var(--bg-3));
+}
+.instrumental-section > h3 {
+  color: var(--accent) !important;
+}
+.instrumental-banner {
+  border-color: var(--accent) !important;
+  border-left-color: var(--accent) !important;
+  background: var(--bg-2);
+}
+.instrumental-banner .info-banner-title { color: var(--accent) !important; }
+.row.locked-by-instrumental select { opacity: 0.55; cursor: not-allowed; }
+
+/* ========== Misc ========== */
+.spinner {
+  display: inline-block; width: 12px; height: 12px;
+  border: 2px solid var(--fg-3); border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+  vertical-align: -2px;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+
+/* ========== Progress bars (H11-1) ==========
+   Shared loading UI. Used by the pipeline card, the batch overlay, and
+   single-file ops. Two flavours: determinate (known %, e.g. Real-ESRGAN
+   stdout progress) and indeterminate (unknown ETA, e.g. IS-Net). */
+.progress-bar {
+  position: relative;
+  width: 100%;
+  height: 6px;
+  background: var(--bg-3, #2a2a30);
+  border-radius: 3px;
+  overflow: hidden;
+}
+.progress-bar-fill {
+  height: 100%;
+  background: var(--accent, #4d9aff);
+  border-radius: 3px;
+  transition: width 0.25s ease;
+  width: 0%;
+}
+.progress-bar-indeterminate .progress-bar-shimmer {
+  position: absolute;
+  top: 0; left: -40%;
+  width: 40%;
+  height: 100%;
+  background: linear-gradient(90deg, transparent, var(--accent, #4d9aff), transparent);
+  animation: progress-shimmer 1.2s ease-in-out infinite;
+}
+@keyframes progress-shimmer {
+  0% { left: -40%; }
+  100% { left: 100%; }
+}
+.busy-row { display: inline-flex; align-items: center; gap: 6px; color: var(--fg-2); font-size: 12px; }
+.busy-row-label { white-space: nowrap; }
+
+::-webkit-scrollbar { width: 12px; height: 12px; }
+::-webkit-scrollbar-track { background: var(--bg); }
+::-webkit-scrollbar-thumb { background: var(--border-2); border-radius: 0; }
+::-webkit-scrollbar-thumb:hover { background: var(--fg-3); }
+
+/* ========== Audio cutter (✂ Audio cut…) ==========
+   Wide modal that hosts a Canvas waveform, a minimap, time inputs,
+   and an export row. All colours use the existing theme variables
+   so dark / light themes switch correctly. */
+.audio-cutter-modal {
+  width: min(960px, 95vw);
+  max-height: 92vh;
+  /* Leave a touch more padding inside because the modal is bigger
+     and the default 18px feels cramped at 960px wide. */
+  padding: 20px 24px 18px;
+}
+.audio-cutter-modal h2 {
+  margin: 0 0 6px;
+  display: flex; align-items: baseline; gap: 10px;
+}
+.ac-meta {
+  display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+  margin: 0 0 10px;
+  font-size: 12.5px;
+  color: var(--fg-2);
+}
+.ac-filename { font-family: var(--font-mono); color: var(--fg); font-weight: 500; }
+.ac-meta-sep { color: var(--fg-3); }
+.ac-status { color: var(--fg-3); font-size: 12px; }
+.ac-error {
+  display: none;
+  background: rgba(255, 138, 138, 0.08);
+  border: 1px solid var(--danger);
+  color: var(--danger);
+  border-radius: var(--radius-sm);
+  padding: 6px 10px;
+  font-size: 12.5px;
+  margin: 0 0 10px;
+}
+
+/* The waveform stage. Position:relative so the markers / play
+   cursor / selection overlay sit on top of the canvas. min-height
+   keeps the stage from collapsing while peaks are still loading. */
+.ac-stage {
+  position: relative;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  height: 200px;
+  margin-bottom: 6px;
+  overflow: hidden;
+  user-select: none;
+  -webkit-user-select: none;
+}
+.ac-canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+  /* crosshair cursor set inline so we can swap to ew-resize over
+     markers. The canvas itself uses crosshair because clicking
+     anywhere jumps / drags. */
+  cursor: crosshair;
+}
+.ac-sel-overlay {
+  position: absolute;
+  top: 0;
+  height: 100%;
+  background: rgba(77, 154, 255, 0.16);
+  border-left: 1px solid var(--accent);
+  border-right: 1px solid var(--accent);
+  pointer-events: none;
+  /* The selection rectangle gets a subtle highlight tint above
+     the waveform. The thin top/bottom edges are drawn on the
+     canvas itself for sub-pixel alignment. */
+}
+.ac-play-cursor {
+  position: absolute;
+  top: 0;
+  width: 1px;
+  height: 100%;
+  background: var(--fg);
+  pointer-events: none;
+  display: none;
+  box-shadow: 0 0 6px rgba(255, 255, 255, 0.5);
+}
+/* Markers are vertical lines with a triangular / pill handle at the
+   top so the user has something tactile to grab. */
+.ac-marker {
+  position: absolute;
+  top: 0;
+  height: 100%;
+  width: 2px;
+  background: var(--accent);
+  pointer-events: auto;
+  cursor: ew-resize;
+  /* Use transform: translateX to position so we never trigger
+     layout on every drag tick. */
+  will-change: transform;
+}
+.ac-marker-handle {
+  position: absolute;
+  top: 4px;
+  left: -5px;
+  width: 12px;
+  height: 14px;
+  background: var(--accent);
+  border-radius: 2px;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.45);
+}
+.ac-marker-end .ac-marker-handle { /* same shape on the right */ }
+.ac-marker:hover .ac-marker-handle,
+.ac-marker:active .ac-marker-handle {
+  background: var(--accent-2);
+}
+.ac-cursor-label {
+  position: absolute;
+  top: 4px;
+  padding: 2px 6px;
+  background: var(--bg-3);
+  color: var(--fg);
+  border: 1px solid var(--border-2);
+  border-radius: var(--radius-sm);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  pointer-events: none;
+  transform: translateX(8px);
+  display: none; /* shown only during playback in a future revision */
+}
+
+/* Minimap. A thin strip below the main waveform. */
+.ac-minimap-wrap {
+  position: relative;
+  height: 56px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  margin-bottom: 10px;
+  cursor: pointer;
+  overflow: hidden;
+}
+.ac-minimap {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+.ac-minimap-viewport {
+  position: absolute;
+  top: 0;
+  height: 100%;
+  background: rgba(77, 154, 255, 0.18);
+  border-left: 2px solid var(--accent);
+  border-right: 2px solid var(--accent);
+  pointer-events: none;
+  box-sizing: border-box;
+}
+
+/* Control rows. Use the same row style the rest of the modal
+   system uses (gap, label-on-top), but tighter so the audio
+   cutter fits comfortably. */
+.ac-ctrl-row,
+.ac-time-row,
+.ac-tool-row,
+.ac-exp-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  padding: 8px 0;
+  border-top: 1px solid var(--border);
+}
+.ac-ctrl-row { border-top: 0; padding-top: 0; }
+.ac-ctrl-row > label,
+.ac-tool-row > label,
+.ac-exp-row > label {
+  display: inline-flex; align-items: center; gap: 4px;
+  color: var(--fg-2);
+  font-size: 12.5px;
+  cursor: pointer;
+  user-select: none;
+}
+.ac-ctrl-spacer { flex: 1; }
+.ac-playtime {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--fg-3);
+  margin-left: auto;
+}
+
+/* Time inputs are wider so the user can read the m:ss.mmm format
+   at a glance. */
+.ac-time-row input[type="text"].ac-time-inp {
+  width: 130px;
+  font-family: var(--font-mono);
+  font-size: 13px;
+}
+.ac-time-row input[readonly] {
+  background: var(--bg);
+  color: var(--fg-3);
+  cursor: default;
+}
+
+/* Export row. The file-name template input stretches to fill. */
+.ac-fade-ms { width: 70px; }
+.ac-format { min-width: 180px; }
+.ac-name-inp {
+  flex: 1;
+  min-width: 200px;
+  font-family: var(--font-mono);
+  font-size: 12.5px;
+}
+
+/* Buttons inside the audio cutter use the existing button class
+   plus our prefix; we only need to override spacing. */
+.ac-ctrl-row button,
+.ac-tool-row button {
+  min-width: 0;
+}
+
+/* Light theme tweaks: the waveform canvas reads slightly better
+   against a darker background than the default --bg, so leave it
+   alone. The selection overlay is slightly more opaque so it
+   stays visible on the bright background. */
+:root[data-theme="light"] .ac-sel-overlay {
+  background: rgba(0, 120, 212, 0.18);
+}
+:root[data-theme="light"] .ac-minimap-viewport {
+  background: rgba(0, 120, 212, 0.22);
+}
+:root[data-theme="light"] .ac-stage,
+:root[data-theme="light"] .ac-minimap-wrap {
+  background: var(--bg-3);
+}
+
+/* On narrow screens the modal would otherwise overflow. Cap the
+   waveform / control row widths and let them wrap. */
+@media (max-width: 720px) {
+  .ac-time-row input[type="text"].ac-time-inp { width: 100px; }
+  .ac-name-inp { min-width: 0; width: 100%; }
+  .ac-format { min-width: 0; width: 100%; }
+}
+
+/* Auto-cut styles */
+.ac-autocut-details {
+  border-top: 1px solid var(--border);
+  margin-top: 12px;
+  padding-top: 8px;
+}
+.ac-autocut-details summary {
+  cursor: pointer;
+  font-weight: 500;
+  color: var(--fg);
+  user-select: none;
+  font-size: 14px;
+}
+.ac-autocut-details[open] summary {
+  margin-bottom: 8px;
+}
+.ac-autocut-section {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.ac-opt-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(130px, 1fr));
+  gap: 8px;
+  background: var(--bg-2);
+  padding: 8px;
+  border-radius: 4px;
+  border: 1px solid var(--border);
+}
+.ac-opt-grid label {
+  display: flex;
+  flex-direction: column;
+  font-size: 11px;
+  color: var(--fg-2);
+  gap: 4px;
+}
+.ac-opt-grid input[type="number"],
+.ac-opt-grid select {
+  width: 100%;
+  padding: 3px 6px;
+  background: var(--bg-1);
+  border: 1px solid var(--border);
+  color: var(--fg);
+  border-radius: 3px;
+  font-size: 11px;
+  box-sizing: border-box;
+}
+.ac-opt-grid input[type="checkbox"] {
+  width: auto;
+  align-self: flex-start;
+  margin-top: 4px;
+}
+.ac-autocut-list {
+  max-height: 150px;
+  overflow-y: auto;
+  border: 1px solid var(--border);
+  background: var(--bg-1);
+  border-radius: 4px;
+}
+.ac-autocut-row {
+  transition: background 0.15s ease;
+  user-select: none;
+}
+.ac-autocut-row:hover {
+  background: var(--bg-2);
+}
+.ac-empty-list {
+  padding: 12px;
+  text-align: center;
+  color: var(--fg-3);
+  font-size: 12px;
+}
+.ac-autocut-stats {
+  font-size: 11px;
+  color: var(--fg-2);
+}
+
+/* Custom Context Menu */
+.custom-context-menu {
+  position: fixed;
+  background: var(--bg-2, #26262b);
+  border: 1px solid var(--border, #333);
+  border-radius: var(--radius-sm, 4px);
+  padding: 4px 0;
+  box-shadow: 0 4px 12px rgba(0,0,0,0.5);
+  z-index: 500;
+}
+.custom-context-menu-item {
+  padding: 6px 14px;
+  cursor: pointer;
+  color: var(--fg-1, #fff);
+  font-size: 12px;
+  white-space: nowrap;
+}
+.custom-context-menu-item:hover {
+  background: var(--accent, #4d9aff);
+  color: #fff;
+}
+
+/* ---------- H7-021: accessibility hardening ---------- */
+/* Dialog role: a visible focus ring so keyboard users can track the
+   focused control inside a modal, and a clearer outline on every
+   focusable control when reached via keyboard. */
+.modal[role="dialog"] { outline: none; }
+.modal[role="dialog"]:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+/* Buttons reached by keyboard show a focus ring (mouse clicks don't, to
+   avoid visual noise). Toolbar buttons get a minimum 24px touch target. */
+button:focus-visible,
+input:focus-visible,
+select:focus-visible,
+textarea:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+/* Toolbar / icon-only buttons: enforce a minimum target size so they're
+   robust mouse + touch targets (several were 20-23px tall). */
+.toolbar button,
+.icon-btn,
+.btn-mini {
+  min-height: 24px;
+}
+
+/* ========== Other APIs tab (providersTab.js) — scoped block ========== */
+.prov-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+.prov-title {
+  font-weight: 600;
+  font-size: 1.05em;
+}
+.prov-modes {
+  display: flex;
+  gap: 0;
+  margin-bottom: 12px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  overflow: hidden;
+  width: fit-content;
+}
+.prov-mode {
+  padding: 6px 16px;
+  border: none;
+  background: var(--bg-2);
+  color: var(--text);
+  cursor: pointer;
+  font-size: 0.9em;
+  transition: background 0.15s, color 0.15s;
+}
+.prov-mode + .prov-mode {
+  border-left: 1px solid var(--border);
+}
+.prov-mode.active {
+  background: var(--accent);
+  color: #fff;
+  font-weight: 600;
+}
+.prov-mode:hover:not(.active) {
+  background: var(--bg-3, #333);
+}
+.prov-stage {
+  max-width: 640px;
+}
+.prov-view {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.prov-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.prov-row label {
+  font-size: 0.85em;
+  min-width: 60px;
+}
+.prov-select {
+  min-width: 160px;
+}
+.prov-model-input {
+  flex: 1;
+  min-width: 200px;
+}
+.prov-prompt {
+  width: 100%;
+  resize: vertical;
+  min-height: 72px;
+}
+.prov-json {
+  width: 100%;
+  resize: vertical;
+  font-family: monospace;
+  font-size: 0.85em;
+}
+.prov-params input,
+.prov-params select {
+  max-width: 140px;
+}
+.prov-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 4px;
+}
+.prov-status {
+  font-size: 0.85em;
+  color: var(--text-dim, #999);
+}
+.prov-settings {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-width: 340px;
+}
+.prov-settings-entry {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 8px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+}
+.prov-settings-entry label {
+  font-size: 0.8em;
+  margin-top: 4px;
+}
