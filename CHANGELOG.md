@@ -1,8 +1,8 @@
 # Changelog
 
-Notable user-facing changes are recorded here. The next public release is being prepared from a clean repository history, so the current work is listed under **Unreleased**.
+Notable user-facing changes are recorded here.
 
-## Unreleased
+## 1.0.0 - 2026-07-28
 
 ### Added
 
