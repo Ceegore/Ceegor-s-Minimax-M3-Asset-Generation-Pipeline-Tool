@@ -23,10 +23,22 @@ function createMockProc() {
 
 // Load realesrgan.js with a mocked child_process.spawn.
 function loadWithMockSpawn(mockSpawn) {
+  const realFs = require('fs');
+  const mockBinary = path.join(
+    ROOT,
+    'test-fixtures',
+    process.platform === 'win32' ? 'realesrgan-ncnn-vulkan.exe' : 'realesrgan-ncnn-vulkan'
+  );
   const realLoad = Module._load;
   Module._load = function (request, parent, isMain) {
     if (request === 'child_process') {
-      return { spawn: mockSpawn, spawnSync: () => ({ status: 1, stdout: '' }) };
+      return { spawn: mockSpawn, spawnSync: () => ({ status: 0, stdout: `${mockBinary}\n` }) };
+    }
+    if (request === 'fs') {
+      return {
+        ...realFs,
+        existsSync: (candidate) => candidate === mockBinary || realFs.existsSync(candidate),
+      };
     }
     return realLoad.call(this, request, parent, isMain);
   };

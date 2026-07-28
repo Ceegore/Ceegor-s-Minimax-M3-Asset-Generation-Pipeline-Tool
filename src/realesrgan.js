@@ -3,10 +3,9 @@
 // https://github.com/xinntao/Real-ESRGAN. BSD-3-Clause license
 // (commercial use is fine, attribution appreciated).
 //
-// We deliberately do NOT bundle the binary. The user installs it
-// themselves — see the README for the exact `bin/` placement or
-// PATH instructions. If the binary isn't found, the upscale
-// function in the renderer falls back to the built-in multi-step
+// Release packages bundle the binary and its model files. Development
+// checkouts may instead provide it through `bin/` or PATH. If the binary is
+// missing, the renderer falls back to its built-in multi-step
 // canvas/createImageBitmap path so the tool is never blocked.
 //
 // Detection order (first match wins, cached after first success):
@@ -96,7 +95,7 @@ function run(srcPath, dstPath, opts = {}) {
     return Promise.resolve({
       ok: false,
       code: -1,
-      stderr: 'realesrgan-ncnn-vulkan binary not found. See README for installation.',
+      stderr: 'The bundled Real-ESRGAN component is missing. Reinstall the complete release package.',
       outputPath: null,
     });
   }
