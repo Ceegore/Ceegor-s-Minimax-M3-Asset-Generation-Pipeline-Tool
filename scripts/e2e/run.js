@@ -12,7 +12,7 @@
 //   --only=X    run only scenarios whose name contains X (repeatable via ,)
 //   --isolate   boot a FRESH harness per scenario (strictest isolation; CI)
 //   --visual-capture  store fresh visual-regression baselines after the run
-//               (without it, existing baselines are compared — advisory only)
+//               (without it, existing baselines are compared and enforced)
 //   --surface-threshold=N  hard-gate on UI-surface coverage % (Phase F3)
 //
 // Run via:  node scripts/e2e/launch.js [args]   (or npm run test:e2e)
@@ -31,7 +31,7 @@ const argv = process.argv.slice(2);
 const REAL = argv.includes('--real');
 const ISOLATE = argv.includes('--isolate');
 // --visual-capture (or VISUAL_CAPTURE=1) stores fresh visual baselines after
-// the scenarios run; without it, existing baselines are compared (advisory).
+// the scenarios run; without it, existing baselines are compared and enforced.
 const VISUAL_CAPTURE = argv.includes('--visual-capture') || process.env.VISUAL_CAPTURE === '1';
 // --surface-threshold=N turns the UI-surface coverage report into a hard gate:
 // fail the run if the % of automatable ui_map elements touched drops below N.

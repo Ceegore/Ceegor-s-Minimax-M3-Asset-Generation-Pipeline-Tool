@@ -57,6 +57,24 @@ const RESET_JS = `(() => {
   seen.toasts = wipe('#toast-root');
   const p = document.querySelector('#fb-path');
   if (p) { p.textContent = 'BASELINE_PATH'; p.title = ''; seen.path = true; }
+  // Settings contains machine-specific output, report, and config paths.
+  // Replace them before capture so committed images never expose a username
+  // and remain identical on GitHub-hosted runners.
+  const fixedSettingsPaths = {
+    'Output directory': 'C:\\\\BASELINE\\\\output',
+    'Report folder': '',
+    'Config file location': 'C:\\\\BASELINE\\\\config.txt',
+  };
+  document.querySelectorAll('.settings-modal .row').forEach((row) => {
+    const label = row.querySelector('label');
+    const input = row.querySelector('input[type="text"]');
+    if (!label || !input) return;
+    const labelText = label.textContent.trim();
+    const key = Object.keys(fixedSettingsPaths).find((name) => labelText.startsWith(name));
+    if (key) {
+      input.value = fixedSettingsPaths[key];
+    }
+  });
   // Prompt / params fields: fixed text, scrolled to the top.
   document.querySelectorAll('textarea').forEach((t) => { t.value = 'BASELINE'; t.scrollTop = 0; });
   const q = document.querySelector('#quota-value');
@@ -156,6 +174,19 @@ const RESET_HOLDS = `(() => {
     && l && l.children.length === 0
     && g && g.children.length === 0)) return false;
   for (const t of document.querySelectorAll('textarea')) { if (t.value !== 'BASELINE') return false; }
+  const expectedSettingsPaths = {
+    'Output directory': 'C:\\\\BASELINE\\\\output',
+    'Report folder': '',
+    'Config file location': 'C:\\\\BASELINE\\\\config.txt',
+  };
+  for (const row of document.querySelectorAll('.settings-modal .row')) {
+    const label = row.querySelector('label');
+    const input = row.querySelector('input[type="text"]');
+    if (!label || !input) continue;
+    const labelText = label.textContent.trim();
+    const key = Object.keys(expectedSettingsPaths).find((name) => labelText.startsWith(name));
+    if (key && input.value !== expectedSettingsPaths[key]) return false;
+  }
   for (const n of document.querySelectorAll('*')) { if (n.scrollTop || n.scrollLeft) return false; }
   return true;
 })()`;

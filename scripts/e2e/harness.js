@@ -224,7 +224,10 @@ function createHarness(opts = {}) {
       throw new Error(msg);
     }
 
-    win = new BrowserWindow({ width: 1400, height: 900, show: false, webPreferences: {
+    // Fix the renderer viewport rather than the outer window size. Windows can
+    // clamp an oversized hidden window to the host display's work area, which
+    // otherwise makes visual baselines depend on runner screen resolution.
+    win = new BrowserWindow({ width: 1008, height: 655, useContentSize: true, show: false, webPreferences: {
       preload: path.join(APP_ROOT, 'preload.js'), contextIsolation: true, nodeIntegration: false, sandbox: true, backgroundThrottling: false } });
     // Mirror the real app's security hardening (createMainWindow.js line 62):
     // deny all window.open() attempts so the renderer stays single-window.
