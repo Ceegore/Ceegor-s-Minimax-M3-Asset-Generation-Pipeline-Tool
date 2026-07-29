@@ -20,6 +20,7 @@ global.showModal = () => {};
 global.el = () => {};
 global.$ = () => null;
 
+require(path.join(ROOT, 'renderer', 'tabs', 'batchImportCompatibility.js'));
 require(path.join(ROOT, 'renderer', 'tabs', 'batchImportHelper.js'));
 require(path.join(ROOT, 'renderer', 'specs', 'modelSpecs.js'));
 const { buildImportedEntry } = global.window.BatchManager;
@@ -30,10 +31,29 @@ test('H9-008 an unknown key flags the row defective', () => {
   assert.ok(e._defective.some((m) => /nonsense-flag/i.test(m)), 'reason names the unknown key');
 });
 
-test('GEWV3-003 image --model is rejected because the CLI does not support it', () => {
+test('GEWV3-003 legacy image --model image-01 is migrated because the CLI uses it implicitly', () => {
   const e = buildImportedEntry('image', 'a cat', { '--model': 'image-01', '--aspect-ratio': '16:9' });
-  assert.ok(e._defective, 'unsupported image model must be flagged for repair');
-  assert.ok(e._defective.some((m) => /model/i.test(m)), 'reason names the unsupported model flag');
+  assert.ok(!e._defective, 'the old manual\'s default model must remain runnable');
+  assert.equal(e['--model'], undefined);
+  assert.ok(e._importWarnings.some((m) => /legacy image --model/i.test(m)));
+});
+
+test('GEWV3-003 image-01-live remains defective because silently changing models is unsafe', () => {
+  const e = buildImportedEntry('image', 'a cat', { '--model': 'image-01-live' });
+  assert.ok(e._defective && e._defective.some((m) => /model/i.test(m)));
+});
+
+test('legacy speech sample-rate 48000 is migrated to supported 44100 Hz', () => {
+  const e = buildImportedEntry('speech', 'Hello', { '--model': 'speech-2.8-hd', '--sample-rate': '48000' });
+  assert.ok(!e._defective, JSON.stringify(e._defective));
+  assert.equal(e['--sample-rate'], '44100');
+  assert.ok(e._importWarnings.some((m) => /48000.*44100/i.test(m)));
+});
+
+test('unsupported prompt-to-SFX rows are blocked with safe, actionable guidance', () => {
+  const e = buildImportedEntry('speech', 'short metallic UI click', { '--sound-effect': true });
+  assert.ok(e._defective && e._defective.some((m) => /not supported by the bundled mmx-cli/i.test(m)));
+  assert.ok(e._defective.some((m) => /not run as speech/i.test(m)), 'must explain that accidental TTS was prevented');
 });
 
 test('H9-008 a supported image key does NOT flag the row', () => {

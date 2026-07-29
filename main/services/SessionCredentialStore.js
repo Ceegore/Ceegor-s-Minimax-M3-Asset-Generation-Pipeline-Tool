@@ -10,10 +10,8 @@
 //   • Der Store wird beim App-Quit / Window-Close defensiv gewipt,
 //     sodass ein Process-Dump / Crash-Dump den Key nicht enthält.
 //   • Die einzigen legitimen Konsumenten von getSessionCredential() sind
-//     Main-seitige Resolver (R2.2: registerMmxIpc + runMmx) und nur
-//     für den Moment des Setzens der MMX_API_KEY-Env-Variable auf den
-//     Child-Process. Nach dem Spawn MUSS der Resolver
-//     clearSessionCredential() aufrufen.
+//     Main-seitige Resolver. Der Schlüssel bleibt bis zum App-Ende oder bis
+//     zum Wechsel zurück in den persistenten Modus im Main-Speicher.
 //
 // IPC-Contract (S1 §3, by extension):
 //   • Es gibt KEINEN IPC-Channel, der getSessionCredential() exponiert.
@@ -76,10 +74,7 @@ function hasSessionCredential() {
  * INTERNAL — Main-side resolver only.
  *
  * Returns the held credential, or null. The caller is responsible for
- * (a) using the value only to populate MMX_API_KEY on a child-process
- *     env block, and
- * (b) calling clearSessionCredential() immediately after the spawn (or
- *     in a finally if the spawn may throw).
+ * Use the value only for a Main-owned API call. Never return it to renderer.
  *
  * This function is exported because the resolver lives in a different
  * module (`main/ipc/registerMmxIpc.js`, R2.2) and needs to read the

@@ -97,18 +97,19 @@ test('R2.2.direct.4: non-session-only payload uses injected deps (cfgMod + state
 // sessionOnly:true even when the payload has no sessionOnly flag
 // (preserves the pre-R2.2 behavior of the legacy mmx:run path)
 // ---------------------------------------------------------------------------
-test('R2.2.direct.5: state.apiKeyNoSave=true is honored even without explicit sessionOnly in the payload', () => {
+test('R2.2.direct.5: state.apiKeyNoSave uses the Main-process session credential', () => {
   const { resolveCredential } = require(RESOLVE_PATH);
   const cfgModStub = { read: () => ({ api_key: 'sk-LEGACY-PERSISTED' }) };
   const stateModStub = { read: () => ({ apiKeyNoSave: true }) };
-  const cred = resolveCredential({}, { cfgMod: cfgModStub, stateMod: stateModStub });
+  const sessionStore = { getSessionCredential: () => 'sk-IN-MEMORY' };
+  const cred = resolveCredential({}, { cfgMod: cfgModStub, stateMod: stateModStub, sessionStore });
   // The user's persisted state says session-only; the resolver
   // surfaces that as `sessionOnly: true` so the handler routes
   // the persisted key via MMX_API_KEY env instead of writing to
   // ~/.mmx/config.json. The apiKey stays the persisted value
   // (the resolver does NOT second-guess the renderer about the
   // in-memory key in case 5 — that's a follow-up R2.x card).
-  assert.equal(cred.apiKey, 'sk-LEGACY-PERSISTED');
+  assert.equal(cred.apiKey, 'sk-IN-MEMORY');
   assert.equal(cred.sessionOnly, true);
 });
 
@@ -188,15 +189,15 @@ test('R2.2.direct.9: no deps + sessionOnly=true + state.apiKeyNoSave=true', () =
 // ---------------------------------------------------------------------------
 // R2.2.direct.10: edge case — sessionOnly: false explicitly → non-session-only path
 // ---------------------------------------------------------------------------
-test('R2.2.direct.10: explicit sessionOnly: false goes to the non-session-only path', () => {
+test('R2.2.direct.10: explicit sessionOnly: false uses persisted credentials when persisted mode is active', () => {
   const { resolveCredential } = require(RESOLVE_PATH);
   const cfgModStub = { read: () => ({ api_key: 'sk-PERSISTED' }) };
-  const stateModStub = { read: () => ({ apiKeyNoSave: true }) };
+  const stateModStub = { read: () => ({ apiKeyNoSave: false }) };
   // sessionOnly: false is a STRICT comparison, so this goes to
   // the non-session-only path. The resolver returns the cfg key
   // and the persisted sessionOnly flag. (The handler will then
   // use sessionOnly from the resolver, not the payload.)
   const cred = resolveCredential({ sessionOnly: false }, { cfgMod: cfgModStub, stateMod: stateModStub });
   assert.equal(cred.apiKey, 'sk-PERSISTED');
-  assert.equal(cred.sessionOnly, true, 'state.apiKeyNoSave=true is still honored when payload.sessionOnly is false');
+  assert.equal(cred.sessionOnly, false);
 });

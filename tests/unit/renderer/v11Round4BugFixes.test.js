@@ -199,7 +199,7 @@ test('L14 FIX: mmx.js syncs the API key to ~/.mmx/config.json + drops argv on su
     'the sync must be attempted for the persistent (non-session-only) path');
   assert.ok(/if \(!keySyncedToConfig\) \{[\s\S]*?fullArgs\.push\('--api-key'/.test(s),
     'the --api-key argv must only be used as a FALLBACK when the sync failed');
-  assert.ok(/sessionOnly[\s\S]*?MMX_API_KEY/.test(s),
+  assert.ok(/sessionOnly[\s\S]*?MINIMAX_API_KEY/.test(s),
     'session-only mode must route the key via an ephemeral env var, not disk (H7-022)');
   assert.ok(/redactedArgs/.test(s),
     'the returned argv must be redacted so the key never reaches the renderer (H7-013)');

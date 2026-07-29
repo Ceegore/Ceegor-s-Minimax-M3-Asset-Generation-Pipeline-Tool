@@ -20,6 +20,7 @@ global.showModal = () => {};
 global.el = () => {};
 global.$ = () => null;
 
+require(path.join(ROOT, 'renderer', 'tabs', 'batchImportCompatibility.js'));
 require(path.join(ROOT, 'renderer', 'tabs', 'batchImportHelper.js'));
 require(path.join(ROOT, 'renderer', 'specs', 'modelSpecs.js'));
 const { parseFencedBatchJson } = global.window.BatchManager;

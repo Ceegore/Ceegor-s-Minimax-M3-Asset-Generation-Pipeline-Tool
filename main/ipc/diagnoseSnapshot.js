@@ -22,6 +22,7 @@
 // ============================================================================
 
 const { deepRedact } = require('../../src/deepRedactor');
+const sessionCredentials = require('../services/SessionCredentialStore');
 
 /**
  * @param {{
@@ -37,6 +38,7 @@ const { deepRedact } = require('../../src/deepRedactor');
  */
 function buildDiagnoseSnapshot(input) {
   const { cfg, state, mmxResolve, cliVersion, cliSupported, supportedMin, capabilitySnapshot } = input;
+  const sessionKey = sessionCredentials.getSessionCredential();
   const raw = {
     platform: process.platform,
     electronVersion: process.versions.electron || 'n/a',
@@ -47,12 +49,12 @@ function buildDiagnoseSnapshot(input) {
     error: mmxResolve.error,
     // R2.4: API-key length is the ONLY numeric/api-key field we
     // surface. The full key is never returned.
-    apiKeyLength: cfg && cfg.api_key ? cfg.api_key.length : 0,
-    apiKeyPresent: !!(cfg && cfg.api_key && cfg.api_key.trim()),
+    apiKeyLength: sessionKey ? sessionKey.length : (cfg && cfg.api_key ? cfg.api_key.length : 0),
+    apiKeyPresent: !!(sessionKey || (cfg && cfg.api_key && cfg.api_key.trim())),
     // R2.4: surface session-only mode explicitly so the diagnose
     // modal can render "API key is session-only (not persisted)"
     // instead of just "API key is set".
-    sessionOnly: !!(state && state.apiKeyNoSave),
+    sessionOnly: !!(sessionKey || (state && state.apiKeyNoSave)),
     region: cfg && cfg.region,
     cliVersion: cliVersion || null,
     cliSupportedMin: supportedMin,

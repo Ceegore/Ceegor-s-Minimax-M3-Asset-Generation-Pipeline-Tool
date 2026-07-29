@@ -191,7 +191,7 @@ function generateManual() {
   // ---- EXAMPLE ----
   md += '---\n\n## 5. Example import table\n\n';
   md += '| Type | Prompt / Text | Parameters |\n|---|---|---|\n';
-  md += '| image | A futuristic cityscape with glowing neon lights | --model image-01 --aspect-ratio 16:9 --variants 3 --upscale true --upscale-multiplier 2 |\n';
+  md += '| image | A futuristic cityscape with glowing neon lights | --aspect-ratio 16:9 --variants 3 --upscale true --upscale-multiplier 2 |\n';
   md += '| speech | Hello, this is a batch voice recording | --model speech-2.8-hd --voice English_expressive_narrator --speed 1.05 |\n';
   md += '| music | Upbeat 80s style retro arcade theme | --model music-2.6 --instrumental true |\n';
   md += '| video | A drone shot flying through a forest valley | --model MiniMax-Hailuo-2.3 --duration 6 --resolution 768P |\n';
@@ -206,7 +206,7 @@ module.exports = { generateManual, generateTxtManual };
 // The previous buildTxtManual (in registerBatchesIpc.js) was a hand-coded
 // template that had already drifted from the registry: it offered
 // --upscale-multiplier "2 or 4" while the registry offers 2/3/4, and it
-// documented music --genre/--bpm and speech --emotion/--sound-effect the
+// documented music --genre/--bpm and other capability-registry flags the
 // registry deliberately omits as silent no-ops. Rendering from CAPABILITIES
 // keeps the two formats in lock-step. The static workflow preamble below is
 // the only hand-maintained part (it matches the MD's structured-workflow
@@ -258,7 +258,7 @@ function generateTxtManual() {
   t += 'Each data line: Type | Prompt / Text | Parameters\n';
   t += 'Type must be one of: image, speech, music, video.\n';
   t += 'Prompt / Text is the main prompt or speech text.\n';
-  t += 'Parameters is a space-separated list of flags (e.g., --model image-01 --width 1024 --height 1024).\n\n';
+  t += 'Parameters is a space-separated list of flags (e.g., --aspect-ratio 1:1 --width 1024 --height 1024).\n\n';
   t += 'For lossless import of pipes-in-prose, multiline speech/lyrics, or Unicode, prefer a fenced block:\n';
   t += '  ```batch-json\n';
   t += '  [ { "type": "speech", "prompt": "Hello | world", "params": { "--model": "speech-2.8-hd" } } ]\n';
@@ -311,7 +311,7 @@ function generateTxtManual() {
 
   t += '\n---\n';
   t += 'EXAMPLE IMPORT ROWS:\n';
-  t += 'image | A futuristic cityscape with glowing neon lights | --model image-01 --aspect-ratio 16:9 --variants 3 --upscale true --upscale-multiplier 2\n';
+  t += 'image | A futuristic cityscape with glowing neon lights | --aspect-ratio 16:9 --variants 3 --upscale true --upscale-multiplier 2\n';
   t += 'speech | Hello, this is a batch voice recording | --model speech-2.8-hd --voice English_expressive_narrator --speed 1.05\n';
   t += 'music | Upbeat 80s style retro arcade theme | --model music-2.6 --instrumental true\n';
   t += 'video | A drone shot flying through a forest valley | --model MiniMax-Hailuo-2.3 --duration 6 --resolution 768P\n\n';

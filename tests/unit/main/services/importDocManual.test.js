@@ -8,6 +8,8 @@
 
 const test = require('node:test');
 const assert = require('node:assert');
+const path = require('node:path');
+const { spawnSync } = require('node:child_process');
 const { generateManual } = require('../../../../main/services/importDocManual');
 
 test('generateManual produces a non-trivial document', () => {
@@ -84,10 +86,28 @@ test('H9-001 every documented flag has a non-empty description', () => {
   assert.deepEqual(blank, [], 'no flag may have a blank description: ' + blank.join(', '));
 });
 
-test('H9-001 the model flag carries real allowed values + a default', () => {
+test('H9-001 image omits unsupported --model while generated modalities retain model controls', () => {
   const m = generateManual();
-  assert.match(m, /`--model`: Generation model[\s\S]*?Allowed:\*\* image-01 \/ image-01-live/);
-  assert.match(m, /\*\*Default:\*\* `image-01`/);
+  const imageSection = m.split('### 1. Image generation')[1].split('### 2. Speech generation')[0];
+  assert.ok(!imageSection.includes('`--model`'), 'image generate has no --model flag');
+  assert.match(m, /Speech model[\s\S]*?speech-2\.8-hd/);
+});
+
+test('generated import contract matches the flags exposed by the bundled CLI', () => {
+  const entry = path.resolve(__dirname, '../../../../node_modules/mmx-cli/dist/mmx.mjs');
+  const help = (type, verb) => {
+    const r = spawnSync(process.execPath, [entry, type, verb, '--help'], { encoding: 'utf8' });
+    assert.equal(r.status, 0, r.stderr);
+    return String(r.stdout || '') + String(r.stderr || '');
+  };
+  const image = help('image', 'generate');
+  const speech = help('speech', 'synthesize');
+  const music = help('music', 'generate');
+  assert.ok(!image.includes('--model'), 'image manual must not regain --model');
+  assert.ok(!speech.includes('--sound-effect'), 'speech manual must not expose the no-op sound-effect flag');
+  for (const flag of ['--genre', '--mood', '--vocals', '--instruments', '--bpm', '--key', '--tempo', '--structure', '--references', '--avoid', '--use-case', '--extra']) {
+    assert.ok(music.includes(flag), `bundled music CLI must expose ${flag}`);
+  }
 });
 
 // ---- H9-002: documented schema matches the executor ----
@@ -163,7 +183,7 @@ test('H9-019 generateManual throws (does not return error text) when the registr
   const registry = require('../../../../main/services/importCapabilityRegistry');
   const orig = registry.CAPABILITIES.image.flags;
   // Corrupt one entry's description.
-  registry.CAPABILITIES.image.flags = orig.map((f) => f.flag === '--model' ? { flag: '--model', desc: '' } : f);
+  registry.CAPABILITIES.image.flags = orig.map((f) => f.flag === '--aspect-ratio' ? { flag: '--aspect-ratio', desc: '' } : f);
   try {
     assert.throws(() => generateManual(), /invalid/i, 'must throw on a broken registry');
   } finally {

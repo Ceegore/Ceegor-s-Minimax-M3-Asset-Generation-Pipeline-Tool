@@ -177,12 +177,6 @@
       const row = (labelText, inputEl) => el('div', { class: 'ie-asset-gen-row' },
         [el('label', { class: 'ie-asset-gen-label' }, labelText), inputEl]);
 
-      const styleSel = el('select', { class: 'ie-asset-gen-input', 'aria-label': 'Model / style' }, [
-        el('option', { value: 'image-01' }, 'image-01 — general purpose'),
-        el('option', { value: 'image-01-live' }, 'image-01-live — hand-drawn / cartoon'),
-      ]);
-      m.appendChild(row('Style', styleSel));
-
       const wIn = el('input', { type: 'number', min: 512, max: 2048, step: 8, value: 512, 'aria-label': 'Width' });
       const hIn = el('input', { type: 'number', min: 512, max: 2048, step: 8, value: 512, 'aria-label': 'Height' });
       m.appendChild(row('Size', el('div', { class: 'ie-asset-gen-size' },
@@ -226,7 +220,7 @@
             const params = { '--width': { value: w }, '--height': { value: h } };
             if (seedVal !== '') params['--seed'] = { value: Number(seedVal) };
             const vis = (window.ImageUtils && window.ImageUtils.isFlagVisibleForCurrentModel) || (() => true);
-            const errs = MS.validateTabAgainstSpec('image', params, styleSel.value, null, vis);
+            const errs = MS.validateTabAgainstSpec('image', params, null, null, vis);
             if (errs && errs.length) { status.textContent = errs[0]; return; }
           }
         } catch (_) { /* preflight is best-effort; the run itself re-validates */ }
@@ -258,7 +252,7 @@
           subtitle: 'Generate popover (image editor)',
           runFn: async (ctx) => {
             const aborted = () => !!(ctx && ctx.signal && ctx.signal.aborted);
-            const args = ['image', 'generate', '--prompt', promptText, '--model', styleSel.value,
+            const args = ['image', 'generate', '--prompt', promptText,
               '--width', String(w), '--height', String(h)];
             if (seedVal !== '') args.push('--seed', seedVal);
             args.push('--response-format', 'url');

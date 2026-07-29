@@ -23,8 +23,8 @@ test('image: real generation produces a file on disk (smoke)', async (t) => {
   const outFile = path.join(outDir, 'contract.png');
   try {
     const r = await runMmx({
-      args: ['image', 'generate', '--prompt', 'a small red circle on a white background', '--model', 'image-01', '--out', outFile],
-      apiKey, sessionOnly: false,
+      args: ['image', 'generate', '--prompt', 'a small red circle on a white background', '--out', outFile],
+      apiKey, sessionOnly: true,
     });
     if (skipOnQuota(t, r)) return; // KGO8-010: quota wall = NOT VERIFIED, not a contract failure
     assert.equal(r.ok, true, 'mmx should succeed; stderr: ' + (r.stderr || '').slice(0, 300));
@@ -45,8 +45,8 @@ test('image: --aspect-ratio 16:9 survives to the provider', async (t) => {
   const outFile = path.join(outDir, 'contract_ar.png');
   try {
     const r = await runMmx({
-      args: ['image', 'generate', '--prompt', 'a wide landscape banner', '--model', 'image-01', '--aspect-ratio', '16:9', '--out', outFile],
-      apiKey, sessionOnly: false,
+      args: ['image', 'generate', '--prompt', 'a wide landscape banner', '--aspect-ratio', '16:9', '--out', outFile],
+      apiKey, sessionOnly: true,
     });
     if (skipOnQuota(t, r)) return; // KGO8-010: quota wall = NOT VERIFIED, not a contract failure
     assert.equal(r.ok, true, 'mmx should succeed with --aspect-ratio; stderr: ' + (r.stderr || '').slice(0, 300));

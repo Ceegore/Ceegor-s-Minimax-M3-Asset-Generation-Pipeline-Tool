@@ -124,7 +124,6 @@
     appendFlag(args, 'channels', params.channels);
     if (params.language) args.push('--language', String(params.language));
     appendBoolFlag(args, 'subtitles', params.subtitles);
-    if (params['sound-effect']) args.push('--sound-effect', String(params['sound-effect']));
     const pron = (params.pronunciation || '').toString().trim();
     if (pron) {
       for (const rule of pron.split(',').map((s) => s.trim()).filter(Boolean)) {

@@ -167,7 +167,7 @@
   2. Verify speed options: 0.5–2.0, volume: 1–10, pitch: -12 to +12
   3. Set language boost to "en" → verify accepted
   4. Set subtitles to "On" → verify accepted
-  5. Verify sound-effect field is disabled
+  5. Verify no unsupported sound-effect field is shown
   6. Reset model to "speech-2.8-hd"
 - **Expected:** Voice list updates per model, all parameter ranges correct
 
@@ -509,11 +509,11 @@
 
      | Type | Prompt / Text | Parameters |
      |---|---|---|
-     | image | A massive old lighthouse on a narrow rocky headland at night during a violent storm, high waves crashing against black cliffs, white foam, moss-covered weathered walls, broken windows, irregular rotating light at the tower top, distant lightning illuminating a small drifting sailboat | --model image-01 --aspect-ratio 16:9 |
-     | image | A young woman in her early thirties standing before a massive wooden door carved with a circular symbol of three stars above an open hand, she wears a long dark green coat, heavy boots, a leather backpack, wet black hair clinging to her face, holding a flickering brass lantern in her right hand | --model image-01 --aspect-ratio 9:16 |
-     | image | Interior of a round narrow lighthouse entrance hall, iron spiral staircase leading up, yellowed nautical maps and old photographs and rusty tools on walls, water dripping through ceiling cracks, broken glass on the floor, a small wooden table with a mechanical radio device made of dark wood and brass knobs with a large round frequency dial, a green control lamp glowing | --model image-01 --aspect-ratio 4:3 |
-     | image | Close-up of a vintage mechanical radio device on a wooden table, dark wood housing, polished brass knobs, large round frequency display, a single glowing green indicator lamp, dust particles in dim light, no electricity yet the lamp shines | --model image-01 --aspect-ratio 1:1 |
-     | image | A tall unnaturally thin figure at the top of an iron spiral staircase, body hidden by a long wet coat, where the face should be there is only a smooth mirror-like reflective surface, long fingers made of black glass resting on the railing, dim lighthouse interior, horror atmosphere | --model image-01 --aspect-ratio 9:16 |
+     | image | A massive old lighthouse on a narrow rocky headland at night during a violent storm, high waves crashing against black cliffs, white foam, moss-covered weathered walls, broken windows, irregular rotating light at the tower top, distant lightning illuminating a small drifting sailboat | --aspect-ratio 16:9 |
+     | image | A young woman in her early thirties standing before a massive wooden door carved with a circular symbol of three stars above an open hand, she wears a long dark green coat, heavy boots, a leather backpack, wet black hair clinging to her face, holding a flickering brass lantern in her right hand | --aspect-ratio 9:16 |
+     | image | Interior of a round narrow lighthouse entrance hall, iron spiral staircase leading up, yellowed nautical maps and old photographs and rusty tools on walls, water dripping through ceiling cracks, broken glass on the floor, a small wooden table with a mechanical radio device made of dark wood and brass knobs with a large round frequency dial, a green control lamp glowing | --aspect-ratio 4:3 |
+     | image | Close-up of a vintage mechanical radio device on a wooden table, dark wood housing, polished brass knobs, large round frequency display, a single glowing green indicator lamp, dust particles in dim light, no electricity yet the lamp shines | --aspect-ratio 1:1 |
+     | image | A tall unnaturally thin figure at the top of an iron spiral staircase, body hidden by a long wet coat, where the face should be there is only a smooth mirror-like reflective surface, long fingers made of black glass resting on the railing, dim lighthouse interior, horror atmosphere | --aspect-ratio 9:16 |
      | speech | Bitte lass mich nicht zu spät sein. | --model speech-2.8-hd --voice English_captivating_female1 --speed 0.95 --language de |
      | speech | Mara, wenn du diese Nachricht hörst, hat das Licht bereits begonnen zu erlöschen. Du kannst mich nicht erreichen. Diese Übertragung wurde vor sieben Jahren aufgenommen. Im oberen Raum findest du eine Linse aus schwarzem Glas. Sie darf niemals das erste Licht des Morgens sehen. Bring sie vor Sonnenaufgang zur Klippe und wirf sie ins Meer. Und Mara, vertraue nicht der Stimme, die wie meine klingt. | --model speech-2.8-hd --voice English_ManWithDeepVoice --speed 0.9 --language de |
      | speech | Er hat dich also doch gerufen. Ich bin der Grund, warum das Licht niemals erlöschen darf. | --model speech-2.8-hd --voice English_Deep-VoicedGentleman --speed 0.85 --language de |

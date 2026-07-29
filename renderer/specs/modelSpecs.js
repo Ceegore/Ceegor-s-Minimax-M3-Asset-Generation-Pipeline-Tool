@@ -54,12 +54,11 @@ const MODEL_SPECS = {
       '--volume',     // 0–10, step 1, default 0
       '--pitch',      // -12..+12 semitones, step 1, default 0
       '--format',     // mp3 / wav / pcm / flac / opus / pcmu_raw / pcmu_wav
-      '--sample-rate',// 8000/16000/22050/24000/32000/44100/48000
+      '--sample-rate',// 8000/16000/22050/24000/32000/44100
       '--bitrate',    // 32000..320000
       '--channels',   // 1 / 2
       '--language',   // 2-letter code or 'auto' (voice-dependent)
       '--subtitles',  // boolean (saves .srt alongside audio)
-      '--sound-effect',
       '--pronunciation', // from=to list
       '--emotion',    // happy/sad/angry/fearful/surprised/disgusted/neutral
       '--text',       // the textarea; mandatory
@@ -92,6 +91,7 @@ const MODEL_SPECS = {
       '--sample-rate',        // 8000/16000/22050/24000/32000/44100 (music-2.0 supports 8000)
       '--bitrate',            // 32000/64000/128000/256000
       '--format',             // mp3 (default) / wav / pcm
+      '--genre', '--mood', '--vocals', '--instruments', '--bpm', '--key', '--tempo', '--structure', '--references', '--avoid', '--use-case', '--extra', '--output-format', '--aigc-watermark',
     ],
     perRowOverrides: {
       // music-2.0 does NOT support --instrumental, --lyrics, or

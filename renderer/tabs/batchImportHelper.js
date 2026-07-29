@@ -393,7 +393,7 @@ function parseParams(paramStr) {
 // their canonical executor flag so the row actually executes.
 function buildImportedEntry(type, prompt, params) {
   // First resolve aliases → canonical executor flag (H9-002).
-  const resolved = resolveAliases(type, params || {});
+  const { params: resolved, warnings: migrationWarnings } = window.BatchImportCompatibility.migrateLegacyParams(type, resolveAliases(type, params || {}));
   // H9-014: a `prompt`/`text` key in Parameters must NOT override the table's
   // Prompt/Text column (the canonical object persisted + executed validates the
   // table prompt). Drop them here; an explicit prompt in Parameters is flagged
@@ -406,7 +406,7 @@ function buildImportedEntry(type, prompt, params) {
       delete resolved[k];
     }
   }
-  const entry = { prompt, ...resolved };
+  const entry = { prompt, ...resolved, ...(migrationWarnings.length ? { _importWarnings: migrationWarnings } : {}) };
   const errors = [];
   if (promptOverrideAttempt) {
     errors.push('A "prompt" or "text" key in the Parameters column was ignored — put the prompt in the Prompt / Text column.');
@@ -415,7 +415,7 @@ function buildImportedEntry(type, prompt, params) {
     // Unknown-key check (H9-008): must run BEFORE validateValues so an unknown
     // key is reported even when validateValues has nothing to say about it.
     const unknown = findUnknownKeys(type, resolved);
-    for (const k of unknown) errors.push(`Unknown or unsupported parameter "${k}" for ${type}. It will be ignored — remove it or check the spelling.`);
+    for (const k of unknown) errors.push(window.BatchImportCompatibility.unsupportedReason(type, k));
     const vv = window.ModelSpecs && window.ModelSpecs.validateValues;
     if (vv) {
       const { errors: vvErrors } = vv(type, Object.assign({}, resolved, { prompt }), { partial: true });

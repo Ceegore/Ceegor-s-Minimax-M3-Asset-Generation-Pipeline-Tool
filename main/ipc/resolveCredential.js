@@ -8,7 +8,7 @@
 //
 //   • If the payload carries `rendererApiKey` (a non-empty string)
 //     AND `sessionOnly: true`, the resolver uses the renderer-supplied
-//     key for THIS call only and routes it through MMX_API_KEY env
+//     key for THIS call only and routes it through the session bootstrap
 //     (never ~/.mmx/config.json). The persisted config.txt api_key
 //     is irrelevant here; it stays empty for session-only users.
 //
@@ -44,10 +44,12 @@ function _isSessionOnlyFromState(stateMod) {
 
 let _cfgMod = null;
 let _stateMod = null;
+let _sessionStore = null;
 function _loadDeps() {
   if (!_cfgMod) _cfgMod = require('../../src/config');
   if (!_stateMod) _stateMod = require('../../src/state');
-  return { cfgMod: _cfgMod, stateMod: _stateMod };
+  if (!_sessionStore) _sessionStore = require('../services/SessionCredentialStore');
+  return { cfgMod: _cfgMod, stateMod: _stateMod, sessionStore: _sessionStore };
 }
 
 /**
@@ -70,7 +72,13 @@ function resolveCredential(payload, deps) {
   try {
     const cfg = _deps.cfgMod.read();
     const persistedSessionOnly = _isSessionOnlyFromState(_deps.stateMod);
-    return { apiKey: cfg && cfg.api_key ? cfg.api_key : null, sessionOnly: persistedSessionOnly };
+    const sessionKey = _deps.sessionStore && _deps.sessionStore.getSessionCredential
+      ? _deps.sessionStore.getSessionCredential() : null;
+    if (sessionKey) return { apiKey: sessionKey, sessionOnly: true };
+    if (persistedSessionOnly) {
+      return { apiKey: null, sessionOnly: true, error: 'No session API key configured. Re-enter it in Settings.' };
+    }
+    return { apiKey: cfg && cfg.api_key ? cfg.api_key : null, sessionOnly: false };
   } catch (_) {
     return { apiKey: null, sessionOnly: false, error: 'mmx: failed to read persisted config' };
   }
@@ -82,7 +90,7 @@ function resolveCredential(payload, deps) {
 function _resetForTest() {
   _cfgMod = null;
   _stateMod = null;
+  _sessionStore = null;
 }
 
 module.exports = { resolveCredential, _resetForTest };
-

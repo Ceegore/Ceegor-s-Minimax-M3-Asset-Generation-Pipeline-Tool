@@ -140,7 +140,8 @@ test('runMmx in session-only mode does NOT put the key in argv and tags the env 
   assert.ok(!capturedArgs.join(' ').includes(SECRET), 'session-only key leaked into argv');
   assert.ok(!capturedArgs.includes('--api-key'), '--api-key flag must not be present in session-only mode');
   // Key must be in the process-local env.
-  assert.equal(capturedEnv && capturedEnv.MMX_API_KEY, SECRET, 'MMX_API_KEY env must carry the session key');
+  assert.equal(capturedEnv && capturedEnv.MINIMAX_API_KEY, SECRET, 'MINIMAX_API_KEY env must carry the session key');
+  assert.equal(capturedArgs[0], '-e', 'session-only mode must use the argv-hidden bootstrap');
 });
 
 // ---------------- H7-025: canceled resolves neutral ----------------

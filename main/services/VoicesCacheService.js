@@ -27,7 +27,7 @@ async function get(apiKey, opts) {
   let apiFailed = false;
   if (apiKey) {
     // Honor session-only mode: when the user opted out of persisting the key,
-    // route it via the ephemeral MMX_API_KEY env var instead of syncing it to
+    // route it via the ephemeral session bootstrap instead of syncing it to
     // ~/.mmx/config.json (which would break the "never touches disk" promise).
     // The caller (registerMmxIpc mmx:voices) reads state.apiKeyNoSave and
     // passes sessionOnly through here. (360°-sweep fix, same class as H7-022.)

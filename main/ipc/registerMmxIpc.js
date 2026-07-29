@@ -34,14 +34,7 @@ const { buildDiagnoseSnapshot } = require('./diagnoseSnapshot');
 // source. This catches any future emission path that bypasses the source fix.
 const { redactRunMmxResult: _redactResult } = require('../../src/mmxResultRedactor');
 const cfgMod = require('../../src/config');
-// Read persisted UI state to honour the "session-only API key" toggle. When
-// the user opted out of saving the key, we pass sessionOnly:true to runMmx so
-// the key is delivered via an ephemeral env var instead of being written to
-// ~/.mmx/config.json (H7-022).
 const stateMod = require('../../src/state');
-function _isSessionOnly() {
-  try { return !!(stateMod.read && stateMod.read().apiKeyNoSave); } catch (_) { return false; }
-}
 
 // R2.2: credential resolver extracted to ./resolveCredential.js so this
 // file stays under its frozen 384-line SIZE-BUDGET. The helper is the
@@ -119,7 +112,7 @@ function register({ getMainWindow, appRoot }) {
       // session-only payload is missing the key.
       const cred = _resolveCredential(null);
       if (cred.error || !cred.apiKey) {
-        return { ok: false, code: -1, stdout: '', stderr: cred.error || 'No API key configured. Edit config.txt next to the .exe.', parsed: null };
+        return { ok: false, code: -1, stdout: '', stderr: cred.error || 'No API key configured. Open Settings and enter a key.', parsed: null };
       }
       return _redactResult(await runMmx({ args, apiKey: cred.apiKey, sessionOnly: cred.sessionOnly, onLog: sendLog }));
     } catch (e) {
@@ -184,7 +177,7 @@ function register({ getMainWindow, appRoot }) {
       // persisted config + the persisted apiKeyNoSave toggle.
       const cred = _resolveCredential(payload);
       if (cred.error || !cred.apiKey) {
-        return { ok: false, code: -1, stdout: '', stderr: cred.error || 'No API key configured. Edit config.txt next to the .exe.', parsed: null };
+        return { ok: false, code: -1, stdout: '', stderr: cred.error || 'No API key configured. Open Settings and enter a key.', parsed: null };
       }
       return _redactResult(await runMmx({
         args,
@@ -209,8 +202,9 @@ function register({ getMainWindow, appRoot }) {
 
   ipcMain.handle('mmx:voices', async () => {
     try {
-      const cfg = cfgMod.read();
-      return await voicesCache.get(cfg.api_key || '', { sessionOnly: _isSessionOnly() });
+      const cred = _resolveCredential(null);
+      if (cred.error || !cred.apiKey) return [];
+      return await voicesCache.get(cred.apiKey, { sessionOnly: cred.sessionOnly });
     } catch (e) {
       return [];
     }
@@ -218,9 +212,9 @@ function register({ getMainWindow, appRoot }) {
 
   ipcMain.handle('mmx:quota', async () => {
     try {
-      const cfg = cfgMod.read();
-      if (!cfg.api_key) return { ok: false, error: 'No API key configured.' };
-      const r = await runMmx({ args: ['quota'], apiKey: cfg.api_key, sessionOnly: _isSessionOnly(), onLog: () => {} });
+      const cred = _resolveCredential(null);
+      if (cred.error || !cred.apiKey) return { ok: false, error: cred.error || 'No API key configured.' };
+      const r = await runMmx({ args: ['quota'], apiKey: cred.apiKey, sessionOnly: cred.sessionOnly, onLog: () => {} });
       if (!r.ok) return { ok: false, error: r.stderr || r.stdout || 'mmx quota failed', parsed: r.parsed };
       return { ok: true, parsed: r.parsed };
     } catch (e) {
@@ -241,9 +235,9 @@ function register({ getMainWindow, appRoot }) {
       if (_profileCache && (Date.now() - _profileCache.ts) < PROFILE_TTL_MS) {
         return _profileCache.payload;
       }
-      const cfg = cfgMod.read();
-      if (!cfg.api_key) return { ok: false, error: 'No API key configured.', concurrentLimit: null };
-      const r = await runMmx({ args: ['quota'], apiKey: cfg.api_key, sessionOnly: _isSessionOnly(), onLog: () => {} });
+      const cred = _resolveCredential(null);
+      if (cred.error || !cred.apiKey) return { ok: false, error: cred.error || 'No API key configured.', concurrentLimit: null };
+      const r = await runMmx({ args: ['quota'], apiKey: cred.apiKey, sessionOnly: cred.sessionOnly, onLog: () => {} });
       const payload = parseProfile(r);
       // Only cache successful responses. Caching an error envelope
       // would mean a single transient failure (network blip, auth
@@ -321,11 +315,11 @@ function register({ getMainWindow, appRoot }) {
 
   ipcMain.handle('mmx:authStatus', async () => {
     try {
-      const cfg = cfgMod.read();
-      if (!cfg.api_key) return { ok: false, error: 'No API key configured.' };
+      const cred = _resolveCredential(null);
+      if (cred.error || !cred.apiKey) return { ok: false, error: cred.error || 'No API key configured.' };
       // The most reliable "is this key valid?" signal is a real API call.
       // We use `mmx quota --output json` and inspect the response.
-      const r = await runMmx({ args: ['quota'], apiKey: cfg.api_key, sessionOnly: _isSessionOnly(), onLog: sendLog });
+      const r = await runMmx({ args: ['quota'], apiKey: cred.apiKey, sessionOnly: cred.sessionOnly, onLog: sendLog });
       if (!r.command) {
         return { ok: false, error: r.stderr || 'mmx unavailable', command: null, argv: null };
       }

@@ -139,7 +139,6 @@ test('R7.3.SPEECH.2: full speech request (all common params)', async () => {
     format: 'wav',
     'sample-rate': '44100',
     subtitles: 'true',
-    'sound-effect': 'C:\\sfx\\intro.mp3',
     language: 'en',
   };
   const { args } = await buildSpeechArgs(params, makeCtx());
@@ -156,7 +155,6 @@ test('R7.3.SPEECH.2: full speech request (all common params)', async () => {
   assert.equal(getFlag(args, 'format'), 'wav');
   assert.equal(getFlag(args, 'sample-rate'), '44100');
   assert.ok(hasBoolFlag(args, 'subtitles'), 'subtitles must be set');
-  assert.equal(getFlag(args, 'sound-effect'), 'C:\\sfx\\intro.mp3');
   assert.equal(getFlag(args, 'language'), 'en');
 });
 
@@ -474,8 +472,6 @@ test('R7.3.GATE speech: every visible value appears in argv', async () => {
     channels: '2',
     language: 'en',
     subtitles: 'true',
-    'sound-effect': 'happy',
-    emotion: 'happy',
   }, makeCtx());
   // Every visible value must appear in the argv.
   assert.ok(args.includes('speech-2.8-hd'), 'model value in argv');
@@ -487,7 +483,6 @@ test('R7.3.GATE speech: every visible value appears in argv', async () => {
   assert.ok(args.includes('44100'), 'sample-rate value in argv');
   assert.ok(args.includes('en'), 'language value in argv');
   assert.ok(args.includes('--subtitles'), 'subtitles flag in argv');
-  assert.ok(args.includes('happy'), 'emotion/sound-effect value in argv');
 });
 
 test('R7.3.GATE image: every visible value appears in argv', async () => {

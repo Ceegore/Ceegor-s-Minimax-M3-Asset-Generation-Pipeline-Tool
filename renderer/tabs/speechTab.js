@@ -148,15 +148,6 @@ The language hint mainly helps with mixed-language text (e.g. English narration 
       kind: 'boolean', default: false,
       help: 'Also save a .srt subtitle file alongside the audio. The .srt has the same base filename as the audio (e.g. speech_xxx.mp3 + speech_xxx.srt) and contains sentence-level timestamps.\n\nUseful for:\n  • Video projects (you can mux the .srt into an MP4 with ffmpeg).\n  • Accessibility (captioning for hearing-impaired viewers).\n  • Searchable transcripts (the .srt is plain text, easy to grep).',
     });
-    const soundEffect = buildParamRow('--sound-effect', {
-      kind: 'text', default: '',
-      placeholder: 'Path or URL to a sound effect',
-      fileFilters: [
-        { name: 'Audio', extensions: ['mp3', 'wav', 'flac', 'ogg', 'm4a'] },
-        { name: 'All files', extensions: ['*'] }
-      ],
-      help: 'Optional background sound effect file to mix under the voice. You can pick a local audio file or provide a URL.',
-    });
     const pronunciation = buildParamRow('--pronunciation (repeatable)', {
       kind: 'text', default: '',
       help: 'Custom pronunciation rule in the form "from=to". Tells the model to always read "from" as "to".\n\nExamples:\n  • "GIF=Gif" — say GIF as "gif" (not "jiff")\n  • "SQL=sequel" — say SQL as "sequel"\n  • "NGO=en-gee-oh" — spell out an acronym\n\nTo add multiple rules, separate them with a comma: "GIF=Gif,SQL=sequel". The "repeatable" in the label means the API accepts the flag multiple times for separate rules.',
@@ -174,8 +165,8 @@ The language hint mainly helps with mixed-language text (e.g. English narration 
         pitch.row, format.row,
         sampleRate.row, bitrate.row,
         channels.row, language.row,
-        subtitles.row, soundEffect.row,
-        pronunciation.row, variants.row,
+        subtitles.row, pronunciation.row,
+        variants.row,
       ]),
     ]));
 
@@ -198,21 +189,6 @@ The language hint mainly helps with mixed-language text (e.g. English narration 
     // to a module-level helper to keep build() under the 500-line
     // lint limit.
     attachModelChangeVoiceRepopulate(this, model.input, voice.input);
-
-    // GEN-001: disable controls for flags the installed CLI doesn't support.
-    // The CapabilityGuard probes the real `mmx <sub> --help` output; flags
-    // absent from the help are silently dropped by the CLI (costs money but
-    // has no effect). Disabling the control makes this visible up front.
-    if (window.CapabilityGuard && window.CapabilityGuard.isLoaded()) {
-      const _dis = (flag, r) => {
-        if (!window.CapabilityGuard.isFlagSupported('speech', flag)) {
-          r.row.classList.add('disabled'); r.row.title = 'Not supported by the installed mmx-cli';
-          r.row.appendChild(el('span', { class: 'capability-note' }, 'Needs a newer mmx-cli'));
-          r.row.querySelectorAll('select, input, textarea, button').forEach((inp) => { inp.disabled = true; });
-        }
-      };
-      _dis('--sound-effect', soundEffect);
-    }
 
     genBtn.addEventListener('click', async () => {
       // Breadcrumb the click BEFORE guards.
@@ -269,7 +245,6 @@ The language hint mainly helps with mixed-language text (e.g. English narration 
         '--channels': channels.input,
         '--language': language.input,
         '--subtitles': subtitles.input,
-        '--sound-effect': soundEffect.input,
         '--pronunciation': pronunciation.input,
         // --emotion is part of the speech spec (model-2.6+ only,
         // hidden otherwise) but has no row on this tab. Pass it
@@ -411,7 +386,6 @@ The language hint mainly helps with mixed-language text (e.g. English narration 
           appendFlag(args, channels.input);
           if (language.input.getValue()) args.push('--language', String(language.input.getValue()));
           appendBoolFlag(args, subtitles.input, '--subtitles');
-          if (!soundEffect.input.el.disabled && soundEffect.input.getValue()) args.push('--sound-effect', String(soundEffect.input.getValue()));
           if (pronunciation.input.value && pronunciation.input.value.trim()) {
             for (const rule of pronunciation.input.value.split(',').map(s => s.trim()).filter(Boolean)) {
               args.push('--pronunciation', rule);

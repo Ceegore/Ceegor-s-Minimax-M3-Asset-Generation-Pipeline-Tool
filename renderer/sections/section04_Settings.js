@@ -189,7 +189,7 @@ function openSettings() {
       // saveBtn-handler body-extraction regex (used by the legacy
       // v1129 A1/A2 tests) from truncating on an inline object
       // literal. See those tests for the brittle regex pattern.
-      const setConfigPayload = { cfg: merged, apiKeyNoSave: !!apiKeyNoSave, grants: collectedGrants };
+      const setConfigPayload = { cfg: merged, apiKeyNoSave: !!apiKeyNoSave, sessionApiKey: apiKeyInMemory, grants: collectedGrants };
       const result = await window.api.setConfig(setConfigPayload);
       // config:set returns an envelope `{ ok, config, error, warnings? }`.
       // A write failure (read-only fs, disk full, permission revoked)
@@ -318,4 +318,3 @@ function openSettings() {
     activateSettingsTab('general');
   }, { id: 'settings' });
 }
-

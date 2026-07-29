@@ -20,7 +20,6 @@
 
 const path = require('path');
 const { ipcMain, dialog } = require('electron');
-
 const cfgMod = require('../../src/config');
 const { sanitize } = require('../models/ConfigSchema');
 const { defaultService: pathGrantService } = require('../services/PathGrantService');
@@ -42,6 +41,7 @@ const pathSecurity = require('../services/PathSecurityService');
 // no-op for the mmx side, even though config.txt is clean.
 const { clearApiKeyFromMmxCliConfig } = require('../../src/mmxApiKeySync');
 const voicesCache = require('../services/VoicesCacheService');
+const { updateSessionCredential } = require('../services/updateSessionCredential');
 
 const PURPOSE_TO_ORIGIN = Object.freeze({
   'config-output': 'config-output',
@@ -136,8 +136,9 @@ function register({ getMainWindow }) {
       const prevReportDir = (prev && typeof prev.report_dir === 'string') ? prev.report_dir.trim() : '';
       const outputDirChanged = cfg.output_dir !== undefined && newOutputDir !== prevOutputDir;
       const reportDirChanged = cfg.report_dir !== undefined && newReportDir !== prevReportDir;
+      const outputIsMainDefault = outputDirChanged && path.resolve(newOutputDir) === path.resolve(cfgMod.defaultOutputDir());
 
-      if (outputDirChanged) {
+      if (outputDirChanged && !outputIsMainDefault) {
         if (!grants.output_dir || typeof grants.output_dir !== 'string') {
           return {
             ok: false,
@@ -197,6 +198,7 @@ function register({ getMainWindow }) {
       }
       const safe = sanitize(Object.assign({}, prev, cfg)); // KGO5-013: merge preserves absent fields
       cfgMod.write(safe);
+      if (isWrapped && typeof payload.apiKeyNoSave === 'boolean') updateSessionCredential(apiKeyNoSave, payload.sessionApiKey);
       if (typeof voicesCache?.reset === 'function') {
         try { voicesCache.reset(); } catch { /* best-effort */ }
       }
@@ -365,4 +367,3 @@ function loadPremadeStylesFromDisk() {
 }
 
 module.exports = { register, parseStylePresetsFromMarkdown, loadPremadeStylesFromDisk };
-

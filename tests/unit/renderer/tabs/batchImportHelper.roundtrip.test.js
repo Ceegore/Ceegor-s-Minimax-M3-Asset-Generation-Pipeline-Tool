@@ -92,7 +92,6 @@ test('parseParams: handles every supported flag in speech tab (current spec)', (
     '--channels': '2',
     '--language': 'en',
     '--subtitles': 'true',
-    '--sound-effect': 'gunshot.wav',
     '--pronunciation': 'tomato/tom-ah-to',
     '--emotion': 'happy',
     '--text': 'hello world',
@@ -118,6 +117,10 @@ test('parseParams: handles every supported flag in music tab (current spec)', ()
     '--sample-rate': '44100',
     '--bitrate': '256000',
     '--format': 'mp3',
+    '--genre': 'jazz', '--mood': 'calm', '--vocals': 'choir', '--instruments': 'piano',
+    '--bpm': '95', '--key': 'C major', '--tempo': 'moderate', '--structure': 'intro-outro',
+    '--references': 'reference track', '--avoid': 'distortion', '--use-case': 'game ambience',
+    '--extra': 'seamless loop', '--output-format': 'url', '--aigc-watermark': 'true',
   };
   for (const [flag, val] of Object.entries(samples)) {
     assert.ok(tab.supportedFlags.includes(flag), `spec missing ${flag}`);
@@ -180,4 +183,4 @@ function readExampleTemplates() {
   if (!txtMatch) throw new Error('Could not extract txt example templates from registerBatchesIpc.js');
   return { md: generateManual(), txt: txtMatch[1] };
 }
-
+

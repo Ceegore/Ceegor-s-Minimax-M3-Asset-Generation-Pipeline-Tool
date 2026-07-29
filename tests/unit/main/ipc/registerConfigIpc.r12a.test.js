@@ -24,6 +24,8 @@ const ROOT = path.resolve(__dirname, '..', '..', '..', '..');
 const CFG_IPC = path.join(ROOT, 'main', 'ipc', 'registerConfigIpc.js');
 const PATH_SECURITY = path.join(ROOT, 'main', 'services', 'PathSecurityService.js');
 const PATH_GRANT = path.join(ROOT, 'main', 'services', 'PathGrantService.js');
+const MMX_KEY_SYNC = path.join(ROOT, 'src', 'mmxApiKeySync.js');
+const SESSION_STORE = path.join(ROOT, 'main', 'services', 'SessionCredentialStore.js');
 
 const TMP = fs.mkdtempSync(path.join(os.tmpdir(), 'mmx-r12a-cfg-'));
 
@@ -33,7 +35,7 @@ test.after(() => {
 
 // ---- Helper: load registerConfigIpc with mocked electron + dialog. ----
 function loadIpc({ openResult, dialogError = null } = {}) {
-  for (const p of [CFG_IPC, PATH_SECURITY, PATH_GRANT]) {
+  for (const p of [CFG_IPC, PATH_SECURITY, PATH_GRANT, MMX_KEY_SYNC]) {
     try { delete require.cache[require.resolve(p)]; } catch (_) {}
   }
   // Reset the defaultService singleton between tests.
@@ -55,6 +57,10 @@ function loadIpc({ openResult, dialogError = null } = {}) {
       getActiveDir: () => null,
     },
   };
+  require.cache[require.resolve(MMX_KEY_SYNC)] = {
+    exports: { clearApiKeyFromMmxCliConfig: () => true, syncApiKeyToMmxCliConfig: () => true },
+  };
+  require(SESSION_STORE)._resetForTest();
   require.cache[require.resolve('electron')] = {
     exports: {
       ipcMain: { handle: (ch, fn) => handlers.set(ch, fn) },
@@ -151,6 +157,30 @@ test('R1.2a.E: config:set rejects an output_dir change without a grant', async (
   assert.match(r.error, /output_dir changed but no grant/i);
   assert.match(r.error, /config:pickFolder/i,
     'error message must direct the caller to the picker path');
+});
+
+test('first run accepts the Main-owned default output directory without a Browse grant', async () => {
+  const { handlers } = loadIpc({});
+  const cfgMod = require(path.join(ROOT, 'src', 'config'));
+  cfgMod.write(cfgMod.defaultConfig());
+  const defaultDir = await handlers.get('config:defaultOutputDir')();
+  const r = await handlers.get('config:set')({}, {
+    cfg: { api_key: 'sk-first-run', output_dir: defaultDir },
+    grants: {},
+  });
+  assert.equal(r.ok, true, r.error);
+  assert.equal(r.config.output_dir, defaultDir);
+  assert.equal(r.config.api_key, 'sk-first-run');
+});
+
+test('session-only Settings save stores the key in Main memory and never in config.txt', async () => {
+  const { handlers } = loadIpc({});
+  const r = await handlers.get('config:set')({}, {
+    cfg: { api_key: '' }, apiKeyNoSave: true, sessionApiKey: 'sk-session-only', grants: {},
+  });
+  assert.equal(r.ok, true, r.error);
+  assert.equal(r.config.api_key, '');
+  assert.equal(require(SESSION_STORE).getSessionCredential(), 'sk-session-only');
 });
 
 // R1.2a.F: changing output_dir WITH a valid grant is accepted.

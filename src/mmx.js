@@ -15,6 +15,11 @@ const { redactRunMmxResult: _redactRunMmxResult, redactStderrChunk: _redactStder
 const { findNodeExe, findMmxEntry, needsRunAsNode, isWindows } = require('./mmxResolve');
 
 const AGENT_FLAGS = ['--non-interactive'];
+// mmx-cli 1.0.18 notices MINIMAX_API_KEY but does not promote it to the
+// non-interactive command context. This bootstrap consumes the ephemeral env
+// value inside the child and injects it into process.argv only after spawn, so
+// the key never appears in the operating-system process command line.
+const SESSION_KEY_BOOTSTRAP = "const{pathToFileURL}=require('url');const[e,...a]=process.argv.slice(1);const k=process.env.MINIMAX_API_KEY;delete process.env.MINIMAX_API_KEY;process.argv=[process.execPath,e,...a,'--api-key',k];import(pathToFileURL(e).href)";
 
 // Route the API key through mmx-cli's own config file instead of --api-key argv.
 // On Windows, any local process can read every other process's argv via WMI,
@@ -70,6 +75,11 @@ function buildChildEnv() {
   if (process.env.MINIMAX_NODE_PATH) env.MINIMAX_NODE_PATH = process.env.MINIMAX_NODE_PATH;
   // Node-specific: tell node where to find the mmx-cli module.
   if (process.env.NODE_PATH) env.NODE_PATH = process.env.NODE_PATH;
+  // Explicit network-only opt-ins. Proxy settings are required for users
+  // whose browser works through a corporate/system proxy while Node does not.
+  for (const name of ['HTTPS_PROXY', 'https_proxy', 'HTTP_PROXY', 'http_proxy', 'ALL_PROXY', 'all_proxy', 'NO_PROXY', 'no_proxy', 'NODE_EXTRA_CA_CERTS']) {
+    if (process.env[name]) env[name] = process.env[name];
+  }
   return env;
 }
 
@@ -129,7 +139,7 @@ function compareSemver(a, b) {
 // The mmx-cli range this build was developed + tested against. An installed
 // runtime outside the tested range triggers a warn (Phase A) / block (Phase B).
 // Bump the floor as the project's pinned/tested version advances.
-const SUPPORTED_MMX = { min: '1.0.16', recommended: '1.0.16' };
+const SUPPORTED_MMX = { min: '1.0.16', recommended: '1.0.18' };
 
 // safeCall wraps a best-effort renderer callback so a throw (e.g. a buggy
 // onLog in the LogService) cannot abort a long-running mmx job. Used for
@@ -236,17 +246,19 @@ function runMmx({ args, apiKey, cwd, onLog, onChunk, jobId, sessionOnly }) {
     // We must NOT write it to ~/.mmx/config.json (that would break the
     // "credentials never touch disk" promise). The argv fallback would also
     // put the key on disk via the OS command audit log, so we route the key
-    // through an ephemeral process-local env var (MMX_API_KEY) instead. The
+    // through an ephemeral process-local env var and child bootstrap instead. The
     // env is never persisted and dies with the child process.
     let keySyncedToConfig = false;
     let keyInArgv = false;
     let childEnv = buildChildEnv();
+    let spawnArgs = fullArgs;
     if (apiKey) {
       if (sessionOnly) {
         // Ephemeral env: process-local, never written to disk, gone when the
-        // child exits. mmx-cli reads MMX_API_KEY with the same priority as
-        // --api-key.
-        childEnv = { ...childEnv, MMX_API_KEY: apiKey };
+        // child exits. The bootstrap injects --api-key only inside the child,
+        // after the OS process command line has already been created.
+        childEnv = { ...childEnv, MINIMAX_API_KEY: apiKey };
+        spawnArgs = ['-e', SESSION_KEY_BOOTSTRAP, ...fullArgs];
       } else {
         keySyncedToConfig = _syncApiKeyToMmxCliConfig(apiKey);
         if (!keySyncedToConfig) {
@@ -299,7 +311,7 @@ function runMmx({ args, apiKey, cwd, onLog, onChunk, jobId, sessionOnly }) {
       if (needsRunAsNode(r.command)) childEnv = { ...childEnv, ELECTRON_RUN_AS_NODE: '1' };
       // Use a whitelisted env instead of the full process.env — see
       // buildChildEnv for the rationale.
-      proc = spawn(r.command, fullArgs, { cwd: safeCwd, windowsHide: true, env: childEnv });
+      proc = spawn(r.command, spawnArgs, { cwd: safeCwd, windowsHide: true, env: childEnv });
       // Track every active proc in a Set so cancelOne(proc) can kill a
       // specific in-flight generation while leaving sibling procs (e.g. a
       // parallel quota check) alone. cancelAll() remains the "panic" button.

@@ -29,7 +29,6 @@ const CAPABILITIES = {
   image: {
     promptMax: 1500,
     flags: [
-      { flag: '--model', desc: 'Generation model. image-01 (default, higher quality) or image-01-live (lower latency).', allowed: ['image-01', 'image-01-live'], default: 'image-01' },
       { flag: '--aspect-ratio', desc: 'Output aspect ratio. Overrides width/height when set. 21:9 is image-01 only.', allowed: ['1:1', '16:9', '9:16', '4:3', '3:4', '2:3', '3:2', '21:9'], default: '1:1' },
       { flag: '--width', desc: 'Custom width (image-01 only). 512–2048, multiple of 8. Must pair with --height; overrides aspect-ratio.', allowed: '512–2048, step 8' },
       { flag: '--height', desc: 'Custom height (image-01 only). 512–2048, multiple of 8. Must pair with --width.', allowed: '512–2048, step 8' },
@@ -68,7 +67,7 @@ const CAPABILITIES = {
       { flag: '--volume', desc: 'Gain.', allowed: '0–10 (exclusiveMin 0)', default: '0' },
       { flag: '--pitch', desc: 'Pitch in semitones.', allowed: '-12..+12', default: '0' },
       { flag: '--format', desc: 'Audio container.', allowed: ['mp3', 'wav', 'pcm', 'flac', 'opus', 'pcmu_raw', 'pcmu_wav'], default: 'mp3' },
-      { flag: '--sample-rate', desc: 'Sample rate (Hz).', allowed: [8000, 16000, 22050, 24000, 32000, 44100, 48000], default: '32000' },
+      { flag: '--sample-rate', desc: 'Sample rate (Hz).', allowed: [8000, 16000, 22050, 24000, 32000, 44100], default: '32000' },
       { flag: '--bitrate', desc: 'Bitrate. Only affects mp3/opus (wav/pcm/flac are lossless).', allowed: [32000, 64000, 128000, 256000], default: '128000' },
       { flag: '--channels', desc: '1 = mono, 2 = stereo.', allowed: [1, 2], default: '1' },
       { flag: '--language', desc: '2-letter code or "auto" (voice-dependent).', allowed: 'ISO 639-1 or "auto"' },
@@ -78,7 +77,6 @@ const CAPABILITIES = {
       // exposes no live control/argv for it, so it is a silent no-op. We do NOT
       // document it here until a real consumer exists (H9-002): documenting a
       // setting the executor ignores can spend a request for nothing.
-      { flag: '--sound-effect', desc: 'Sound-effect generation mode (CLI 1.0.16+ may silently drop this on older runtimes — check capability probe).', allowed: 'sound-effect prompt text', note: 'The installed CLI may not support this flag; the CapabilityGuard disables the control when unsupported.' },
       { flag: '--variants', desc: 'Re-runs the generator N times for one prompt (1–5).', allowed: '1–5', default: '1' },
       // H9-018: deterministic audio trim as a batch post-step.
       { flag: '--trim-start', desc: 'Trim the generated audio to start at this second (batch postprocess). Pairs with --trim-end.', allowed: 'seconds (float)' },

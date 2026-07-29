@@ -29,7 +29,7 @@ const { spawnSync } = require('child_process');
 const { findNodeExe, findMmxEntry, needsRunAsNode } = require('./mmxResolve');
 
 // Known subcommands the app uses. The probe checks each one's --help.
-// Note: 'sound-effect' is NOT a subcommand — it's a flag (--sound-effect)
+// Note: sound-effect is not a bundled CLI subcommand or supported speech flag.
 // on the speech subcommand. Only actual mmx subcommands belong here.
 const KNOWN_SUBCOMMANDS = ['image', 'speech', 'music', 'video'];
 

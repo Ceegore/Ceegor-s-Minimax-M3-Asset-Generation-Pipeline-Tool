@@ -33,6 +33,7 @@ global.showModal = () => {};
 global.el = () => {};
 global.$ = () => null;
 
+require(path.join(ROOT, 'renderer', 'tabs', 'batchImportCompatibility.js'));
 require(path.join(ROOT, 'renderer', 'tabs', 'batchImportHelper.js'));
 const { extractStyleHeader, parseParams, buildImportedEntry } = global.window.BatchManager;
 require(path.join(ROOT, 'renderer', 'specs', 'modelSpecs.js'));
