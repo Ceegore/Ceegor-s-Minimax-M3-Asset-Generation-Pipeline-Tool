@@ -27,8 +27,8 @@ npm run verify:release
 
 The build writes these files under `dist-out/`:
 
-- `MiniMaxAssetTool-<version>-x64.zip`, or numbered ZIP parts when the archive is too large for one GitHub attachment.
-- `MiniMaxAssetTool-<version>-x64.zip.sha256`.
+- `MiniMaxAssetTool-<version>-x64.zip`, or independent `MiniMaxAssetTool-<version>-x64.part1.zip`, `.part2.zip`, … files when the archive is too large for one GitHub attachment. Every archive stores its files under the single top-level folder `MiniMaxAssetTool-<version>-x64/`; extracting all parts into the same destination merges them into that one folder.
+- `MiniMaxAssetTool-<version>-x64.sha256`.
 - `MiniMaxAssetTool-<version>-x64.provenance.json`.
 
 The build also runs the exact packaged-dependency check and tests the no-admin installer and its shortcuts. The provenance record must show the expected commit and `commitDirty: false`. Test the extracted ZIP on a clean Windows account before publishing it.
@@ -37,10 +37,10 @@ The build also runs the exact packaged-dependency check and tests the no-admin i
 
 1. Create a release tag that matches `package.json`.
 2. Paste the prepared text from `docs/GITHUB_RELEASE.md` and adjust the version-specific details.
-3. Upload the ZIP, checksum, provenance, and root-level `Install-MiniMax-Asset-Tool.cmd` files. If the build is split, upload every numbered part. Label them **Full offline Windows release**.
+3. Upload the ZIP, checksum, provenance, and root-level `Install-MiniMax-Asset-Tool.cmd` files. If the build is split, upload every `.partN.zip`. Label them **Full offline Windows release**.
 4. Verify the download from GitHub and extract it again before announcing the release.
 
-GitHub limits individual release attachments to 2 GiB. The root-level CMD verifies and joins a split archive before extracting it with Windows' built-in archive tool. Experienced users can still extract starting with `.001` using 7-Zip.
+GitHub limits individual release attachments to 2 GiB. Each part is an independent, complete zip — the root-level CMD verifies every part and extracts them with Windows' built-in archive tool. Experienced users can simply extract every part into the same folder with any archiver; the parts merge into one `MiniMaxAssetTool-<version>-x64` folder.
 
 ## Signing and Windows warnings
 

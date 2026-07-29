@@ -35,7 +35,7 @@ The app is MIT licensed and designed for commercial workflows without an extra s
 
 #### Easy installation (recommended)
 
-1. Download `Install-MiniMax-Asset-Tool.cmd`, `MiniMaxAssetTool-1.0.0-x64.zip.sha256`, and every numbered `.zip.001`, `.zip.002`, and later part. Keep them in the same folder.
+1. Download `Install-MiniMax-Asset-Tool.cmd`, `MiniMaxAssetTool-1.0.0-x64.sha256`, and every `MiniMaxAssetTool-1.0.0-x64.part1.zip`, `.part2.zip`, and later part. Keep them in the same folder.
 2. Double-click `Install-MiniMax-Asset-Tool.cmd`. It verifies every part, extracts the release with built-in Windows tools, installs the app for your account, and creates Desktop and Start menu shortcuts.
 3. When the app opens, add your API key and choose an output folder.
 
@@ -45,7 +45,7 @@ The installer makes no network requests and does not weaken Windows security set
 
 #### Portable use
 
-Experienced users can join/extract the parts with 7-Zip, keep the extracted folder together, and run `MiniMaxAssetTool.exe` directly.
+Experienced users can extract every part into the same folder with any archiver (the parts merge into one `MiniMaxAssetTool-1.0.0-x64` folder), keep that folder together, and run `MiniMaxAssetTool.exe` directly.
 
 ### Requirements
 

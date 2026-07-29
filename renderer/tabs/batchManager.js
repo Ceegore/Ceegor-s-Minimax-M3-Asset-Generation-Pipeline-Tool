@@ -158,7 +158,29 @@ function openBatchManager(tabKey) {
   });
 }
 
-async function startBatchGen(tabKey) {
+// R6.5 / T6: expected paid API calls for a queue (each variant = 1 call;
+// defective entries are skipped). Shared by startBatchGen's own confirm
+// below and the combined all-types confirmation in batchImportHelper.js.
+function computeExpectedCalls(tabKey, items) {
+  const _vr = $(`#tab-${tabKey}`) && $(`#tab-${tabKey}`).querySelector('.variants-select');
+  const _dv = _vr ? Math.max(1, Math.min(5, parseInt(_vr.value, 10) || 1)) : 1;
+  return (items || []).reduce((s, it) => {
+    if (it && typeof it === 'object' && Array.isArray(it._defective) && it._defective.length) return s;
+    const v = (it && typeof it === 'object') ? (it.variants || it['--variants']) : undefined;
+    return s + (v !== undefined ? Math.max(1, Math.min(5, parseInt(v, 10) || 1)) : _dv);
+  }, 0);
+}
+
+// opts (all optional — the per-tab ▶ button passes none):
+//   skipConfirm      — true when startAllBatchGen already showed the ONE
+//                      combined cost confirmation covering all types, so
+//                      the run is never interrupted by another prompt.
+//   outputDirBase    — base output folder chosen in the combined confirm
+//                      overlay (overrides state.fbDir / config.output_dir).
+//   noTypeSubfolders — true disables the per-asset-type subfolder routing
+//                      (default: generations go to <base>\<tabKey>).
+async function startBatchGen(tabKey, opts) {
+  opts = opts || {};
   const items = (state.batches[tabKey] || []).slice();
   if (!items.length) { toast('Batch is empty.', 'warn'); return; }
   if (!state.config.api_key) { toast('No API key configured. Click ⚙ to open Settings.', 'err'); return; }
@@ -171,18 +193,12 @@ async function startBatchGen(tabKey) {
     toast(`A ${tabKey} batch is already running. Stop it first.`, 'warn', 4000);
     return;
   }
-  if (tabKey === 'video' && items.length > 3) {
+  if (!opts.skipConfirm && tabKey === 'video' && items.length > 3) {
     if (!await asyncConfirm(`This batch has ${items.length} videos. Your Token Plan includes only 3 free video generations per week — the rest will fail with a quota error. Continue?`)) return;
   }
   // R6.5: show expected paid API calls (each variant = 1 call; defective skipped).
-  const _vr = $(`#tab-${tabKey}`) && $(`#tab-${tabKey}`).querySelector('.variants-select');
-  const _dv = _vr ? Math.max(1, Math.min(5, parseInt(_vr.value, 10) || 1)) : 1;
-  const expectedCalls = items.reduce((s, it) => {
-    if (it && typeof it === 'object' && Array.isArray(it._defective) && it._defective.length) return s;
-    const v = (it && typeof it === 'object') ? (it.variants || it['--variants']) : undefined;
-    return s + (v !== undefined ? Math.max(1, Math.min(5, parseInt(v, 10) || 1)) : _dv);
-  }, 0);
-  if (expectedCalls > 1 && !await asyncConfirm(`Batch: ${items.length} item(s) → ${expectedCalls} paid API call(s). Continue?`)) return;
+  const expectedCalls = computeExpectedCalls(tabKey, items);
+  if (!opts.skipConfirm && expectedCalls > 1 && !await asyncConfirm(`Batch: ${items.length} item(s) → ${expectedCalls} paid API call(s). Continue?`)) return;
 
   window._batchAbortByTab[tabKey] = false;
   window._batchRunningByTab[tabKey] = true;
@@ -327,8 +343,12 @@ async function startBatchGen(tabKey) {
   const removedIdx = new Set();
   // R6.5: snapshot generation settings at batch start (mid-batch UI changes
   // must not affect subsequent items).
+  // T3/T4: the combined all-types confirm can override the base output
+  // folder; per-asset-type subfolders (<base>\<tabKey>) are the default
+  // and can be opted out via the overlay checkbox.
+  const baseOutputDir = (opts.outputDirBase || state.fbDir || (state.config && state.config.output_dir) || '').replace(/[\\/]+$/, '');
   const batchSnapshot = {
-    outputDir: state.fbDir || (state.config && state.config.output_dir) || '',
+    outputDir: baseOutputDir,
     styles: (state.config && state.config.styles) ? state.config.styles.slice() : [],
   };
   // B.1: mint a batch-owned directory-root grant so pure-batch flows
@@ -353,6 +373,23 @@ async function startBatchGen(tabKey) {
         throw new Error('Output grant could not be minted: ' + (g.error || 'unknown'));
       }
       batchGrantId = g;
+    }
+  }
+  // T4: route this type's generations into <base>\<tabKey> unless opted
+  // out. fb:ensureDir has mkdir-p semantics, so a missing subfolder is
+  // created on demand; the grant minted above covers the base root
+  // (coversRoot: true), so the subdir write is authorised. Any failure
+  // falls back to the base folder — a missing subfolder must not kill an
+  // overnight run.
+  if (!opts.noTypeSubfolders && baseOutputDir && window.api && typeof window.api.fbEnsureDir === 'function') {
+    const sep = (baseOutputDir.includes('/') && !baseOutputDir.includes('\\')) ? '/' : '\\';
+    const typeDir = baseOutputDir + sep + tabKey;
+    try {
+      const er = await window.api.fbEnsureDir(typeDir, batchGrantId);
+      if (er && er.ok) batchSnapshot.outputDir = er.path || typeDir;
+      else logLine(`⚠ Could not create subfolder "${tabKey}" (${(er && er.error) || 'unknown'}) — saving to ${baseOutputDir}`, 'warn');
+    } catch (e) {
+      logLine(`⚠ Could not create subfolder "${tabKey}" (${e && e.message || e}) — saving to ${baseOutputDir}`, 'warn');
     }
   }
     for (let i = 0; i < items.length && !window._batchAbortByTab[tabKey]; i++) {
@@ -526,7 +563,18 @@ async function startBatchGen(tabKey) {
             autoPipelineEnabled: state.autoPipelineEnabled,
           });
           const vt = currentVariantsCount > 1 ? ` v${vi + 1}/${currentVariantsCount}` : '';
-          if (d.ok) { ok++; logLine(`✓ ${i + 1}/${items.length}${vt} OK`, 'ok'); batchResults.push({ status: 'ok' }); }
+          if (d.ok) {
+            ok++; logLine(`✓ ${i + 1}/${items.length}${vt} OK`, 'ok'); batchResults.push({ status: 'ok' });
+            // T5: surface the just-generated asset in the Assets preview
+            // pane, exactly like an interactive Generate does.
+            try {
+              if (d.outFile) {
+                if (tabKey === 'image' && typeof window.notifyImageGenerated === 'function') window.notifyImageGenerated(d.outFile);
+                else if ((tabKey === 'speech' || tabKey === 'music') && typeof window.notifyAudioGenerated === 'function') window.notifyAudioGenerated(d.outFile);
+                else if (tabKey === 'video' && typeof window.previewVideoFromFile === 'function') window.previewVideoFromFile(d.outFile);
+              }
+            } catch (_) { /* preview is best-effort */ }
+          }
           else { itemAllVariantsOk = false; fail++; logLine(`✗ ${i + 1}/${items.length}${vt} ${d.error || 'FAILED'}`, 'err'); batchResults.push({ status: 'err', error: `item ${i + 1}${vt}: ${d.error || 'failed'}` }); }
           if (autoRemove && vi === currentVariantsCount - 1 && itemAllVariantsOk) { removedIdx.add(i); state.batches[tabKey] = items.filter((_, idx) => !removedIdx.has(idx)); const _r = await window.api.batchesSet(state.batches).catch(() => null); if (!_r || !_r.ok) logLine(`⚠ ${i + 1}/${items.length} auto-remove persist failed`, 'warn'); else logLine(`✓ ${i + 1}/${items.length} removed (auto)`, 'ok'); }
           continue;
@@ -654,9 +702,19 @@ async function startBatchGen(tabKey) {
     if (_bar) _bar.set(100);
     // R5 (H1): detach the stop handler before repurposing to "Close" (.onclick= doesn't remove an addEventListener listener).
     stopBtn.removeEventListener('click', onStopClick);
-    stopBtn.textContent = 'Close';
-    stopBtn.disabled = false;
-    stopBtn.onclick = () => overlay.remove();
+    // T7: a clean run (no failure, no error, not aborted) removes the
+    // overlay automatically — the summary toast below is the success
+    // confirmation and the GUI returns to its normal state without the
+    // user having to click Close on an already-finished process. Failed /
+    // aborted runs KEEP the overlay (with a Close button) so the per-item
+    // error log can still be inspected.
+    if (!batchError && fail === 0 && !window._batchAbortByTab[tabKey]) {
+      overlay.remove();
+    } else {
+      stopBtn.textContent = 'Close';
+      stopBtn.disabled = false;
+      stopBtn.onclick = () => overlay.remove();
+    }
     // H9-016: release the per-queue run lock.
     window._batchRunningByTab = window._batchRunningByTab || {};
     window._batchRunningByTab[tabKey] = false;
@@ -769,4 +827,5 @@ function buildAddToBatchBtn(tabKey) {
 window.BatchManager = window.BatchManager || {};
 window.BatchManager.openBatchManager = openBatchManager;
 window.BatchManager.startBatchGen = startBatchGen;
+window.BatchManager.computeExpectedCalls = computeExpectedCalls;
 window.BatchManager.buildAddToBatchBtn = buildAddToBatchBtn;

@@ -5,8 +5,9 @@ Easiest installation (recommended)
 ----------------------------------
 
 1. Double-click "Install MiniMax Asset Tool.cmd".
-   - If you downloaded numbered ZIP parts, keep the CMD, every part, and the
-     matching .zip.sha256 file together. The installer verifies and extracts them.
+   - If you downloaded ZIP parts (.part1.zip, .part2.zip, ...), keep the CMD, every
+     part, and the matching .sha256 file together. The installer verifies and
+     extracts them.
    - If this folder is already extracted, just run the CMD here.
 2. Let the installer finish.
 3. Wait for the app to open, enter your MiniMax API key, and choose an output folder.

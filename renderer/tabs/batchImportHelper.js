@@ -1183,10 +1183,66 @@ async function startAllBatchGen() {
     return;
   }
 
-  const confirmMsg = `This will generate batch items across all tabs sequentially:\n` +
-    tabsToRun.map(t => `- ${t.toUpperCase()}: ${(state.batches[t] || []).length} items`).join('\n') +
-    `\n\nStart processing now?`;
-  if (!await asyncConfirm(confirmMsg)) return;
+  // T3/T4/T6: ONE combined confirmation overlay covering ALL types —
+  // per-type item + paid-call counts, the grand total, the output folder
+  // (changeable via a native folder picker), and the per-type subfolder
+  // opt-out. After confirming, every type runs back-to-back with
+  // skipConfirm so an overnight run is never interrupted by another
+  // cost prompt.
+  const computeCalls = (window.BatchManager && window.BatchManager.computeExpectedCalls) || (() => 0);
+  const perType = tabsToRun.map((t) => ({
+    type: t,
+    items: (state.batches[t] || []).length,
+    calls: computeCalls(t, state.batches[t] || []),
+  }));
+  const totalItems = perType.reduce((s, x) => s + x.items, 0);
+  const totalCalls = perType.reduce((s, x) => s + x.calls, 0);
+  const videoCount = (state.batches.video || []).length;
+
+  const choice = await new Promise((resolve) => {
+    let settled = false;
+    const done = (v) => { if (!settled) { settled = true; resolve(v); } };
+    showModal((m, close) => {
+      m.appendChild(el('h2', {}, 'Start BatchGen — all types'));
+      const list = el('ul', { style: 'margin: 6px 0 10px; padding-left: 18px;' });
+      for (const x of perType) {
+        list.appendChild(el('li', {}, `${x.type.toUpperCase()}: ${x.items} item${x.items === 1 ? '' : 's'} → ${x.calls} paid API call${x.calls === 1 ? '' : 's'}`));
+      }
+      m.appendChild(list);
+      m.appendChild(el('p', { style: 'font-weight: 600; margin: 0 0 8px;' },
+        `Total: ${totalItems} item${totalItems === 1 ? '' : 's'} → ${totalCalls} paid API call${totalCalls === 1 ? '' : 's'}. All types run in one go — no further confirmations.`));
+      if (videoCount > 3) {
+        m.appendChild(el('p', { style: 'color: var(--warn, #cc9900); font-size: 12px; margin: 0 0 8px;' },
+          `⚠ ${videoCount} videos are queued but the Token Plan includes only 3 free video generations per week — the rest will fail with a quota error.`));
+      }
+      // T3: output folder display + native folder picker to redirect ALL
+      // of this run's generations. pickFolderFull auto-trusts the picked
+      // path (native dialog), and startBatchGen mints its own write grant
+      // on the chosen base folder.
+      let outDirBase = state.fbDir || (state.config && state.config.output_dir) || '';
+      const dirSpan = el('span', { style: 'flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--fg-2); font-size: 12px;', title: outDirBase }, outDirBase || '(default output folder)');
+      const changeBtn = el('button', { class: 'btn-mini', title: 'Choose a different folder for all generations of this run', onclick: async () => {
+        const r = await window.api.pickFolderFull({ purpose: 'config-output' });
+        if (r && r.ok && r.path) { outDirBase = r.path; dirSpan.textContent = r.path; dirSpan.title = r.path; }
+      } }, 'Change…');
+      m.appendChild(el('div', { style: 'display: flex; gap: 8px; align-items: center; margin: 0 0 8px;' }, [
+        el('span', { style: 'flex: 0 0 auto;' }, '💾 Save to:'), dirSpan, changeBtn,
+      ]));
+      // T4: per-asset-type subfolder opt-out (default unchecked = each
+      // type is written to <base>\<type>, created on demand).
+      const subCb = el('input', { type: 'checkbox' });
+      m.appendChild(el('label', { style: 'display: flex; gap: 6px; align-items: center; font-size: 12px; margin: 0 0 10px; cursor: pointer;' }, [
+        subCb, 'Do not use/create sub-folders for assets types',
+      ]));
+      const cancelBtn = el('button', { onclick: () => close() }, 'Cancel');
+      const startBtn = el('button', { class: 'primary', onclick: () => {
+        done({ outputDirBase: outDirBase, noTypeSubfolders: !!subCb.checked });
+        close();
+      } }, '▶ Start all');
+      m.appendChild(el('div', { class: 'footer' }, [cancelBtn, startBtn]));
+    }, { onClose: () => done(null) });
+  });
+  if (!choice) return;
 
   // startBatchGen owns window._batchAbortByTab (keyed per tab — see
   // batchManager.js for why a shared `_batchAbort` is wrong). This loop
@@ -1201,14 +1257,22 @@ async function startAllBatchGen() {
     // Switch to the active generating tab so progress is visible
     showTab(type);
 
-    // Start batchgen and wait for completion
-    await startBatchGen(type);
+    // Start batchgen and wait for completion. skipConfirm: the combined
+    // overlay above is the ONE confirmation for the whole run (T6).
+    await startBatchGen(type, {
+      skipConfirm: true,
+      outputDirBase: choice.outputDirBase,
+      noTypeSubfolders: choice.noTypeSubfolders,
+    });
 
     if (window._batchAbortByTab && window._batchAbortByTab[type]) {
       toast('Global batch generation aborted.', 'warn');
-      break;
+      return;
     }
   }
+  // T7: final success confirmation once every type has finished (the
+  // per-type overlays auto-close on clean success in startBatchGen).
+  toast('✅ All BatchGen types finished.', 'ok', 6000);
 }
 
 // Bind to window

@@ -55,44 +55,44 @@ function makeExe(root) {
   return paths.executable;
 }
 
-test('validateArchiveSequence rejects a standalone .zip.002 with no .001', () => {
+test('validateArchiveSequence rejects a standalone .part2.zip with no .part1.zip', () => {
   const root = fixtureRoot();
   try {
     const paths = releasePaths(root);
     fs.mkdirSync(paths.output, { recursive: true });
-    // The exact false-positive shape from H7-002: a lone .002 text file.
-    fs.writeFileSync(paths.archive + '.002', 'this is just text, not a zip part');
+    // The exact false-positive shape from H7-002: a lone part-2 text file.
+    fs.writeFileSync(path.join(paths.output, `${paths.baseName}.part2.zip`), 'this is just text, not a zip part');
     const seq = validateArchiveSequence(paths);
     assert.equal(seq.ok, false);
     assert.match(seq.error, /incomplete/i);
-    assert.ok(seq.missing.some((m) => /\.001$/.test(m)));
+    assert.ok(seq.missing.some((m) => /part1\.zip$/.test(m)));
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }
 });
 
-test('validateArchiveSequence rejects a gapped sequence (.001 + .003, no .002)', () => {
+test('validateArchiveSequence rejects a gapped sequence (.part1 + .part3, no .part2)', () => {
   const root = fixtureRoot();
   try {
     const paths = releasePaths(root);
     fs.mkdirSync(paths.output, { recursive: true });
-    fs.writeFileSync(paths.archive + '.001', 'a');
-    fs.writeFileSync(paths.archive + '.003', 'c');
+    fs.writeFileSync(path.join(paths.output, `${paths.baseName}.part1.zip`), 'a');
+    fs.writeFileSync(path.join(paths.output, `${paths.baseName}.part3.zip`), 'c');
     const seq = validateArchiveSequence(paths);
     assert.equal(seq.ok, false);
-    assert.match(seq.error, /missing .*\.002/i);
+    assert.match(seq.error, /missing .*part2\.zip/i);
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }
 });
 
-test('validateArchiveSequence accepts a complete .001/.002 sequence', () => {
+test('validateArchiveSequence accepts a complete .part1/.part2 sequence', () => {
   const root = fixtureRoot();
   try {
     const paths = releasePaths(root);
     fs.mkdirSync(paths.output, { recursive: true });
-    fs.writeFileSync(paths.archive + '.001', 'a');
-    fs.writeFileSync(paths.archive + '.002', 'b');
+    fs.writeFileSync(path.join(paths.output, `${paths.baseName}.part1.zip`), 'a');
+    fs.writeFileSync(path.join(paths.output, `${paths.baseName}.part2.zip`), 'b');
     const seq = validateArchiveSequence(paths);
     assert.equal(seq.ok, true);
     assert.equal(seq.volumes, 2);
@@ -107,9 +107,9 @@ test('evaluate with --require-archive FAILS on the H7-002 false-positive fixture
     const paths = releasePaths(root);
     fs.mkdirSync(paths.output, { recursive: true });
     makeExe(root);
-    fs.writeFileSync(paths.archive + '.002', 'standalone text part');
+    fs.writeFileSync(path.join(paths.output, `${paths.baseName}.part2.zip`), 'standalone text part');
     const report = evaluate(root, { requireArchive: true, skipIntegrity: true });
-    assert.ok(report.errors.length > 0, 'expected errors for the standalone-.002 fixture');
+    assert.ok(report.errors.length > 0, 'expected errors for the standalone-part2 fixture');
     assert.match(report.errors.join(' '), /incomplete/i);
   } finally {
     fs.rmSync(root, { recursive: true, force: true });

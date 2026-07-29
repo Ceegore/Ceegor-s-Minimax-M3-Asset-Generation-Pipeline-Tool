@@ -87,7 +87,7 @@ exit /b 0
 
 :bootstrap
 set "ARCHIVE_FIRST="
-for %%F in ("%SOURCE_DIR%\MiniMaxAssetTool-*-x64.zip.001") do if exist "%%~fF" if not defined ARCHIVE_FIRST set "ARCHIVE_FIRST=%%~fF"
+for %%F in ("%SOURCE_DIR%\MiniMaxAssetTool-*-x64.part1.zip") do if exist "%%~fF" if not defined ARCHIVE_FIRST set "ARCHIVE_FIRST=%%~fF"
 for %%F in ("%SOURCE_DIR%\MiniMaxAssetTool-*-x64.zip") do if exist "%%~fF" if not defined ARCHIVE_FIRST set "ARCHIVE_FIRST=%%~fF"
 if not defined ARCHIVE_FIRST goto :missing
 
@@ -97,19 +97,26 @@ if exist "%EXTRACT_DIR%" goto :temp_collision
 mkdir "%EXTRACT_DIR%" >nul 2>&1
 if not exist "%EXTRACT_DIR%" goto :no_temp
 
-echo Verifying all download parts and preparing the installer...
-set "MINIMAX_ARCHIVE_FIRST=%ARCHIVE_FIRST%"
-set "MINIMAX_EXTRACT_DIR=%EXTRACT_DIR%"
-powershell.exe -NoProfile -NonInteractive -Command "$ErrorActionPreference='Stop'; $first=[IO.Path]::GetFullPath($env:MINIMAX_ARCHIVE_FIRST); $dir=[IO.Path]::GetDirectoryName($first); $isSplit=$first.EndsWith('.001',[StringComparison]::OrdinalIgnoreCase); $base=if($isSplit){$first.Substring(0,$first.Length-4)}else{$first}; $baseName=[IO.Path]::GetFileName($base); $manifest=$base+'.sha256'; if(-not [IO.File]::Exists($manifest)){throw 'The matching .zip.sha256 file is missing.'}; $parts=if($isSplit){@(Get-ChildItem -LiteralPath $dir -File | Where-Object {$_.Name -match ('^'+[regex]::Escape($baseName)+'\.\d{3}$')} | Sort-Object Name)}else{@(Get-Item -LiteralPath $first)}; if($parts.Count -eq 0){throw 'No archive parts were found.'}; if($isSplit){for($i=0;$i -lt $parts.Count;$i++){ $expected=$baseName+'.'+('{0:D3}' -f ($i+1)); if($parts[$i].Name -ne $expected){throw ('Archive sequence is incomplete. Expected '+$expected+'.')} }}; $hashes=@{}; foreach($line in [IO.File]::ReadAllLines($manifest)){if($line -match '^([0-9a-fA-F]{64})\s+\*?(.+)$'){$hashes[$matches[2].Trim()]=$matches[1].ToLowerInvariant()}}; foreach($part in $parts){if(-not $hashes.ContainsKey($part.Name)){throw ('No checksum was published for '+$part.Name+'.')}; $actual=(Get-FileHash -Algorithm SHA256 -LiteralPath $part.FullName).Hash.ToLowerInvariant(); if($actual -ne $hashes[$part.Name]){throw ('Checksum mismatch for '+$part.Name+'. Download that file again.')}}; $joined=Join-Path $env:MINIMAX_EXTRACT_DIR 'release.zip'; $output=[IO.File]::Create($joined); try{foreach($part in $parts){$input=[IO.File]::OpenRead($part.FullName); try{$input.CopyTo($output)}finally{$input.Dispose()}}}finally{$output.Dispose()}"
-if errorlevel 1 goto :extract_failed
-
 where tar.exe >nul 2>&1
 if errorlevel 1 goto :no_tar
-tar.exe -xf "%EXTRACT_DIR%\release.zip" -C "%EXTRACT_DIR%"
-if errorlevel 1 goto :extract_failed
-if not exist "%EXTRACT_DIR%\win-unpacked\Install MiniMax Asset Tool.cmd" goto :extract_failed
 
-call "%EXTRACT_DIR%\win-unpacked\Install MiniMax Asset Tool.cmd"
+echo Verifying and extracting all download parts...
+set "MINIMAX_ARCHIVE_FIRST=%ARCHIVE_FIRST%"
+set "MINIMAX_EXTRACT_DIR=%EXTRACT_DIR%"
+rem Every part is an independent, complete .zip (not a raw volume split), so
+rem each one is checksum-verified and extracted on its own. All parts store
+rem their files under the same MiniMaxAssetTool-<version>-x64 folder, so the
+rem extractions merge into one folder.
+powershell.exe -NoProfile -NonInteractive -Command "$ErrorActionPreference='Stop'; $first=[IO.Path]::GetFullPath($env:MINIMAX_ARCHIVE_FIRST); $dir=[IO.Path]::GetDirectoryName($first); $name=[IO.Path]::GetFileName($first); $isSplit=$name -match '\.part1\.zip$'; $baseName=if($isSplit){$name -replace '\.part1\.zip$',''}else{$name -replace '\.zip$',''}; $manifest=Join-Path $dir ($baseName+'.sha256'); if(-not [IO.File]::Exists($manifest)){throw 'The matching .sha256 checksum file is missing.'}; $parts=if($isSplit){@(Get-ChildItem -LiteralPath $dir -File | Where-Object {$_.Name -match ('^'+[regex]::Escape($baseName)+'\.part\d+\.zip$')} | Sort-Object {[int][regex]::Match($_.Name,'\.part(\d+)\.zip$').Groups[1].Value})}else{@(Get-Item -LiteralPath $first)}; if($parts.Count -eq 0){throw 'No archive parts were found.'}; if($isSplit){for($i=0;$i -lt $parts.Count;$i++){$expected=$baseName+'.part'+($i+1)+'.zip'; if($parts[$i].Name -ne $expected){throw ('Archive sequence is incomplete. Expected '+$expected+'.')}}}; $hashes=@{}; foreach($line in [IO.File]::ReadAllLines($manifest)){if($line -match '^([0-9a-fA-F]{64})\s+\*?(.+)$'){$hashes[$matches[2].Trim()]=$matches[1].ToLowerInvariant()}}; foreach($part in $parts){if(-not $hashes.ContainsKey($part.Name)){throw ('No checksum was published for '+$part.Name+'.')}; $actual=(Get-FileHash -Algorithm SHA256 -LiteralPath $part.FullName).Hash.ToLowerInvariant(); if($actual -ne $hashes[$part.Name]){throw ('Checksum mismatch for '+$part.Name+'. Download that file again.')}}; foreach($part in $parts){& tar.exe -xf $part.FullName -C $env:MINIMAX_EXTRACT_DIR; if($LASTEXITCODE -ne 0){throw ('Could not extract '+$part.Name+'.')}}"
+if errorlevel 1 goto :extract_failed
+
+rem The archive's single top-level folder is MiniMaxAssetTool-<version>-x64.
+set "APP_DIR="
+for /d %%D in ("%EXTRACT_DIR%\MiniMaxAssetTool-*") do if not defined APP_DIR set "APP_DIR=%%~fD"
+if not defined APP_DIR goto :extract_failed
+if not exist "%APP_DIR%\Install MiniMax Asset Tool.cmd" goto :extract_failed
+
+call "%APP_DIR%\Install MiniMax Asset Tool.cmd"
 set "INSTALL_RESULT=%ERRORLEVEL%"
 rmdir /s /q "%EXTRACT_DIR%"
 exit /b %INSTALL_RESULT%
@@ -117,15 +124,15 @@ exit /b %INSTALL_RESULT%
 :missing
 echo [ERROR] This does not look like a complete extracted release.
 echo Keep this installer beside MiniMaxAssetTool.exe and the resources folder.
-echo Or keep it beside every numbered release archive part and the .zip.sha256 file.
+echo Or keep it beside every release archive part and the .sha256 file.
 pause
 exit /b 1
 
 :extract_failed
 echo.
 echo [ERROR] Windows could not verify or extract the complete release.
-echo Make sure this installer, every numbered archive part, and the matching
-echo .zip.sha256 file are together in one folder, then try again.
+echo Make sure this installer, every archive part, and the matching
+echo .sha256 file are together in one folder, then try again.
 echo Temporary files were left here for troubleshooting:
 echo   %EXTRACT_DIR%
 pause

@@ -84,21 +84,25 @@ function sevenZipBin(root) {
 // Probe archive integrity with `7za t`. Returns { ok, error }.
 function verifyArchiveIntegrity(root, paths, archives) {
   if (archives.length === 0) return { ok: false, error: 'No archive to test.' };
-  // `7za t` on the first volume auto-follows the rest of a split set.
-  const first = archives.slice().sort()[0];
   const bin = sevenZipBin(root);
   if (!bin) {
     // 7za not available (e.g. on CI without devDeps). Degrade to a size >
     // 0 sanity check so we never silently PASS a text-as-zip fixture, but
     // don't hard-fail a real release when the tool isn't bundled.
-    const st = fs.statSync(first);
-    if (st.size < 64) return { ok: false, error: `Archive "${path.basename(first)}" is ${st.size} bytes — too small to be a real zip (is this a text file?).` };
+    for (const a of archives) {
+      const st = fs.statSync(a);
+      if (st.size < 64) return { ok: false, error: `Archive "${path.basename(a)}" is ${st.size} bytes — too small to be a real zip (is this a text file?).` };
+    }
     return { ok: true, skipped: true, note: '7za not bundled; size-only sanity check.' };
   }
-  const r = childProcess.spawnSync(bin, ['t', '-y', first], { encoding: 'utf8', windowsHide: true });
-  if (r.status !== 0) {
-    const detail = (r.stderr || r.stdout || '').trim();
-    return { ok: false, error: `Archive integrity test failed (7za exit ${r.status}) on ${path.basename(first)}: ${detail}` };
+  // Every part is an INDEPENDENT zip (not a raw volume split), so each one
+  // must be tested on its own — `7za t` does not follow across parts.
+  for (const a of archives) {
+    const r = childProcess.spawnSync(bin, ['t', '-y', a], { encoding: 'utf8', windowsHide: true });
+    if (r.status !== 0) {
+      const detail = (r.stderr || r.stdout || '').trim();
+      return { ok: false, error: `Archive integrity test failed (7za exit ${r.status}) on ${path.basename(a)}: ${detail}` };
+    }
   }
   return { ok: true };
 }

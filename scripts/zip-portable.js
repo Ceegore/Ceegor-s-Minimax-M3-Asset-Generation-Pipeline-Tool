@@ -38,7 +38,12 @@ const DIST = path.join(ROOT, 'dist-out');
 const UNPACKED = path.join(DIST, 'win-unpacked');
 const PKG = JSON.parse(fs.readFileSync(path.join(ROOT, 'package.json'), 'utf8'));
 const VERSION = PKG.version;
-const ZIP_PATH = path.join(DIST, `MiniMaxAssetTool-${VERSION}-x64.zip`);
+// The user-facing release folder name. Every archive stores its files under
+// this single top-level folder, so "Extract here" yields exactly one folder.
+const BASE_NAME = `MiniMaxAssetTool-${VERSION}-x64`;
+const STAGE = path.join(DIST, BASE_NAME);
+const ZIP_PATH = path.join(DIST, `${BASE_NAME}.zip`);
+const MANIFEST_PATH = path.join(DIST, `${BASE_NAME}.sha256`);
 const REQUIRE_CODE_SIGNING = process.env.REQUIRE_CODE_SIGNING === '1';
 
 function log(m) { process.stdout.write(m + '\n'); }
@@ -170,11 +175,15 @@ function printPrivilegeFix() {
 
   // Clean dist/ so a previous failure state doesn't leak in.
   await fsp.rm(UNPACKED, { recursive: true, force: true });
+  await fsp.rm(STAGE, { recursive: true, force: true });
   await fsp.rm(ZIP_PATH, { force: true });
   const staleBase = path.basename(ZIP_PATH).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const stalePartBase = BASE_NAME.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
   for (const name of await fsp.readdir(DIST).catch(() => [])) {
-    if (new RegExp(`^${staleBase}\\.\\d{3}$`).test(name)
-      || name === `${path.basename(ZIP_PATH)}.sha256`
+    if (new RegExp(`^${staleBase}\\.\\d{3}$`).test(name) // legacy raw-split volumes
+      || new RegExp(`^${stalePartBase}\\.part\\d+\\.zip$`).test(name)
+      || name === `${path.basename(ZIP_PATH)}.sha256` // legacy manifest name
+      || name === `${BASE_NAME}.sha256`
       || name === `MiniMaxAssetTool-${VERSION}-x64.provenance.json`
       || name === 'Install MiniMax Asset Tool.cmd'
       || name === 'Install-MiniMax-Asset-Tool.cmd') {
@@ -323,56 +332,97 @@ function printPrivilegeFix() {
     fail('installer test failed: ' + ((e && e.message) || e));
   }
 
-  // ---- Step 2: zip the unpacked directory ----
+  // ---- Step 2: zip the release folder ----
   log('');
-  log('Step 2/2: zipping dist/win-unpacked/ into MiniMaxAssetTool-' + VERSION + '-x64.zip...');
+  log('Step 2/2: zipping the release into ' + BASE_NAME + ' archive(s)...');
   const sevenZip = find7za();
   if (!sevenZip) {
     fail('7-Zip binary not found. Reinstall electron-builder (`npm install`).');
   }
   // QA-023 fix: GitHub release attachments are capped at 2 GiB per file.
-  // When the unpacked directory is large enough that the compressed archive
-  // would exceed ~1.9 GiB, produce a split archive (.zip.001, .zip.002, ...)
-  // with 1990 MiB volumes (safely under the 2 GiB cap).
+  // When the unpacked directory is large enough that a single archive would
+  // exceed the cap, produce INDEPENDENT part zips (.part1.zip, .part2.zip,
+  // ...) instead of a raw 7-Zip volume split. Raw .zip.001 volumes forced the
+  // user through a join step: extracting .001 yielded a nested inner .zip
+  // (renamed "...zip(1)" by Windows) that had to be extracted AGAIN. Each
+  // part here is a complete, standalone zip whose entries all live under the
+  // top-level `MiniMaxAssetTool-<version>-x64/` folder — extracting every
+  // part into the same destination merges them into that one folder.
   const unpackedSize = (function dirSize(d) {
     let s = 0;
     function w(dir) { for (const e of fs.readdirSync(dir, { withFileTypes: true })) { const p = path.join(dir, e.name); if (e.isDirectory()) w(p); else s += fs.statSync(p).size; } }
     w(d); return s;
   })(UNPACKED);
   const SPLIT_THRESHOLD = 2.9 * 1024 * 1024 * 1024; // ~2.9 GB raw → >1.9 GB compressed
+  // Raw-size cap per part. Compressed output is ≤ raw size for deflate (plus
+  // negligible header overhead), so 1900 MiB raw stays safely under 2 GiB.
+  const PART_RAW_CAP = 1900 * 1024 * 1024;
   const wantSplit = unpackedSize > SPLIT_THRESHOLD && process.env.ZIP_NO_SPLIT !== '1';
   if (wantSplit) {
-    log('  Unpacked size: ' + (unpackedSize / 1024 / 1024).toFixed(0) + ' MB — producing split archive (volumes ≤ 1990 MiB).');
+    log('  Unpacked size: ' + (unpackedSize / 1024 / 1024).toFixed(0) + ' MB — producing independent part zips (≤ 1900 MiB raw each).');
   }
-  // -snl- to skip symbolic links (defensive; the unpacked dir
-  // shouldn't contain any, but if it does we want the zip to
-  // succeed on accounts without SeCreateSymbolicLinkPrivilege).
-  const zipArgs = ['a', '-snl-', '-bb', '-mx=7'];
-  if (wantSplit) zipArgs.push('-v1990m');
-  zipArgs.push(ZIP_PATH, UNPACKED);
+  // Zip from a staging folder named like the release so the archive's single
+  // top-level folder is `MiniMaxAssetTool-<version>-x64/` (NOT `win-unpacked`).
+  // Renamed back afterwards so verify-release.js and the provenance asar path
+  // keep working against dist-out/win-unpacked/.
+  fs.renameSync(UNPACKED, STAGE);
+  let finalPaths = [];
   try {
-    await run(sevenZip, zipArgs);
+    // -snl- to skip symbolic links (defensive; the unpacked dir
+    // shouldn't contain any, but if it does we want the zip to
+    // succeed on accounts without SeCreateSymbolicLinkPrivilege).
+    if (!wantSplit) {
+      await run(sevenZip, ['a', '-snl-', '-bb', '-mx=7', ZIP_PATH, BASE_NAME], { cwd: DIST });
+      finalPaths = [ZIP_PATH];
+    } else {
+      // Partition the files greedily by raw size, then zip each partition as
+      // its own archive via a 7za listfile (paths relative to DIST so the
+      // stored entries keep the `MiniMaxAssetTool-<version>-x64/` prefix).
+      const files = [];
+      (function walk(dir) {
+        for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
+          const p = path.join(dir, e.name);
+          if (e.isDirectory()) walk(p); else files.push(p);
+        }
+      })(STAGE);
+      const partitions = [[]];
+      let partSize = 0;
+      for (const f of files) {
+        const size = fs.statSync(f).size;
+        if (partSize + size > PART_RAW_CAP && partitions[partitions.length - 1].length > 0) {
+          partitions.push([]);
+          partSize = 0;
+        }
+        partitions[partitions.length - 1].push(f);
+        partSize += size;
+      }
+      for (let i = 0; i < partitions.length; i++) {
+        const partPath = path.join(DIST, `${BASE_NAME}.part${i + 1}.zip`);
+        const listFile = path.join(DIST, `.zip-part${i + 1}.list.txt`);
+        fs.writeFileSync(listFile, partitions[i].map((f) => path.relative(DIST, f)).join('\r\n') + '\r\n', 'utf8');
+        try {
+          await run(sevenZip, ['a', '-snl-', '-mx=7', '-scsUTF-8', partPath, '@' + listFile], { cwd: DIST });
+        } finally {
+          fs.rmSync(listFile, { force: true });
+        }
+        finalPaths.push(partPath);
+        log('  part ' + (i + 1) + '/' + partitions.length + ': ' + path.basename(partPath) + '  (' + (fs.statSync(partPath).size / 1024 / 1024).toFixed(1) + ' MB)');
+      }
+    }
   } catch (e) {
+    // Restore the standard folder name before failing so a re-run (and the
+    // verifier) still find dist-out/win-unpacked/.
+    try { fs.renameSync(STAGE, UNPACKED); } catch (_) { /* best-effort */ }
     if (looksLikeSymlinkPrivilegeError(e.combined)) {
       printPrivilegeFix();
       process.exit(1);
     }
     fail('7-Zip zipping failed: ' + (e && e.message || e));
   }
+  fs.renameSync(STAGE, UNPACKED);
 
-  // QA-023: report split volumes when applicable.
-  let finalPaths;
-  if (wantSplit) {
-    const base = path.basename(ZIP_PATH);
-    finalPaths = fs.readdirSync(path.dirname(ZIP_PATH))
-      .filter((name) => new RegExp('^' + base.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '\\.\\d{3}$').test(name))
-      .sort()
-      .map((name) => path.join(path.dirname(ZIP_PATH), name));
-  } else {
-    finalPaths = [ZIP_PATH];
-  }
-  // Publish the same dual-purpose installer beside the archive. It can verify,
-  // join, and extract split volumes using built-in Windows tools, or install
+  // Publish the same dual-purpose installer beside the archive. It can verify
+  // and extract the part zips using built-in Windows tools, or install
   // directly when it is run from inside the extracted release.
   const easyInstallerPath = path.join(DIST, 'Install-MiniMax-Asset-Tool.cmd');
   await fsp.copyFile(path.join(ROOT, 'Install MiniMax Asset Tool.cmd'), easyInstallerPath);
@@ -387,7 +437,7 @@ function printPrivilegeFix() {
     fs.closeSync(fd);
     checksumLines.push(h.digest('hex') + '  ' + path.basename(fp));
   }
-  fs.writeFileSync(ZIP_PATH + '.sha256', checksumLines.join('\n') + '\n', 'utf8');
+  fs.writeFileSync(MANIFEST_PATH, checksumLines.join('\n') + '\n', 'utf8');
 
   log('');
   log('Step 3: writing build provenance...');
@@ -397,13 +447,15 @@ function printPrivilegeFix() {
   for (const fp of finalPaths) {
     log('  ' + fp + '  (' + (fs.statSync(fp).size / 1024 / 1024).toFixed(1) + ' MB)');
   }
-  log('  Checksums: ' + ZIP_PATH + '.sha256');
+  log('  Checksums: ' + MANIFEST_PATH);
   log('');
   if (wantSplit) {
-    log('To install: download the CMD, checksum, and all .001/.002/... parts');
-    log('into the same folder, then double-click the CMD. No archiver is needed.');
+    log('To install: download the CMD, checksum, and all .part1.zip/.part2.zip/...');
+    log('parts into the same folder, then double-click the CMD. No archiver is needed.');
+    log('(Manual route: extract EVERY part into the same folder — they merge into');
+    log('one ' + BASE_NAME + ' folder.)');
   } else {
-    log('To install on a target machine, extract the .zip and run MiniMaxAssetTool.exe inside the extracted folder.');
+    log('To install on a target machine, extract the .zip and run MiniMaxAssetTool.exe inside the extracted ' + BASE_NAME + ' folder.');
   }
 })().catch((e) => {
   fail(String((e && e.stack) || e));

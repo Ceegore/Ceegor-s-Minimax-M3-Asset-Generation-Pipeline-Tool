@@ -28,28 +28,28 @@ test('release paths are derived from package metadata', () => {
   }
 });
 
-test('split archive volumes are discovered as one intentional release', () => {
+test('split archive parts are discovered as one intentional release', () => {
   const root = fixture();
   try {
     const paths = releasePaths(root);
     fs.mkdirSync(paths.output, { recursive: true });
-    fs.writeFileSync(paths.archive + '.002', 'second');
-    fs.writeFileSync(paths.archive + '.001', 'first');
+    fs.writeFileSync(path.join(paths.output, `${paths.baseName}.part2.zip`), 'second');
+    fs.writeFileSync(path.join(paths.output, `${paths.baseName}.part1.zip`), 'first');
     assert.deepEqual(archiveFiles(paths).map((filePath) => path.basename(filePath)), [
-      'FixtureTool-9.8.7-x64.zip.001',
-      'FixtureTool-9.8.7-x64.zip.002',
+      'FixtureTool-9.8.7-x64.part1.zip',
+      'FixtureTool-9.8.7-x64.part2.zip',
     ]);
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }
 });
 
-test('single archive takes precedence over leftover split volumes', () => {
+test('single archive takes precedence over leftover split parts', () => {
   const root = fixture();
   try {
     const paths = releasePaths(root);
     fs.mkdirSync(paths.output, { recursive: true });
-    fs.writeFileSync(paths.archive + '.001', 'stale part');
+    fs.writeFileSync(path.join(paths.output, `${paths.baseName}.part1.zip`), 'stale part');
     fs.writeFileSync(paths.archive, 'single archive');
     assert.deepEqual(archiveFiles(paths), [paths.archive]);
   } finally {

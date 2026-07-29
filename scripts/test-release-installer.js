@@ -89,9 +89,11 @@ if (!fs.existsSync(installer) || !fs.existsSync(executable)) {
 }
 
 // Exercise the end-user path before publishing: the CMD sits beside a small
-// multipart archive and must verify, join, extract, and install it without an
-// external archiver. This fixture stays tiny; the release payload is checked
-// separately by check-bundled-deps.js and runtime-assets.json.
+// multipart archive and must verify, extract, and install it without an
+// external archiver. Each part is an INDEPENDENT zip whose entries live under
+// the same MiniMaxAssetTool-<version>-x64 top folder (mirrors zip-portable.js).
+// This fixture stays tiny; the release payload is checked separately by
+// check-bundled-deps.js and runtime-assets.json.
 const bootstrapInstaller = path.join(ROOT, 'Install MiniMax Asset Tool.cmd');
 if (process.platform === 'win32' && fs.existsSync(bootstrapInstaller)) {
   const sevenZip = path.join(ROOT, 'node_modules', '7zip-bin', 'win', 'x64', '7za.exe');
@@ -100,16 +102,16 @@ if (process.platform === 'win32' && fs.existsSync(bootstrapInstaller)) {
   } else {
     const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'minimax-bootstrap-test-'));
     const downloadDir = path.join(temp, 'download with spaces');
-    const unpacked = path.join(temp, 'win-unpacked');
+    const baseName = 'MiniMaxAssetTool-9.9.9-x64';
+    const appDir = path.join(temp, baseName);
     const installTarget = path.join(temp, 'installed app');
     const desktop = path.join(temp, 'Desktop');
     const startMenu = path.join(temp, 'StartMenu');
-    const baseName = 'MiniMaxAssetTool-9.9.9-x64.zip';
     try {
       fs.mkdirSync(downloadDir, { recursive: true });
-      fs.mkdirSync(unpacked, { recursive: true });
+      fs.mkdirSync(appDir, { recursive: true });
       fs.copyFileSync(bootstrapInstaller, path.join(downloadDir, path.basename(bootstrapInstaller)));
-      fs.copyFileSync(bootstrapInstaller, path.join(unpacked, path.basename(bootstrapInstaller)));
+      fs.copyFileSync(bootstrapInstaller, path.join(appDir, path.basename(bootstrapInstaller)));
       const mockFiles = [
         'MiniMaxAssetTool.exe',
         path.join('resources', 'app.asar'),
@@ -120,18 +122,32 @@ if (process.platform === 'win32' && fs.existsSync(bootstrapInstaller)) {
         path.join('nested', 'bootstrap-sentinel.bin'),
       ];
       for (const item of mockFiles) {
-        const target = path.join(unpacked, item);
+        const target = path.join(appDir, item);
         fs.mkdirSync(path.dirname(target), { recursive: true });
         fs.writeFileSync(target, item.endsWith('.bin') ? crypto.randomBytes(16384) : 'installer test');
       }
-      const archive = path.join(downloadDir, baseName);
-      const made = spawnSync(sevenZip, ['a', '-tzip', '-mx=0', '-v2k', archive, 'win-unpacked'], {
-        cwd: temp, encoding: 'utf8', windowsHide: true,
-      });
-      if (made.status !== 0) {
-        fail(`could not create multipart installer fixture: ${(made.stderr || made.stdout || '').trim()}`);
-      } else {
-        const parts = fs.readdirSync(downloadDir).filter((name) => /^MiniMaxAssetTool-9\.9\.9-x64\.zip\.\d{3}$/.test(name)).sort();
+      // Two independent part zips, each holding a slice of the SAME top folder
+      // (extracting both into one destination must merge into that folder).
+      const partContents = [
+        [`${baseName}\\MiniMaxAssetTool.exe`, `${baseName}\\resources`],
+        [`${baseName}\\nested`, `${baseName}\\${path.basename(bootstrapInstaller)}`],
+      ];
+      let madeOk = true;
+      for (let i = 0; i < partContents.length; i++) {
+        const partPath = path.join(downloadDir, `${baseName}.part${i + 1}.zip`);
+        const made = spawnSync(sevenZip, ['a', '-tzip', '-mx=0', partPath, ...partContents[i]], {
+          cwd: temp, encoding: 'utf8', windowsHide: true,
+        });
+        if (made.status !== 0) {
+          fail(`could not create multipart installer fixture: ${(made.stderr || made.stdout || '').trim()}`);
+          madeOk = false;
+          break;
+        }
+      }
+      if (madeOk) {
+        const parts = fs.readdirSync(downloadDir)
+          .filter((name) => /^MiniMaxAssetTool-9\.9\.9-x64\.part\d+\.zip$/.test(name))
+          .sort();
         const lines = parts.map((name) => {
           const digest = crypto.createHash('sha256').update(fs.readFileSync(path.join(downloadDir, name))).digest('hex');
           return `${digest}  ${name}`;
@@ -158,7 +174,7 @@ if (process.platform === 'win32' && fs.existsSync(bootstrapInstaller)) {
         if (result.status !== 0 || missing.length) {
           fail(`multipart easy install failed: ${(result.stderr || result.stdout || '').trim()}${missing.length ? `; missing ${missing.join(', ')}` : ''}`);
         } else {
-          process.stdout.write(`[test-release-installer] PASS: multipart checksum, built-in extraction, and install work (${parts.length} parts)\n`);
+          process.stdout.write(`[test-release-installer] PASS: multipart checksum, built-in extraction, and install work (${parts.length} independent parts)\n`);
         }
       }
     } finally {

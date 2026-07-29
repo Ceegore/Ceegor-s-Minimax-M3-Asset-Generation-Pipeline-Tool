@@ -2835,7 +2835,6 @@ button.fb-up-disabled:focus {
 .batch-dashboard-item-params { color: var(--accent); flex: 0 0 auto; }
 .batch-dashboard-item-actions {
   flex: 0 0 auto;
-  margin-left: 6px;
   display: inline-flex;
   gap: 4px;
 }

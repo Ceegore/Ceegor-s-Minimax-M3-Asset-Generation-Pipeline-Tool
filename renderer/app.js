@@ -1599,22 +1599,12 @@ function openAllBatchDashboard() {
             });
             const txt = batchText(it).slice(0, 200);
             li.appendChild(el('span', { class: 'batch-dashboard-item-num' }, `${idx + 1}.`));
-            li.appendChild(el('span', { class: 'batch-dashboard-item-text' }, txt + (batchText(it).length > 200 ? '…' : '')));
-            if (it && typeof it === 'object') {
-              const params = [];
-              for (const k2 of Object.keys(it)) {
-                if (k2 === 'prompt' || k2 === 'text') continue;
-                if (typeof it[k2] === 'string') params.push(`${k2}: ${it[k2]}`);
-                else if (typeof it[k2] === 'number') params.push(`${k2}: ${it[k2]}`);
-              }
-              if (params.length) li.appendChild(el('span', { class: 'batch-dashboard-item-params' }, ` [${params.join(', ')}]`));
-            }
             // Show Edit / Remove for ALL items. Remove just
             // deletes the entry from state.batches (already-
-            // processed items stay in the log for history; the
-            // queued future is no longer affected). Edit opens
-            // the per-tab editor to change the entry's
-            // text/params.
+            // processed items stay in the log for history).
+            // Edit opens the per-tab editor. The actions sit
+            // LEFT of the text so they stay visible (the 1s
+            // auto-refresh resets horizontal scroll to 0).
             {
               const actions = el('span', { class: 'batch-dashboard-item-actions' });
               const upBtn = el('button', {
@@ -1664,6 +1654,16 @@ function openAllBatchDashboard() {
               }, '✕');
               actions.append(upBtn, downBtn, editBtn, removeBtn);
               li.appendChild(actions);
+            }
+            li.appendChild(el('span', { class: 'batch-dashboard-item-text' }, txt + (batchText(it).length > 200 ? '…' : '')));
+            if (it && typeof it === 'object') {
+              const params = [];
+              for (const k2 of Object.keys(it)) {
+                if (k2 === 'prompt' || k2 === 'text') continue;
+                if (typeof it[k2] === 'string') params.push(`${k2}: ${it[k2]}`);
+                else if (typeof it[k2] === 'number') params.push(`${k2}: ${it[k2]}`);
+              }
+              if (params.length) li.appendChild(el('span', { class: 'batch-dashboard-item-params' }, ` [${params.join(', ')}]`));
             }
             list.appendChild(li);
           });
