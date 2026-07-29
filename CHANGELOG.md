@@ -2,6 +2,34 @@
 
 Notable user-facing changes are recorded here.
 
+## 1.0.1 - 2026-07-29
+
+### Added
+
+- BatchGen combined all-types confirmation overlay with per-type paid-call counts, output folder picker, and per-asset-type subfolder opt-out.
+- BatchGen per-entry parameter editor with live defective-entry validation and repair in the queue editor.
+- Fenced ```batch-json lossless import format for pipes-in-prose, multiline speech, and structured lyrics.
+- Style header auto-detection in import files with one-click preset creation.
+- Per-row post-processing flags in batch entries (upscale, crop, resize, optimize, remove-bg, trim).
+- Batch auto-remove now persists queue state after each successful item.
+- Release split-archive packaging with independent part zips (no join step needed).
+
+### Improved
+
+- BatchGen progress overlay with per-item log, elapsed timer, progress bar, and stop button.
+- Partial-success handling: a batch item with some failed variants no longer drops the successful ones.
+- Direct-mode batch execution (snapshot-based) eliminates DOM inheritance bugs.
+- Import capacity overflow detection with clear truncation warnings.
+- Release installer verifies and extracts multipart zips using built-in Windows tools.
+
+### Fixed
+
+- BatchGen per-tab run lock preventing concurrent starts of the same queue.
+- Auto-remove firing on partial variant success (now requires ALL variants to succeed).
+- Per-item field restore in batch runner (style, prefix, upscale, auto-pipeline).
+- Import param tokenizer handling of colon-separated values, negative numbers, and URL schemes.
+- Release packaging: correct top-level folder name, provenance record, and checksum manifest.
+
 ## 1.0.0 - 2026-07-28
 
 ### Added
