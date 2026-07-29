@@ -380,8 +380,12 @@ async function startBatchGen(tabKey, opts) {
   // created on demand; the grant minted above covers the base root
   // (coversRoot: true), so the subdir write is authorised. Any failure
   // falls back to the base folder — a missing subfolder must not kill an
-  // overnight run.
-  if (!opts.noTypeSubfolders && baseOutputDir && window.api && typeof window.api.fbEnsureDir === 'function') {
+  // overnight run. Direct mode only: the DOM-fallback path never reads
+  // batchSnapshot.outputDir (each tab handler resolves its own output
+  // folder), so creating the subfolder there would only leave an empty
+  // folder behind while the assets land elsewhere.
+  if (!opts.noTypeSubfolders && baseOutputDir && state.batchDirectMode !== false && window.BatchDirectRunner
+      && window.api && typeof window.api.fbEnsureDir === 'function') {
     const sep = (baseOutputDir.includes('/') && !baseOutputDir.includes('\\')) ? '/' : '\\';
     const typeDir = baseOutputDir + sep + tabKey;
     try {
@@ -702,13 +706,14 @@ async function startBatchGen(tabKey, opts) {
     if (_bar) _bar.set(100);
     // R5 (H1): detach the stop handler before repurposing to "Close" (.onclick= doesn't remove an addEventListener listener).
     stopBtn.removeEventListener('click', onStopClick);
-    // T7: a clean run (no failure, no error, not aborted) removes the
-    // overlay automatically — the summary toast below is the success
-    // confirmation and the GUI returns to its normal state without the
-    // user having to click Close on an already-finished process. Failed /
-    // aborted runs KEEP the overlay (with a Close button) so the per-item
-    // error log can still be inspected.
-    if (!batchError && fail === 0 && !window._batchAbortByTab[tabKey]) {
+    // T7: a clean run (no failure, no skip, no error, not aborted)
+    // removes the overlay automatically — the summary toast below is the
+    // success confirmation and the GUI returns to its normal state without
+    // the user having to click Close on an already-finished process.
+    // Failed / skipped-defective / aborted runs KEEP the overlay (with a
+    // Close button) so the per-item log — WHICH item failed or was
+    // skipped — can still be inspected (same rule as the toast's 'warn').
+    if (!batchError && fail === 0 && skipped === 0 && !window._batchAbortByTab[tabKey]) {
       overlay.remove();
     } else {
       stopBtn.textContent = 'Close';

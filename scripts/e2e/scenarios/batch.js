@@ -159,6 +159,10 @@ module.exports = {
       try { await window.api.batchesSet(state.batches); } catch (_) {}
       try { _refreshBatchButtons(); } catch (_) {}
       state.batchesAutoRemove = true;
+      // T7: a cancelled batch intentionally keeps its overlay open (Close
+      // button). Remove any leftover overlays so downstream scenarios start
+      // with a clean DOM.
+      document.querySelectorAll('.batch-overlay').forEach((o) => o.remove());
       return true;
     })()`).catch(() => false);
   },
