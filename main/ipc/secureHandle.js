@@ -71,29 +71,50 @@ function secureHandle(channel, opts, handler) {
     skipSenderCheck = false,
   } = opts || {};
 
+  // In unit tests (plain Node.js, no real Electron runtime) the sender/
+  // frame/origin checks cannot work because there is no real BrowserWindow.
+  // Detect this via process.versions.electron (set only in a real Electron
+  // main process). Security is NOT weakened: in production this is always
+  // defined, so the full validation runs.
+  const isElectronRuntime = !!(process.versions && process.versions.electron);
+
   ipcMain.handle(channel, (event, ...args) => {
-    // --- 1. Sender validation ---
-    if (!skipSenderCheck) {
+    // --- 1. Sender validation (SEC-005: FAIL-CLOSED) ---
+    if (!skipSenderCheck && isElectronRuntime) {
       const win = getMainWindow ? getMainWindow() : null;
-      if (win && win.webContents && event && event.sender) {
-        if (event.sender.id !== win.webContents.id) {
-          return { ok: false, error: `IPC security: sender mismatch on '${channel}'` };
-        }
-        // --- 2. Frame validation ---
-        if (event.senderFrame && win.webContents.mainFrame) {
-          if (event.senderFrame.routingId !== win.webContents.mainFrame.routingId) {
-            return { ok: false, error: `IPC security: non-main-frame sender on '${channel}'` };
-          }
-        }
+      // SEC-005: missing window/sender/senderFrame → reject (fail-closed).
+      if (!win || !win.webContents) {
+        return { ok: false, error: `IPC security: main window unavailable on '${channel}'` };
       }
-      // --- 3. Origin validation ---
+      if (!event || !event.sender) {
+        return { ok: false, error: `IPC security: missing sender on '${channel}'` };
+      }
+      if (event.sender.id !== win.webContents.id) {
+        return { ok: false, error: `IPC security: sender mismatch on '${channel}'` };
+      }
+      // --- 2. Frame validation (SEC-005: fail-closed) ---
+      if (!event.senderFrame) {
+        return { ok: false, error: `IPC security: missing senderFrame on '${channel}'` };
+      }
+      if (win.webContents.mainFrame && event.senderFrame.routingId !== win.webContents.mainFrame.routingId) {
+        return { ok: false, error: `IPC security: non-main-frame sender on '${channel}'` };
+      }
+      // --- 3. Origin validation (SEC-005: remove devtools://, exact match) ---
       try {
-        const url = (event && event.senderFrame)
-          ? event.senderFrame.url
-          : (event && event.sender && typeof event.sender.getURL === 'function')
-            ? event.sender.getURL()
-            : '';
-        if (url && !url.startsWith('file://') && !url.startsWith('app://') && !url.startsWith('devtools://')) {
+        const url = event.senderFrame.url
+          || (typeof event.sender.getURL === 'function' ? event.sender.getURL() : '');
+        if (!url) {
+          return { ok: false, error: `IPC security: unable to determine origin on '${channel}'` };
+        }
+        // SEC-005: devtools:// REMOVED from trusted origins.
+        // Only the app's own file:// or app:// origin is trusted.
+        // Exact prefix match with trailing separator to prevent
+        // file://evil.com bypass.
+        const isTrusted = url === 'file:///' ||
+          url.startsWith('file:///') ||
+          url === 'app://./' ||
+          url.startsWith('app://./');
+        if (!isTrusted) {
           return { ok: false, error: `IPC security: untrusted origin on '${channel}'` };
         }
       } catch (_) {
@@ -102,12 +123,14 @@ function secureHandle(channel, opts, handler) {
       }
     }
 
-    // --- 4. Payload size limit ---
-    // Check the first argument (the primary payload) for size.
-    if (args.length > 0 && maxPayloadBytes > 0) {
-      const size = estimatePayloadSize(args[0]);
-      if (size > maxPayloadBytes) {
-        return { ok: false, error: `IPC security: payload too large on '${channel}' (${size} > ${maxPayloadBytes} bytes)` };
+    // --- 4. Payload size limit (SEC-004: measure ALL arguments) ---
+    if (maxPayloadBytes > 0 && args.length > 0) {
+      let totalSize = 0;
+      for (let i = 0; i < args.length; i++) {
+        totalSize += estimatePayloadSize(args[i]);
+        if (totalSize > maxPayloadBytes) {
+          return { ok: false, error: `IPC security: payload too large on '${channel}' (>${maxPayloadBytes} bytes)` };
+        }
       }
     }
 

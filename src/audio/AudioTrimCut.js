@@ -222,7 +222,15 @@ async function cut(srcPath, dstPath, opts = {}) {
   }
   const duration = endSec - startSec;
   const fadeMs   = opts.fadeMs != null ? opts.fadeMs : 5;
-  const wantFade = !!opts.fade && fadeMs > 0;
+  // FUNC-011: clamp fade so fadeIn + fadeOut <= clipDuration.
+  // Each fade is fadeMs; both together must not exceed the clip.
+  const maxFadeMs = Math.floor((duration * 1000) / 2);
+  const clampedFadeMs = Math.min(fadeMs, maxFadeMs);
+  const wantFade = !!opts.fade && clampedFadeMs > 0;
+  // FUNC-009/010: stream-copy is only valid when NO filters are active.
+  // A fade requires re-encoding (the -af filter graph), so copy mode
+  // must be disabled when fade is requested.
+  const useCopy = !!opts.copy && !wantFade;
 
   const ext = (path.extname(dstPath).toLowerCase().replace(/^\./, '') || 'wav');
   const codec = codecArgsFor(ext, opts.quality);
@@ -230,8 +238,9 @@ async function cut(srcPath, dstPath, opts = {}) {
   // For "copy" mode (-c copy), the rules are different: ffmpeg needs
   // the fast seek (before -i) to keep stream-copying working. We keep
   // `-ss` before -i in that branch only.
+  // FUNC-009/010: useCopy is false when fade is active (see above).
   let args;
-  if (opts.copy) {
+  if (useCopy) {
     args = [
       '-ss', startSec.toFixed(6),
       '-i', srcPath,
@@ -247,9 +256,10 @@ async function cut(srcPath, dstPath, opts = {}) {
     ];
     if (wantFade) {
       // Use a tiny half-cosine fade. afade=t=in/out:st=…:d=…
-      const fadeSec = (fadeMs / 1000).toFixed(4);
+      // FUNC-011: use clampedFadeMs to ensure fadeIn + fadeOut <= duration.
+      const fadeSec = (clampedFadeMs / 1000).toFixed(4);
       args.push(
-        '-af', `afade=t=in:st=0:d=${fadeSec},afade=t=out:st=${(duration - fadeMs / 1000).toFixed(4)}:d=${fadeSec}`,
+        '-af', `afade=t=in:st=0:d=${fadeSec},afade=t=out:st=${(duration - clampedFadeMs / 1000).toFixed(4)}:d=${fadeSec}`,
       );
     }
   }

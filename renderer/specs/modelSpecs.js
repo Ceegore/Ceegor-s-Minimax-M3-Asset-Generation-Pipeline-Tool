@@ -281,12 +281,14 @@ const MMX_ALLOWED = {
   },
   video: {
     model: ['MiniMax-Hailuo-2.3', 'MiniMax-Hailuo-2.3-Fast', 'MiniMax-Hailuo-02', 'S2V-01'],
-    duration: { min: 6, max: 10, integer: true },
+    // FUNC-013: duration is a discrete enum per (mode, model, resolution),
+    // NOT a continuous range. The allowed values are validated by
+    // validateVideoParams() in ContractRegistry. The UI shows only the
+    // valid durations for the current selection.
+    duration: [6, 10],
     // The UNION of every model's supported resolutions. Each individual model
     // only supports a SUBSET (see VIDEO_RESOLUTIONS_BY_MODEL) — validateValues
-    // enforces that subset against the selected model. The union is here so the
-    // top-level enum check accepts any value the UI could legitimately offer
-    // for SOME model (H7-020). 720P is offered by no model; removed (X1-F7).
+    // enforces that subset against the selected model.
     resolution: ['512P', '768P', '1080P'],
     promptMax: 2000,
   },
@@ -299,7 +301,10 @@ const MMX_ALLOWED = {
 // without reaching into the per-row-override structure.
 const VIDEO_RESOLUTIONS_BY_MODEL = {
   'MiniMax-Hailuo-2.3':       ['768P', '1080P'],
-  'MiniMax-Hailuo-2.3-Fast':  ['768P'],
+  // FUNC-015: Fast model supports 1080P (with 6s duration only).
+  'MiniMax-Hailuo-2.3-Fast':  ['768P', '1080P'],
+  // FUNC-014: Hailuo-02 supports 512P only for T2V/I2V, NOT for FL2V.
+  // The FL2V restriction is enforced by durationsForVideoSelection().
   'MiniMax-Hailuo-02':        ['512P', '768P', '1080P'],
   'S2V-01':                   ['768P'],
 };
@@ -481,8 +486,8 @@ function validateToolCombos(tabKey, values, toolCtx) {
 // anyway, Cancel = stop). Deliberately does NOT hard-block — a false
 // positive must never lock the user out of generating. Returns true when
 // generation should proceed.
-function _preflightModal(lead, errors) {
-  if (typeof showModal !== 'function') return Promise.resolve(true);
+function _preflightModal(lead, errors, canOverride) {
+  if (typeof showModal !== 'function') return Promise.resolve(canOverride !== false);
   return new Promise((resolve) => {
     let settled = false;
     const finish = (answer, close) => {
@@ -493,14 +498,21 @@ function _preflightModal(lead, errors) {
     };
     showModal((m, close) => {
       const panel = el('div', { class: 'preflight-confirm' });
-      panel.append(el('h3', {}, 'Check generation settings'), el('p', {}, lead));
+      panel.append(el('h3', {}, canOverride === false ? 'Generation blocked' : 'Check generation settings'), el('p', {}, lead));
       const list = el('ul');
       for (const error of errors) list.appendChild(el('li', {}, error));
-      const cancel = el('button', {}, 'Cancel');
-      const proceed = el('button', { class: 'primary' }, 'Generate anyway');
-      cancel.addEventListener('click', () => finish(false, close));
-      proceed.addEventListener('click', () => finish(true, close));
-      panel.append(list, el('div', { class: 'actions' }, [cancel, proceed]));
+      // FUNC-016: hard errors have NO "Generate anyway" button.
+      if (canOverride === false) {
+        const ok = el('button', { class: 'primary' }, 'OK');
+        ok.addEventListener('click', () => finish(false, close));
+        panel.append(list, el('div', { class: 'actions' }, [ok]));
+      } else {
+        const cancel = el('button', {}, 'Cancel');
+        const proceed = el('button', { class: 'primary' }, 'Generate anyway');
+        cancel.addEventListener('click', () => finish(false, close));
+        proceed.addEventListener('click', () => finish(true, close));
+        panel.append(list, el('div', { class: 'actions' }, [cancel, proceed]));
+      }
       m.appendChild(panel);
     }, { onClose: () => { if (!settled) { settled = true; resolve(false); } } });
   });
@@ -510,14 +522,18 @@ async function mmxPreflightConfirm(tabKey, values, toolCtx) {
   try {
     const apiErrors = (validateValues(tabKey, values) || {}).errors || [];
     const toolErrors = (validateToolCombos(tabKey, values, toolCtx) || {}).errors || [];
-    const all = apiErrors.concat(toolErrors);
-    if (all.length) {
-      const lead = apiErrors.length && toolErrors.length
-        ? 'These settings may cause issues (mix of API-level and tool-level warnings):'
-        : apiErrors.length
-          ? 'These settings will likely be rejected by the MiniMax API:'
-          : 'Heads up — these settings may produce unexpected results:';
-      return _preflightModal(lead, all);
+    // FUNC-016: API errors are HARD blocks (no "Generate anyway").
+    // Tool warnings are confirmable (user can override).
+    if (apiErrors.length) {
+      // Hard block: show errors with NO override option.
+      const lead = 'These settings will be rejected by the MiniMax API. Fix them before generating:';
+      const canOverride = false;
+      return _preflightModal(lead, apiErrors, canOverride);
+    }
+    if (toolErrors.length) {
+      // Confirmable: tool-level warnings with "Generate anyway" option.
+      const lead = 'Heads up — these settings may produce unexpected results:';
+      return _preflightModal(lead, toolErrors, true);
     }
   } catch (_) { /* never block generation on a validator bug */ }
   return true;

@@ -1,26 +1,49 @@
 // renderer/tabs/speechTab.js
 // ----------------- SPEECH TAB -----------------
 
+// FUNC-027: Per-model voice memory. Stores the last selected voice for
+// each model so switching back restores the user's choice.
+const _voiceMemoryByModel = new Map();
+
 // Re-populate voice dropdown when --model changes. Switching --model
 // drops the old model's voices and reloads the new list. The previous
 // voice is preserved if the new model has it; otherwise fall back to
 // the first option + toast. Module-scope (not inside build()) to keep
 // build() under the 500-line lint limit.
+// FUNC-027: also remembers the voice per model and restores it on switch.
 function attachModelChangeVoiceRepopulate(tab, modelInput, voiceInput) {
   let previousVoice = voiceInput.getValue ? voiceInput.getValue() : (voiceInput.value || '');
+  let previousModel = modelInput.getValue ? modelInput.getValue() : (modelInput.value || '');
+  // FUNC-027: store initial voice for the initial model.
+  if (previousModel && previousVoice) {
+    _voiceMemoryByModel.set(previousModel, previousVoice);
+  }
   modelInput.addEventListener('change', () => {
+    const newModel = modelInput.getValue ? modelInput.getValue() : (modelInput.value || '');
+    // FUNC-027: save the current voice for the old model before switching.
+    if (previousModel && previousVoice) {
+      _voiceMemoryByModel.set(previousModel, previousVoice);
+    }
     tab.populateVoices(voiceInput.el || voiceInput).then(() => {
       try {
         const sel = voiceInput.el || voiceInput;
         if (!sel || !sel.options || !sel.options.length) return;
-        let hasPrev = false;
-        for (const opt of sel.options) if (opt.value === previousVoice) { hasPrev = true; break; }
-        if (!hasPrev) {
-          sel.value = sel.options[0].value;
-          if (typeof sel.dispatchEvent === 'function') sel.dispatchEvent(new Event('change', { bubbles: true }));
-          if (typeof toast === 'function') toast(`Voice "${previousVoice}" is not available for the new model — switched to "${sel.value}".`, 'warn', 4000);
+        // FUNC-027: try to restore the remembered voice for this model.
+        const rememberedVoice = _voiceMemoryByModel.get(newModel);
+        let targetVoice = rememberedVoice || previousVoice;
+        let hasTarget = false;
+        for (const opt of sel.options) if (opt.value === targetVoice) { hasTarget = true; break; }
+        if (!hasTarget) {
+          // Remembered voice not available; fall back to first option.
+          targetVoice = sel.options[0].value;
+          if (typeof toast === 'function') toast(`Voice "${rememberedVoice || previousVoice}" is not available for ${newModel} — switched to "${targetVoice}".`, 'warn', 4000);
         }
-        previousVoice = sel.value;
+        sel.value = targetVoice;
+        if (typeof sel.dispatchEvent === 'function') sel.dispatchEvent(new Event('change', { bubbles: true }));
+        previousVoice = targetVoice;
+        previousModel = newModel;
+        // FUNC-027: update memory for the new model.
+        _voiceMemoryByModel.set(newModel, targetVoice);
       } catch (_) {}
     }).catch(() => {});
   });
@@ -192,7 +215,7 @@ The language hint mainly helps with mixed-language text (e.g. English narration 
 
     genBtn.addEventListener('click', async () => {
       // Breadcrumb the click BEFORE guards.
-      if (typeof window.logAction === 'function') window.logAction('generate', 'click-generate', { tab: 'speech', has_api_key: !!state.config.api_key });
+      if (typeof window.logAction === 'function') window.logAction('generate', 'click-generate', { tab: 'speech', has_api_key: !!state.config.hasApiKey });
       // Whole-handler try/catch so a pre-flight throw (e.g. missing
       // helper) surfaces instead of rejecting silently. Per-tab
       // re-entrancy guard via JobRunner + state.generating (see app.js).
@@ -201,7 +224,7 @@ The language hint mainly helps with mixed-language text (e.g. English narration 
         if (typeof window.logAction === 'function') window.logAction('generate', 'guard-blocked', { reason: 'already-running', tab: 'speech' });
         return;
       }
-      if (!state.config.api_key) {
+      if (!state.config.hasApiKey) {
         if (typeof window.logAction === 'function') window.logAction('generate', 'guard-blocked', { reason: 'no-api-key', tab: 'speech' });
         toast('No API key configured. Click ⚙ to open Settings.', 'err'); return;
       }
@@ -402,7 +425,7 @@ The language hint mainly helps with mixed-language text (e.g. English narration 
             : uniquePath(outDir, `${prefix}${ts}_${slug}${variantTag}.${ext}`);
           args.push('--out', outFile);
           // H3-B9: log the command to the structured log (replaces .lastcmd).
-          const maskedCmd = maskLine(`mmx ${args.join(' ')}`, state.config && state.config.api_key);
+          const maskedCmd = maskLine(`mmx ${args.join(' ')}`);
           if (ctx && ctx.onSecondary) ctx.onSecondary(maskedCmd);
           const statusMsg = variantsCount > 1
             ? `Generating speech… variant ${v}/${variantsCount}`

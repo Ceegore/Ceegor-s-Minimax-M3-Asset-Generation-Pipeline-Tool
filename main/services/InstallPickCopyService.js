@@ -8,6 +8,7 @@
 // C:\Windows.
 
 const fsp = require('fs').promises;
+const fs = require('fs');
 const path = require('path');
 const { randomUUID } = require('crypto');
 
@@ -18,6 +19,39 @@ const { getSpec, getDestPath } = require('../models/InstallKindsTable');
  *   'realesrgan-binary' | 'isnetbg-binary' | 'isnetbg-model'
  * )} InstallKind
  */
+
+// SEC-013: validate picked file type BEFORE copying into bin/.
+// PE executables must start with 'MZ'; ONNX models are protobuf
+// (first byte is a varint field tag, typically 0x08). Reject anything
+// else to prevent a social-engineering attack where the user is
+// tricked into installing a script or DLL.
+const MAX_VALIDATION_READ = 512;
+function validatePickedFile(srcPath, kind) {
+  let header;
+  try {
+    const fd = fs.openSync(srcPath, 'r');
+    header = Buffer.alloc(MAX_VALIDATION_READ);
+    const bytesRead = fs.readSync(fd, header, 0, MAX_VALIDATION_READ, 0);
+    fs.closeSync(fd);
+    header = header.slice(0, bytesRead);
+  } catch (e) {
+    return { ok: false, error: 'Cannot read file header: ' + String(e.message || e) };
+  }
+  if (header.length < 2) return { ok: false, error: 'File is too small to be valid.' };
+  if (kind === 'realesrgan-binary' || kind === 'isnetbg-binary') {
+    // PE executable: must start with MZ (0x4D 0x5A)
+    if (header[0] !== 0x4D || header[1] !== 0x5A) {
+      return { ok: false, error: 'File does not appear to be a Windows executable (missing MZ header).' };
+    }
+  } else if (kind === 'isnetbg-model') {
+    // ONNX protobuf: first byte should be a field tag (0x08 for field 1, varint).
+    // Also accept 0x0A (field 1, length-delimited) for newer IR versions.
+    if (header[0] !== 0x08 && header[0] !== 0x0A) {
+      return { ok: false, error: 'File does not appear to be an ONNX model (unexpected header byte 0x' + header[0].toString(16) + ').' };
+    }
+  }
+  return { ok: true };
+}
 
 /**
  * @param {string} kind
@@ -39,6 +73,10 @@ async function pickAndCopy(kind, showOpenDialog, appRoot) {
   });
   if (r.canceled || !r.filePaths.length) return { ok: false, canceled: true };
   const srcPath = r.filePaths[0];
+
+  // SEC-013: validate file type before installing.
+  const validation = validatePickedFile(srcPath, kind);
+  if (!validation.ok) return validation;
 
   // Resolve the destination (always <appRoot>/bin[/<subdir>]/<destName>).
   const destPath = getDestPath(kind, appRoot);

@@ -188,7 +188,7 @@ async function startBatchGen(tabKey, opts) {
   opts = opts || {};
   const items = (state.batches[tabKey] || []).slice();
   if (!items.length) { toast('Batch is empty.', 'warn'); return; }
-  if (!state.config.api_key) { toast('No API key configured. Click ⚙ to open Settings.', 'err'); return; }
+  if (!state.config.hasApiKey) { toast('No API key configured. Click ⚙ to open Settings.', 'err'); return; }
   // H9-016: per-queue run lock. Two concurrent starts for the same queue would
   // race queue mutation + duplicate work. The parent job deliberately carries
   // no tabKey (so JobRunner's per-tab gate doesn't block it), so without this

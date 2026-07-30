@@ -207,23 +207,10 @@ function openSettings() {
         }
         return;
       }
-      // R2.3.1: state.config.api_key etc. is the cfg the user
-      // expects. The handler returns result.config which is the
-      // saved cfg (with empty api_key if session-only). We assign
-      // it directly so downstream code reads it as before.
+      // SEC-001: config:set returns a public DTO (no raw api_key).
+      // The session key lives exclusively in the main process.
       const saved = result.config;
-      // If the user enabled "Don't save" but entered a key,
-      // assign it in-memory (state.config.api_key) so the
-      // session works, then CLEAR it from the saved config so
-      // a subsequent restart starts with an empty key.
-      if (apiKeyNoSave && apiKeyInMemory) {
-        saved.api_key = apiKeyInMemory;
-      }
       state.apiKeyNoSave = !!apiKeyNoSave;
-      // KGO7-003: belt-and-braces — adoptConfig restores the previous
-      // session key if `apiKeyInMemory` was empty (e.g. the user toggled
-      // the switch without re-typing the key). Runs AFTER apiKeyNoSave is
-      // set so the helper sees the switch's new value.
       state.config = window.adoptConfig ? window.adoptConfig(saved) : saved;
       // Live-apply the saved theme so the new selection takes effect
       // immediately (the Settings modal writes theme to config but the

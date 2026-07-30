@@ -1,0 +1,15 @@
+{
+  "id": "pred-xyz003",
+  "model": "hexgrad/kokoro-82m",
+  "version": "v1",
+  "status": "succeeded",
+  "output": {
+    "audio": {
+      "url": "https://replicate.delivery/pbxt/xyz003/speech.mp3",
+      "mime_type": "audio/mpeg",
+      "size": 98304
+    },
+    "text": "Hello world"
+  },
+  "metrics": { "predict_time": 2.3 }
+}

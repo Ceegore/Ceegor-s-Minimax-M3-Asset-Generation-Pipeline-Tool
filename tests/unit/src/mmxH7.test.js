@@ -79,13 +79,17 @@ test('tryParseAll handles braces inside string values (no false split)', (t) => 
 
 // ---------------- H7-013: redacted argv ----------------
 
-test('runMmx never returns the raw API key in argv (H7-013, fallback path)', async (t) => {
+test('runMmx never returns the raw API key in argv (H7-013, HIGH-002: env fallback)', async (t) => {
   // Intercept spawn so we don't actually launch a child, and force the
-  // --api-key argv fallback path by stubbing the sync to return false.
+  // env-based fallback path by stubbing the sync to return false.
   const syncPath = path.join(ROOT, 'src', 'mmxApiKeySync');
   require.cache[require.resolve(syncPath)] = { exports: { syncApiKeyToMmxCliConfig: () => false, _resetForTest: () => {} } };
   const cp = require('child_process');
-  t.mock.method(cp, 'spawn', () => {
+  let capturedEnv = null;
+  let capturedArgs = null;
+  t.mock.method(cp, 'spawn', (cmd, args, opts) => {
+    capturedArgs = args;
+    capturedEnv = opts && opts.env;
     const fake = {
       stdout: { on() {}, resume() {} },
       stderr: { on() {}, resume() {} },
@@ -103,11 +107,19 @@ test('runMmx never returns the raw API key in argv (H7-013, fallback path)', asy
   const SECRET = 'sk-cp-DO-NOT-LEAK-1234567890';
   const r = await mmx2.runMmx({ args: ['quota'], apiKey: SECRET });
   assert.equal(r.ok, true); // close code 0
-  const joined = (r.argv || []).join(' ');
+  // HIGH-002: the key must NOT appear in argv at all.
+  const joined = (capturedArgs || []).join(' ');
   assert.ok(!joined.includes(SECRET), `argv leaked the key: ${joined}`);
-  const idx = r.argv.indexOf('--api-key');
-  assert.ok(idx >= 0, '--api-key flag must be present (fallback path)');
-  assert.equal(r.argv[idx + 1], '***', 'the key position must be redacted to ***');
+  // HIGH-002: --api-key must not appear as a STANDALONE flag in spawn args.
+  // (The bootstrap code string contains the literal '--api-key' because it
+  // reconstructs argv *inside* the child — that's expected and safe since
+  // the key value comes from env, never from the OS command line.)
+  const argsWithoutBootstrap = (capturedArgs || []).filter((a, i) => i !== 1);
+  assert.ok(!argsWithoutBootstrap.includes('--api-key'), `argv must not contain standalone --api-key flag: ${argsWithoutBootstrap.join(' ')}`);
+  // HIGH-002: the key is routed via env MINIMAX_API_KEY + bootstrap.
+  assert.ok(capturedEnv && capturedEnv.MINIMAX_API_KEY === SECRET, 'key must be in env MINIMAX_API_KEY');
+  // The spawn uses the bootstrap: -e <bootstrap> ...fullArgs
+  assert.ok(capturedArgs && capturedArgs[0] === '-e', 'spawn must use -e bootstrap');
 });
 
 // ---------------- H7-022: session-only never writes to disk ----------------

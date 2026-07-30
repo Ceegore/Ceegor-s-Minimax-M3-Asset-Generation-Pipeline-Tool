@@ -571,8 +571,7 @@ test('v1.1.31: probeExternalTool returns exists=false for a non-existent exe', a
   try {
     const r = await ipc._internal.probeExternalTool({ name: 'Missing' });
     assert.equal(r.ok, true);
-    assert.equal(r.exists, false);
-    assert.equal(r.isFile, false);
+    assert.equal(r.validExecutable, false);
   } finally {
     cfgMod.read = origRead;
   }
@@ -591,9 +590,7 @@ test('v1.1.31: probeExternalTool returns exists=true + size for a real file', as
   try {
     const r = await ipc._internal.probeExternalTool({ name: 'Real' });
     assert.equal(r.ok, true);
-    assert.equal(r.exists, true);
-    assert.equal(r.isFile, true);
-    assert.equal(r.size, 4096);
+    assert.equal(r.validExecutable, true);
   } finally {
     cfgMod.read = origRead;
     try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch {}

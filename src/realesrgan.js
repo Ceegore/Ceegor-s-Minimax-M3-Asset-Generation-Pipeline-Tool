@@ -29,28 +29,43 @@ let cachedBinaryVersion = null;
 function findBinary() {
   if (cachedBinaryPath && fs.existsSync(cachedBinaryPath)) return cachedBinaryPath;
 
-  // 1. System PATH lookup via `where` / `which`. On a fresh shell the
-  // PATH may not include the binary's directory yet, so we also probe
-  // the well-known bundled location below.
+  // SEC-014: in packaged builds, skip the PATH lookup entirely.
+  // A packaged app must only use its own bundled/override binary —
+  // a PATH lookup could resolve to a malicious binary planted by
+  // another process. PATH fallback is dev-only (app.isPackaged === false).
+  let isPackaged = false;
   try {
-    const whichCmd = process.platform === 'win32' ? 'where' : 'which';
-    const r = spawnSync(whichCmd, [BINARY_NAME], { encoding: 'utf8', windowsHide: true });
-    if (r.status === 0 && r.stdout) {
-      const found = r.stdout.split(/\r?\n/).map((s) => s.trim()).find((s) => s && fs.existsSync(s));
-      if (found) {
-        cachedBinaryPath = found;
-        return found;
-      }
-    }
-  } catch { /* ignore */ }
+    const { app } = require('electron');
+    isPackaged = app.isPackaged;
+  } catch (_) {
+    // Not in Electron main (unit test) — treat as dev.
+    isPackaged = false;
+  }
 
-  // 2. Writable override or bundled fallback
+  // 1. Bundled/override path (always checked first — this is the
+  //    authoritative source in production).
   const assetPaths = require('./assetPaths');
   const p = assetPaths.resolveAsset('', BINARY_NAME);
   if (p && fs.existsSync(p)) {
     cachedBinaryPath = p;
     return p;
   }
+
+  // 2. System PATH lookup — ONLY in development builds.
+  if (!isPackaged) {
+    try {
+      const whichCmd = process.platform === 'win32' ? 'where' : 'which';
+      const r = spawnSync(whichCmd, [BINARY_NAME], { encoding: 'utf8', windowsHide: true });
+      if (r.status === 0 && r.stdout) {
+        const found = r.stdout.split(/\r?\n/).map((s) => s.trim()).find((s) => s && fs.existsSync(s));
+        if (found) {
+          cachedBinaryPath = found;
+          return found;
+        }
+      }
+    } catch { /* ignore */ }
+  }
+
   return null;
 }
 

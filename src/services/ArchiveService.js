@@ -153,28 +153,83 @@ function readChunk(configDir, opts) {
 // to temp → rename) so a partial rewrite can't leave the file
 // in an inconsistent state. The matching line is removed
 // (only the first match — duplicates are tolerated).
+// MED-025: streaming rewrite for large archives (> 10MB) to avoid
+// loading the entire file into memory.
 function deleteOne(configDir, id) {
   if (!id) throw new Error('ArchiveService.deleteOne: id is required');
   const p = archivePath(configDir);
   if (!fs.existsSync(p)) return false;
-  const text = fs.readFileSync(p, 'utf8');
-  const parts = text.split('\n');
-  let removed = false;
-  const out = [];
-  for (const line of parts) {
-    if (!line) continue;
-    try {
-      const obj = JSON.parse(line);
-      if (!removed && obj && obj.id === id) { removed = true; continue; }
-      out.push(JSON.stringify(obj));
-    } catch (_) {
-      // Keep malformed lines (don't drop user data we can't read).
-      out.push(line);
+  const stat = fs.statSync(p);
+  // For small files (< 10MB), use the fast in-memory path.
+  if (stat.size < 10 * 1024 * 1024) {
+    const text = fs.readFileSync(p, 'utf8');
+    const parts = text.split('\n');
+    let removed = false;
+    const out = [];
+    for (const line of parts) {
+      if (!line) continue;
+      try {
+        const obj = JSON.parse(line);
+        if (!removed && obj && obj.id === id) { removed = true; continue; }
+        out.push(JSON.stringify(obj));
+      } catch (_) {
+        // Keep malformed lines (don't drop user data we can't read).
+        out.push(line);
+      }
     }
+    if (!removed) return false;
+    const tmp = p + '.tmp-' + randomUUID();
+    fs.writeFileSync(tmp, out.join('\n') + (out.length ? '\n' : ''), 'utf8');
+    fs.renameSync(tmp, p);
+    return true;
   }
-  if (!removed) return false;
+  // MED-025: streaming path for large archives (> 10MB).
+  // Read in chunks, write non-deleted lines to temp file.
   const tmp = p + '.tmp-' + randomUUID();
-  fs.writeFileSync(tmp, out.join('\n') + (out.length ? '\n' : ''), 'utf8');
+  const CHUNK_SIZE = 64 * 1024; // 64KB chunks
+  const fd = fs.openSync(p, 'r');
+  const outFd = fs.openSync(tmp, 'w');
+  let buffer = '';
+  let pos = 0;
+  let removed = false;
+  const chunk = Buffer.alloc(CHUNK_SIZE);
+  try {
+    while (pos < stat.size) {
+      const bytesRead = fs.readSync(fd, chunk, 0, CHUNK_SIZE, pos);
+      if (bytesRead === 0) break;
+      pos += bytesRead;
+      buffer += chunk.toString('utf8', 0, bytesRead);
+      const lines = buffer.split('\n');
+      buffer = lines.pop() || ''; // Keep incomplete line in buffer
+      for (const line of lines) {
+        if (!line) continue;
+        try {
+          const obj = JSON.parse(line);
+          if (!removed && obj && obj.id === id) { removed = true; continue; }
+          fs.writeSync(outFd, JSON.stringify(obj) + '\n');
+        } catch (_) {
+          fs.writeSync(outFd, line + '\n');
+        }
+      }
+    }
+    // Process remaining buffer
+    if (buffer) {
+      try {
+        const obj = JSON.parse(buffer);
+        if (!removed && obj && obj.id === id) { removed = true; }
+        else { fs.writeSync(outFd, JSON.stringify(obj) + '\n'); }
+      } catch (_) {
+        fs.writeSync(outFd, buffer + '\n');
+      }
+    }
+  } finally {
+    fs.closeSync(fd);
+    fs.closeSync(outFd);
+  }
+  if (!removed) {
+    fs.unlinkSync(tmp);
+    return false;
+  }
   fs.renameSync(tmp, p);
   return true;
 }

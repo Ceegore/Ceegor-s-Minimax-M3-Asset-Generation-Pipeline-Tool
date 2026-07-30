@@ -20,6 +20,10 @@
 // are discarded at session end). A persisted `workspaceId` that the user
 // re-opens gets a freshly-minted entry; the canonical root must still
 // exist and be reachable, or the resolution returns reauthorizationRequired.
+//
+// MED-027: Workspace IDs are opaque, session-scoped identifiers minted by
+// the main process. After an app restart, persisted workspaceIds no longer
+// resolve; the renderer must re-authorize via the native folder picker flow.
 // ============================================================================
 
 const path = require('path');
@@ -50,8 +54,19 @@ class WorkspaceService {
     this._realpath = opts.realpath || fs.realpathSync;
     /** @type {Map<string, Workspace>} */
     this._byId = new Map();
-    /** @type {Map<string, string>} canonicalPath -> id (reverse lookup) */
+    /** @type {Map<string, string>} canonicalPath (case-folded on Windows) -> id (reverse lookup) */
     this._byPath = new Map();
+  }
+
+  /**
+   * MED-028: On Windows, paths are case-insensitive. Normalize the key
+   * for the reverse lookup map so that 'C:\Users\Foo' and 'c:\users\foo'
+   * map to the same workspace.
+   * @param {string} canonicalPath
+   * @returns {string}
+   */
+  _pathKey(canonicalPath) {
+    return process.platform === 'win32' ? canonicalPath.toLowerCase() : canonicalPath;
   }
 
   /**
@@ -86,7 +101,8 @@ class WorkspaceService {
     // Idempotent: if we already minted a workspace for this canonical
     // path, return the existing id. The renderer's persisted state
     // continues to resolve after a restart.
-    const existing = this._byPath.get(canonical);
+    // MED-028: use case-folded key on Windows.
+    const existing = this._byPath.get(this._pathKey(canonical));
     if (existing) {
       const ws = this._byId.get(existing);
       if (ws) {
@@ -101,7 +117,8 @@ class WorkspaceService {
       createdAt: this._now(), lastSeenAt: this._now(),
     };
     this._byId.set(id, ws);
-    this._byPath.set(canonical, id);
+    // MED-028: store with case-folded key on Windows.
+    this._byPath.set(this._pathKey(canonical), id);
     return { ok: true, id, workspace: ws };
   }
 

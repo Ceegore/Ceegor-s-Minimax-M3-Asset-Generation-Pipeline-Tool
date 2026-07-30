@@ -170,7 +170,8 @@ test('first run accepts the Main-owned default output directory without a Browse
   });
   assert.equal(r.ok, true, r.error);
   assert.equal(r.config.output_dir, defaultDir);
-  assert.equal(r.config.api_key, 'sk-first-run');
+  // SEC-001: config:set returns a public DTO (no raw api_key).
+  assert.equal(r.config.hasApiKey, true);
 });
 
 test('session-only Settings save stores the key in Main memory and never in config.txt', async () => {
@@ -179,7 +180,8 @@ test('session-only Settings save stores the key in Main memory and never in conf
     cfg: { api_key: '' }, apiKeyNoSave: true, sessionApiKey: 'sk-session-only', grants: {},
   });
   assert.equal(r.ok, true, r.error);
-  assert.equal(r.config.api_key, '');
+  // SEC-001: config:set returns a public DTO — empty key means hasApiKey:false.
+  assert.equal(r.config.hasApiKey, false);
   assert.equal(require(SESSION_STORE).getSessionCredential(), 'sk-session-only');
 });
 
@@ -341,7 +343,8 @@ test('R1.2a.O: config:set accepts a payload with only api_key/region/theme/style
   const { handlers } = loadIpc({});
   const r = await handlers.get('config:set')({}, { cfg: { api_key: 'sk-test', region: 'global', theme: 'dark', styles: [] } });
   assert.equal(r.ok, true);
-  assert.equal(r.config.api_key, 'sk-test');
+  // SEC-001: config:set returns a public DTO (no raw api_key).
+  assert.equal(r.config.hasApiKey, true);
 });
 
 // R1.2a.P: setting BOTH output_dir (with a valid grant) and other
@@ -356,7 +359,8 @@ test('R1.2a.P: config:set accepts a payload with output_dir (granted) + other fi
     grants: { output_dir: pickR.grantId },
   });
   assert.equal(r.ok, true);
-  assert.equal(r.config.api_key, 'sk-new');
+  // SEC-001: config:set returns a public DTO (no raw api_key).
+  assert.equal(r.config.hasApiKey, true);
   assert.equal(r.config.output_dir, target);
   // 'cn' is preserved; anything else (e.g. 'us') is normalised to
   // 'global' by the existing sanitize() in main/models/ConfigSchema.js.
@@ -399,7 +403,8 @@ test('R1.2a.Q: config:set rejects non-object top-level payloads; invalid cfg is 
   for (const badGrants of ['not-an-object', 123, [1, 2, 3]]) {
     const r = await setCfg({}, { cfg: { api_key: 'sk-q' }, grants: badGrants });
     assert.equal(r.ok, true, 'non-object grants (' + String(badGrants) + ') must be tolerated as no grants');
-    assert.equal(r.config.api_key, 'sk-q');
+    // SEC-001: config:set returns a public DTO (no raw api_key).
+    assert.equal(r.config.hasApiKey, true);
   }
 });
 

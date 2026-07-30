@@ -360,7 +360,8 @@ test('M1: config:set returns { ok, config, error } envelope (live behavior)', ()
     assert.equal(ok.ok, true, 'success envelope must have ok: true');
     assert.equal(ok.error, null, 'success envelope must have error: null');
     assert.ok(ok.config && typeof ok.config === 'object', 'success envelope must include the config object');
-    assert.equal(ok.config.api_key, 'sk-test', 'the returned config must reflect the written values');
+    // SEC-001: config:set returns a public DTO (no raw api_key).
+    assert.equal(ok.config.hasApiKey, true, 'the returned config must reflect the written values');
   } finally {
     try { fs.rmSync(tmp, { recursive: true, force: true }); } catch {}
     if (origVoices) require.cache[require.resolve(voicesPath)] = origVoices;

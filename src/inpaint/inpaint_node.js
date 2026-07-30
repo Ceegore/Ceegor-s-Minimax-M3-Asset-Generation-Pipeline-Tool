@@ -173,7 +173,8 @@ function maskBBox(buf, w, h) {
 // PE-025: compute a square crop region centred on the mask bounding box,
 // clamped to image bounds. If the mask is null (empty), use the full image
 // (centred square). The crop size is the larger of the bbox dimensions +
-// 20% context padding, clamped to [1, max(srcW, srcH)].
+// 20% context padding, clamped to [1, min(srcW, srcH)].
+// HIGH-028: clamp size BEFORE position calc to avoid negative coords.
 function computeSquareCrop(bbox, srcW, srcH) {
   if (!bbox) {
     // No mask content — use the largest centred square.
@@ -187,16 +188,17 @@ function computeSquareCrop(bbox, srcW, srcH) {
   // Square side = larger dimension + 20% context, at least 16px.
   let side = Math.max(bw, bh);
   side = Math.max(16, Math.ceil(side * 1.2));
-  // Clamp to image dimensions (can't crop larger than the image).
-  side = Math.min(side, Math.max(srcW, srcH));
+  // HIGH-028: clamp to the SMALLER image dimension FIRST so the square
+  // always fits in both axes. The previous code clamped to max(srcW, srcH)
+  // which could produce a side larger than one axis, leading to negative
+  // position values or a final size smaller than expected.
+  side = Math.min(side, Math.min(srcW, srcH));
   // Centre on mask, clamp to bounds.
   let x = Math.round(cx - side / 2);
   let y = Math.round(cy - side / 2);
   x = Math.max(0, Math.min(x, srcW - side));
   y = Math.max(0, Math.min(y, srcH - side));
-  // If side > one dimension, clamp size to fit.
-  const size = Math.min(side, srcW - x, srcH - y);
-  return { x, y, size };
+  return { x, y, size: side };
 }
 
 async function main() {
@@ -234,6 +236,13 @@ async function main() {
   const maskRawBuf = maskMeta.data;
   const maskW = maskMeta.info.width, maskH = maskMeta.info.height;
   const bbox = maskBBox(maskRawBuf, maskW, maskH);
+  // MED-042: empty mask — return error, skip inference.
+  // A fully-black mask has no region to inpaint; running the model would
+  // waste GPU time and produce an unchanged output that looks like a bug.
+  if (!bbox) {
+    process.stderr.write('Error: mask is empty (no white pixels). Nothing to inpaint.\n');
+    process.exit(5);
+  }
   const crop = computeSquareCrop(bbox, srcW, srcH);
 
   // Extract the square crop from source + mask, then resize to S×S.

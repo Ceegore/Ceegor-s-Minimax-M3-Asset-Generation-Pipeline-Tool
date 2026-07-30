@@ -240,6 +240,21 @@ async function runExternalTool(payload, grantId) {
     let exe;
     try { exe = await validateExePath(tool.exe); }
     catch (e) { return { ok: false, error: e.message || String(e) }; }
+    // SEC-008: hash-locked registry. If the tool config stores a sha256,
+    // verify the exe hasn't been swapped since registration. A mismatch
+    // means the binary was replaced (malware, bad update) — refuse to spawn.
+    if (tool.sha256 && typeof tool.sha256 === 'string') {
+      try {
+        const crypto = require('crypto');
+        const buf = await fsp.readFile(exe);
+        const hash = crypto.createHash('sha256').update(buf).digest('hex');
+        if (hash !== tool.sha256.toLowerCase()) {
+          return { ok: false, error: `Tool "${name}" executable has changed since registration (SHA-256 mismatch). Re-register the tool in Settings.` };
+        }
+      } catch (hashErr) {
+        return { ok: false, error: `Cannot verify tool hash: ${String(hashErr.message || hashErr)}` };
+      }
+    }
     // Build the argv. Order: <extra-args> <file1> <file2> … — same
     // shape the user would see from `cmd /c "tool.exe" "a.png" "b.png"`.
     const argv = buildArgvForTool(tool, paths, process.platform);
@@ -273,16 +288,13 @@ async function runExternalTool(payload, grantId) {
 /**
  * `externalTools:probe` lets the renderer's "Test" button in the
  * External tools settings pane check the configured exe without
- * actually launching it. Returns a plain
- * `{ ok, exists, isFile, size, version }` summary so the pane
- * can show "GIMP 2.10.36 (26 MB) ✓" next to each configured tool.
+ * actually launching it.
  *
- * The version probing is intentionally minimal — we just read the
- * .exe file's version metadata via `fsp.stat` + a best-effort
- * "version" string the renderer can pretty-print. Reading the
- * actual Windows VERSIONINFO resource would need a parser we
- * don't want to ship, so we fall back to "(version unknown)" for
- * everything except the most common format.
+ * SEC-011: the renderer-supplied `payload.exe` override has been
+ * REMOVED. The probe now only reads from the main-owned persisted
+ * config (the renderer cannot influence which path is probed).
+ * Returns a minimal `{ ok, validExecutable, displayName }` — no
+ * paths, sizes, or filesystem metadata leak to the renderer.
  */
 async function probeExternalTool(payload) {
   try {
@@ -290,36 +302,27 @@ async function probeExternalTool(payload) {
       return { ok: false, error: 'Payload is required.' };
     }
     const { name } = payload;
-    // H10-7: an optional `exe` override lets the renderer probe the tool's
-    // path BEFORE it has been saved to config (so the "Test" button in the
-    // Add-ons editor works on the in-memory draft). When `exe` is supplied we
-    // probe that path directly; otherwise we fall back to persisted config
-    // (the original behaviour).
-    const exeOverride = (typeof payload.exe === 'string' && payload.exe.trim()) ? payload.exe.trim() : null;
-    let trimmed = '';
-    if (exeOverride) {
-      trimmed = exeOverride;
-    } else {
-      if (!name || typeof name !== 'string') {
-        return { ok: false, error: 'Tool name is required.' };
-      }
-      const cfg = cfgMod.read();
-      const tool = (cfg.external_tools || []).find((t) => t && t.name === name);
-      if (!tool) return { ok: false, error: `Tool "${name}" is not configured.` };
-      if (!tool.exe) return { ok: true, exists: false, isFile: false };
-      trimmed = String(tool.exe).trim();
+    // SEC-011: probe ONLY main-owned config objects. The renderer-
+    // supplied `payload.exe` override is intentionally ignored — a
+    // compromised renderer must not be able to probe arbitrary paths.
+    if (!name || typeof name !== 'string') {
+      return { ok: false, error: 'Tool name is required.' };
     }
+    const cfg = cfgMod.read();
+    const tool = (cfg.external_tools || []).find((t) => t && t.name === name);
+    if (!tool) return { ok: false, error: `Tool "${name}" is not configured.` };
+    if (!tool.exe) return { ok: true, validExecutable: false, displayName: name };
+    const trimmed = String(tool.exe).trim();
     try {
       const st = await fsp.stat(trimmed);
+      const validExecutable = st.isFile();
       return {
         ok: true,
-        exists: true,
-        isFile: st.isFile(),
-        size: st.size,
-        path: trimmed,
+        validExecutable,
+        displayName: tool.name || path.basename(trimmed),
       };
     } catch (_) {
-      return { ok: true, exists: false, isFile: false, path: trimmed };
+      return { ok: true, validExecutable: false, displayName: tool.name || name };
     }
   } catch (e) {
     return { ok: false, error: String((e && e.message) || e) };

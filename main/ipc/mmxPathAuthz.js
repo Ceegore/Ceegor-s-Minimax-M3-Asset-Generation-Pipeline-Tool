@@ -19,9 +19,11 @@
 //     `--flag=value` (one token) and `--flag value` (two tokens)
 //     forms. Returns an array of `{ flag, value, kind }` where
 //     `kind` is 'file' or 'dir'.
-//   - `authorizeMmxPaths(grantId, pathFlags, cwd)` authorises every
-//     path the args (and optional cwd) would touch against a single
-//     grant. Returns `null` on success, or an error string (suitable
+//   - `authorizeMmxPaths(grantId, pathFlags, cwd, readGrantId)`
+//     authorises every path the args (and optional cwd) would touch.
+//     HIGH-011: input file flags are authorised against a separate
+//     readGrantId (falls back to grantId for backward compat).
+//     Returns `null` on success, or an error string (suitable
 //     for the IPC's `stderr` field) on the first failed
 //     authorisation. A missing / non-string grantId fails closed
 //     (same envelope as the legacy "outside the allowed directories"
@@ -104,33 +106,51 @@ function collectMmxPathFlags(args) {
 }
 
 /**
- * Authorise every path the args (and optional cwd) would touch
- * against a single grant. Returns `null` on success, or an error
- * string on the first failed authorisation.
+ * Authorise every path the args (and optional cwd) would touch.
+ * Returns `null` on success, or an error string on the first failed
+ * authorisation.
  *
- * A single grant must cover:
- *   - every file path in the args (--out / --download / -o):
- *     'write' on the file (the grant must cover the parent).
- *   - the directory path in the args (--out-dir): 'write' on the
- *     directory itself. A default `directory` grant does NOT
- *     cover the root (S1 §2.5); the renderer must mint a
- *     `directory-root` grant (coversRoot:true) for --out-dir.
- *   - the payload's cwd (if present): 'mkdir' on the cwd.
+ * HIGH-011: separate read/write grants. Input file flags (--first-frame,
+ * --text-file, etc.) are authorised against `readGrantId` (if provided)
+ * with operation 'read'; output file/dir flags (--out, --out-dir) are
+ * authorised against `grantId` with operation 'write'. When no separate
+ * `readGrantId` is supplied, all paths fall back to the single `grantId`
+ * for backward compatibility.
+ *
+ * @param {string} grantId - write grant for output paths
+ * @param {Array} pathFlags - collected path flags
+ * @param {string} [cwd] - optional working directory
+ * @param {string} [readGrantId] - HIGH-011: optional separate read grant for input paths
  */
-function authorizeMmxPaths(grantId, pathFlags, cwd) {
-  if (!grantId || typeof grantId !== 'string') {
+function authorizeMmxPaths(grantId, pathFlags, cwd, readGrantId) {
+  // HIGH-011: separate read/write grants. Input file flags are authorised
+  // against readGrantId (or fallback grantId); output flags against grantId.
+  const hasInputFlags = pathFlags.some(({ kind }) => kind === 'input');
+  const hasOutputFlags = pathFlags.some(({ kind }) => kind !== 'input');
+  if (hasOutputFlags && (!grantId || typeof grantId !== 'string')) {
     return 'mmx: a grantId is required for the output path(s) (use a Main-minted grant from the picker or app-output)';
   }
+  const effectiveReadGrant = (readGrantId && typeof readGrantId === 'string') ? readGrantId : grantId;
+  if (hasInputFlags && (!effectiveReadGrant || typeof effectiveReadGrant !== 'string')) {
+    return 'mmx: a readGrantId (or grantId) is required for input file path(s)';
+  }
   for (const { flag, value, kind } of pathFlags) {
-    // P1-B (C-005): input file flags require READ authorisation.
-    // Output file/dir flags require WRITE authorisation.
-    const operation = (kind === 'input') ? 'read' : 'write';
-    const authz = _authorizePath(grantId, operation, value);
-    if (!authz.ok) {
-      return `mmx: "${flag}" path "${value}" is not authorised by the grant (${authz.error})`;
+    if (kind === 'input') {
+      const authz = _authorizePath(effectiveReadGrant, 'read', value);
+      if (!authz.ok) {
+        return `mmx: "${flag}" path "${value}" is not authorised by the read grant (${authz.error})`;
+      }
+    } else {
+      const authz = _authorizePath(grantId, 'write', value);
+      if (!authz.ok) {
+        return `mmx: "${flag}" path "${value}" is not authorised by the grant (${authz.error})`;
+      }
     }
   }
   if (typeof cwd === 'string' && cwd) {
+    if (!grantId || typeof grantId !== 'string') {
+      return 'mmx: a grantId is required for the output path(s) (use a Main-minted grant from the picker or app-output)';
+    }
     const authz = _authorizePath(grantId, 'mkdir', cwd);
     if (!authz.ok) {
       return `mmx: cwd "${cwd}" is not authorised by the grant (${authz.error})`;

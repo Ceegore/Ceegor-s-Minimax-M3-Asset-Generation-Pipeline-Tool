@@ -1,0 +1,11 @@
+{
+  "id": "pred-xyz002",
+  "model": "stability-ai/stable-diffusion",
+  "version": "v2",
+  "status": "succeeded",
+  "output": [
+    "https://replicate.delivery/pbxt/xyz002/image_0.webp",
+    "https://replicate.delivery/pbxt/xyz002/image_1.webp"
+  ],
+  "metrics": { "predict_time": 8.1 }
+}

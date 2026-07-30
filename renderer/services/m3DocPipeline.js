@@ -76,17 +76,25 @@
 
   function validateBible(arr) {
     if (!arr.length) return 'Array is empty.';
+    // FUNC-033: reject duplicate bible IDs.
+    const seenIds = new Set();
     for (let i = 0; i < arr.length; i++) {
       const item = arr[i];
       if (!item.id || typeof item.id !== 'string') return 'Item ' + (i + 1) + ' missing string "id".';
       if (!item.description || typeof item.description !== 'string') return 'Item ' + (i + 1) + ' missing string "description".';
+      if (seenIds.has(item.id)) return 'Duplicate id "' + item.id + '" at item ' + (i + 1) + '. IDs must be unique.';
+      seenIds.add(item.id);
     }
     return null;
   }
 
-  function validateShots(arr) {
+  // FUNC-006: validateShots now takes the valid scene/char IDs so it can
+  // reject shots that reference non-existent bible entries.
+  function validateShots(arr, validSceneIds, validCharIds) {
     if (!arr.length) return 'Array is empty.';
     const validTypes = ['image', 'speech', 'music', 'video'];
+    const sceneSet = new Set(validSceneIds || []);
+    const charSet = new Set(validCharIds || []);
     for (let i = 0; i < arr.length; i++) {
       const s = arr[i];
       if (!validTypes.includes(s.type)) return 'Shot ' + (i + 1) + ' has invalid type "' + s.type + '".';
@@ -94,6 +102,18 @@
         if (!s.action || typeof s.action !== 'string') return 'Shot ' + (i + 1) + ' missing "action".';
       } else {
         if (!s.action && !s.text) return 'Shot ' + (i + 1) + ' missing "action" or "text".';
+      }
+      // FUNC-006: validate sceneId references a real scene.
+      if (s.sceneId && !sceneSet.has(s.sceneId)) {
+        return 'Shot ' + (i + 1) + ' references unknown sceneId "' + s.sceneId + '". Valid: ' + JSON.stringify(validSceneIds) + '.';
+      }
+      // FUNC-006: validate characterIds reference real characters.
+      if (Array.isArray(s.characterIds)) {
+        for (const cid of s.characterIds) {
+          if (!charSet.has(cid)) {
+            return 'Shot ' + (i + 1) + ' references unknown characterId "' + cid + '". Valid: ' + JSON.stringify(validCharIds) + '.';
+          }
+        }
       }
     }
     return null;
@@ -216,6 +236,9 @@
       onProgress(3, TOTAL_STEPS, 'Mapping shots…');
       const sceneIds = scenes.map((s) => s.id);
       const charIds = characters.map((c) => c.id);
+      // FUNC-006: pass valid IDs to the validator so it can reject
+      // shots that reference non-existent bible entries.
+      const shotsValidator = (arr) => validateShots(arr, sceneIds, charIds);
       const shots = await runPass(
         'Shot list',
         'You are a game asset producer. Map every asset the GDD requires into shots. ' +
@@ -225,13 +248,28 @@
         'The "params" object holds optional --flags (e.g. {"--aspect-ratio":"16:9","--model":"image-01"}). ' +
         'Output ONLY the JSON array.',
         gddText,
-        validateShots,
+        shotsValidator,
         cancelled
       );
 
       // Pass 4 — Compose in code (deterministic, no M3 call).
       onProgress(4, TOTAL_STEPS, 'Composing batch document…');
       const doc = composeBatchJson(scenes, characters, shots, opts);
+
+      // FUNC-004: hard limit assertion after composition.
+      // Verify that NO entry exceeds the hard prompt limit. This is a
+      // defensive check — composeBatchJson already trims, but a bug there
+      // would otherwise silently produce an API-rejectable batch.
+      const composed = extractJsonArray(doc);
+      if (composed) {
+        for (let i = 0; i < composed.length; i++) {
+          const entry = composed[i];
+          const limit = LIMITS[entry.type] || 2000;
+          if (entry.prompt && entry.prompt.length > limit) {
+            return { ok: false, error: 'Composition bug: entry ' + (i + 1) + ' (' + entry.type + ') has prompt length ' + entry.prompt.length + ' > ' + limit + '. Please report this.', cancelToken };
+          }
+        }
+      }
 
       return { ok: true, doc, cancelToken };
     } catch (e) {

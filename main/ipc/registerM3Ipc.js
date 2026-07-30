@@ -24,6 +24,10 @@ function register(deps) {
       // compromised renderer override them and redirect traffic (including
       // prompts) to an attacker-controlled endpoint.
       const p = payload || {};
+      // MED-006: enforce a 120s timeout so a hung M3 endpoint cannot block
+      // the pipeline indefinitely. The renderer's cancel button can also
+      // abort via the AbortSignal.
+      const timeout = AbortSignal.timeout ? AbortSignal.timeout(120000) : undefined;
       const r = await chat({
         apiKey: c.api_key,
         region: c.region,
@@ -32,9 +36,11 @@ function register(deps) {
         temperature: typeof p.temperature === 'number' ? p.temperature : undefined,
         maxTokens: typeof p.maxTokens === 'number' ? p.maxTokens : undefined,
         model: typeof p.model === 'string' ? p.model : undefined,
+        signal: timeout,
       });
       return { ok: true, content: r.content, usage: r.usage };
     } catch (e) {
+      if (e && e.name === 'TimeoutError') return { ok: false, error: 'M3 request timed out (120s). Try a shorter document or retry.' };
       return { ok: false, error: String((e && e.message) || e) };
     }
   });

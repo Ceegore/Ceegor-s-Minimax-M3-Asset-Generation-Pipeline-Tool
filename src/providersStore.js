@@ -38,6 +38,17 @@ function read() {
 }
 
 function write(d) {
+  // SEC-002: merge API keys from existing config when the incoming
+  // payload omits them (renderer sends partial updates without raw keys).
+  const existing = read();
+  if (d && Array.isArray(d.providers) && Array.isArray(existing.providers)) {
+    for (const p of d.providers) {
+      if (!p.apiKey && p.id) {
+        const prev = existing.providers.find((x) => x.id === p.id);
+        if (prev && prev.apiKey) p.apiKey = prev.apiKey;
+      }
+    }
+  }
   const p = file();
   const tmp = p + '.tmp-' + randomUUID();
   fs.writeFileSync(tmp, JSON.stringify(d, null, 2));

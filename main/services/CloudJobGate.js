@@ -56,27 +56,39 @@ function _maybeResetDaily() {
 
 /**
  * Attempt to acquire a slot for a cloud API call.
- * @param {string} provider - Provider identifier (e.g. 'openrouter', 'replicate').
+ * MED-040: rate-limit by origin (baseUrl host) rather than provider ID.
+ * Two provider configs pointing at the same API host share a rate window,
+ * preventing a user from bypassing the RPM cap by duplicating configs.
+ * @param {string} providerOrOrigin - Provider identifier or baseUrl origin.
  * @returns {{ok: true, id: number} | {ok: false, error: string, retryAfterMs?: number}}
  */
-function acquire(provider) {
+function acquire(providerOrOrigin) {
   _maybeResetDaily();
+
+  // MED-040: normalize to origin. If the caller passes a URL-like string,
+  // extract the host; otherwise use the provider ID as-is.
+  let rateKey = providerOrOrigin;
+  try {
+    if (/^https?:\/\//i.test(providerOrOrigin)) {
+      rateKey = new URL(providerOrOrigin).origin;
+    }
+  } catch (_) { /* keep raw value */ }
 
   // 1. Global concurrency check
   if (_activeSlots.size >= MAX_GLOBAL_CONCURRENCY) {
     return { ok: false, error: `Cloud job limit reached (${MAX_GLOBAL_CONCURRENCY} parallel). Wait for a slot to free up.` };
   }
 
-  // 2. Per-provider rate limit
+  // 2. Per-origin rate limit
   const now = Date.now();
-  const window = _rateWindows.get(provider) || [];
+  const window = _rateWindows.get(rateKey) || [];
   // Remove entries older than 60 seconds
   const fresh = window.filter((ts) => now - ts < 60000);
-  _rateWindows.set(provider, fresh);
+  _rateWindows.set(rateKey, fresh);
   if (fresh.length >= MAX_PER_PROVIDER_RPM) {
     const oldest = fresh[0];
     const retryAfterMs = 60000 - (now - oldest) + 100;
-    return { ok: false, error: `Provider '${provider}' rate limit (${MAX_PER_PROVIDER_RPM}/min). Retry in ${Math.ceil(retryAfterMs / 1000)}s.`, retryAfterMs };
+    return { ok: false, error: `Origin '${rateKey}' rate limit (${MAX_PER_PROVIDER_RPM}/min). Retry in ${Math.ceil(retryAfterMs / 1000)}s.`, retryAfterMs };
   }
 
   // 3. Daily budget check
@@ -86,7 +98,7 @@ function acquire(provider) {
 
   // Acquire slot
   const id = _nextSlotId++;
-  _activeSlots.set(String(id), { provider, startedAt: now });
+  _activeSlots.set(String(id), { provider: rateKey, startedAt: now });
   fresh.push(now);
   _dailyCount++;
 

@@ -1,0 +1,25 @@
+{
+  "id": "gen-abc123",
+  "model": "minimax/video-01",
+  "object": "chat.completion",
+  "created": 1700000000,
+  "choices": [
+    {
+      "index": 0,
+      "message": {
+        "role": "assistant",
+        "content": ""
+      },
+      "finish_reason": "stop"
+    }
+  ],
+  "usage": { "prompt_tokens": 10, "completion_tokens": 0, "total_tokens": 10 },
+  "video": {
+    "status": "completed",
+    "unsigned_urls": [
+      "https://cdn.openrouter.ai/videos/gen-abc123/output_0.mp4?expires=1700003600&signature=abc"
+    ],
+    "duration_seconds": 6.0,
+    "resolution": "768P"
+  }
+}

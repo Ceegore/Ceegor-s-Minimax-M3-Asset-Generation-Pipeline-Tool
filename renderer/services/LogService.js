@@ -913,7 +913,7 @@ function log(line) {
   if (!line) return;
   addLogEvent({
     category: 'info',
-    headline: maskLine(String(line), window.state && window.state.config && window.state.config.api_key),
+    headline: maskLine(String(line)),
   });
 }
 

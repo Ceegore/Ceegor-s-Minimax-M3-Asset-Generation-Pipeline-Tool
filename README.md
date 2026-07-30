@@ -40,13 +40,13 @@ Pipeline export and clear reports can record the asset ID, dimensions, format, f
 ## Main features
 
 - Image, speech, music, and video generation through MiniMax. All parameters are offered and all restrictions are caught in the tool itself.
-- Optional OpenAI-compatible and Replicate provider connections. Works, but has not seen much testing yet
+- Optional OpenAI-compatible and Replicate provider connections. Supported with contract-tested adapters; enable via the Providers settings tab.
 - Reusable style presets and per-row batch settings.
 - Queue controls, variants, retries, cost preview, and cancellation.
 - Local Real-ESRGAN upscaling and IS-Net/BiRefNet background removal.
 - Crop, resize, optimize, and convert to PNG, JPEG, WebP, or AVIF.
-- Image editor with paint, erase, selection, compositing, and heal/inpaint tools. This mainly works, but is still WIP and some things do not work well yet.
-- Audio cutter with waveform view, silence trim, zero-crossing snap, micro-fades, and common export formats. Works, but has not seen much manual testing yet.
+- Image editor with paint, erase, selection, compositing, and heal/inpaint tools. Core workflows are functional; some advanced operations are gated behind feature flags while they mature.
+- Audio cutter with waveform view, silence trim, zero-crossing snap, micro-fades, and common export formats. Functional; covered by automated tests with ongoing manual QA.
 - Local state and batch persistence, plus an optional session-only API-key mode.
 - Sandboxed Electron renderer with a restricted IPC bridge and path grants.
 

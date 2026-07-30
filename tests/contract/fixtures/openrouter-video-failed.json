@@ -1,0 +1,17 @@
+{
+  "id": "gen-ghi789",
+  "model": "minimax/video-01",
+  "object": "chat.completion",
+  "created": 1700000000,
+  "choices": [
+    {
+      "index": 0,
+      "message": { "role": "assistant", "content": "" },
+      "finish_reason": "stop"
+    }
+  ],
+  "video": {
+    "status": "failed",
+    "error": "Content policy violation"
+  }
+}

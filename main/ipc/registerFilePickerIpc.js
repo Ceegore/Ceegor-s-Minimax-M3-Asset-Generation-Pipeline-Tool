@@ -133,7 +133,16 @@ function register({ getMainWindow }) {
     });
     if (!authz.ok) return { ok: false, error: authz.error };
 
-    await fs.promises.copyFile(srcPath, destPath);
+    // MED-048: atomic Save-As — copy to a temp sibling first, then rename.
+    // A crash mid-copy no longer leaves a corrupt destination file.
+    const tmpDest = destPath + '.tmp-' + Date.now();
+    await fs.promises.copyFile(srcPath, tmpDest);
+    try {
+      await fs.promises.rename(tmpDest, destPath);
+    } catch (renameErr) {
+      try { await fs.promises.unlink(tmpDest); } catch (_) {}
+      throw renameErr;
+    }
 
     return {
       ok: true,

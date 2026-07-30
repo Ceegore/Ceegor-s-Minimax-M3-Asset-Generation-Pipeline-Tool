@@ -20,12 +20,17 @@ const OPERATION_TO_CAPABILITY = Object.freeze({
 // P1-E (360° Audit H-002, H-003, H-021): sensitive roots that must
 // NEVER be granted. A grant on these paths would allow a compromised
 // renderer to read/write system files.
+// HIGH-013: completed blocklist with additional system/credential paths.
 const SENSITIVE_ROOTS = (() => {
   const roots = [
     'C:\\',
     'C:\\Windows',
     'C:\\Program Files',
     'C:\\Program Files (x86)',
+    'C:\\ProgramData',
+    'C:\\Recovery',
+    'C:\\System Volume Information',
+    'C:\\$Recycle.Bin',
   ];
   // Add user profile paths
   try {
@@ -35,13 +40,22 @@ const SENSITIVE_ROOTS = (() => {
       roots.push(path.join(userProfile, 'AppData'));
       roots.push(path.join(userProfile, '.ssh'));
       roots.push(path.join(userProfile, '.gnupg'));
+      roots.push(path.join(userProfile, '.aws'));
+      roots.push(path.join(userProfile, '.kube'));
+      roots.push(path.join(userProfile, '.docker'));
     }
   } catch (_) {}
   // Add system root
   try {
     const sysRoot = process.env.SYSTEMROOT || process.env.SystemRoot;
-    if (sysRoot) roots.push(sysRoot);
+    if (sysRoot) {
+      roots.push(sysRoot);
+      roots.push(path.join(sysRoot, 'System32'));
+      roots.push(path.join(sysRoot, 'SysWOW64'));
+    }
   } catch (_) {}
+  // POSIX sensitive paths (for portability / CI)
+  roots.push('/etc', '/private', '/var/lib', '/root', '/boot', '/dev');
   return roots.map((r) => path.resolve(r).toLowerCase());
 })();
 

@@ -191,14 +191,16 @@ test('L14 FIX: mmx.js syncs the API key to ~/.mmx/config.json + drops argv on su
     'the sync must write to config.json');
   assert.ok(s.includes('mmxApiKeySync'),
     'mmx.js must import the sync helper from mmxApiKeySync');
-  // H7-013/022: the --api-key argv is STILL only a fallback when the sync
-  // fails, but it now lives inside an `else` of the sessionOnly branch and
-  // sets keyInArgv so the returned argv can be redacted. Assert the fallback
-  // condition + the keyInArgv marker.
+  // H7-013/022 + HIGH-002: the --api-key argv fallback is REMOVED entirely.
+  // When the sync fails, the key is routed via ephemeral env MINIMAX_API_KEY
+  // + a child-process bootstrap that injects it into process.argv only AFTER
+  // the OS command line has been created. Assert the new pattern.
   assert.ok(/keySyncedToConfig = _syncApiKeyToMmxCliConfig\(apiKey\)/.test(s),
     'the sync must be attempted for the persistent (non-session-only) path');
-  assert.ok(/if \(!keySyncedToConfig\) \{[\s\S]*?fullArgs\.push\('--api-key'/.test(s),
-    'the --api-key argv must only be used as a FALLBACK when the sync failed');
+  assert.ok(/if \(!keySyncedToConfig\) \{[\s\S]*?MINIMAX_API_KEY/.test(s),
+    'HIGH-002: when sync fails, key must be routed via env MINIMAX_API_KEY (no argv fallback)');
+  assert.ok(/SESSION_KEY_BOOTSTRAP/.test(s),
+    'HIGH-002: the bootstrap script must be used to inject the key inside the child');
   assert.ok(/sessionOnly[\s\S]*?MINIMAX_API_KEY/.test(s),
     'session-only mode must route the key via an ephemeral env var, not disk (H7-022)');
   assert.ok(/redactedArgs/.test(s),

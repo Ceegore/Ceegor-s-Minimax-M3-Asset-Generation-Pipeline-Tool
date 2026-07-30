@@ -60,7 +60,9 @@
       for (const p of (_cfg.providers || [])) {
         const sec = el('div', { class: 'prov-settings-entry' });
         sec.appendChild(el('strong', {}, p.label + ' (' + p.kind + ')'));
-        const keyIn = el('input', { type: 'password', placeholder: 'API key', value: p.apiKey || '' });
+        // SEC-002: renderer never sees raw apiKey. Show masked info
+        // and allow entering a NEW key (write-only input).
+        const keyIn = el('input', { type: 'password', placeholder: p.hasKey ? ('****' + (p.apiKeyLast4 || '****') + ' (enter new to replace)') : 'API key', value: '' });
         keyIn.style.width = '100%';
         const urlIn = el('input', { type: 'text', placeholder: 'Base URL (for custom)', value: p.baseUrl || '' });
         urlIn.style.width = '100%';
@@ -72,11 +74,17 @@
       }
       const saveBtn = el('button', { class: 'primary' }, 'Save');
       saveBtn.addEventListener('click', async () => {
+        // SEC-002: only send apiKey if the user typed a new one.
+        // Empty input means "keep existing key" (main preserves it).
+        const updates = { providers: [], selections: _cfg.selections || {} };
         for (const { p, keyIn, urlIn } of inputs) {
-          p.apiKey = keyIn.value.trim();
-          if (p.kind === 'custom-openai') p.baseUrl = urlIn.value.trim();
+          const entry = { id: p.id, label: p.label, kind: p.kind, baseUrl: p.baseUrl || '' };
+          const newKey = keyIn.value.trim();
+          if (newKey) entry.apiKey = newKey;
+          if (p.kind === 'custom-openai') entry.baseUrl = urlIn.value.trim();
+          updates.providers.push(entry);
         }
-        const r = await window.api.providersSet(_cfg);
+        const r = await window.api.providersSet(updates);
         if (r && r.ok) { toast('Provider settings saved.', 'ok'); close(); }
         else toast('Save failed: ' + (r && r.error || 'unknown'), 'err');
       });
@@ -342,7 +350,7 @@
       const root = document.getElementById('tab-providers');
       if (!root) return;
       while (root.firstChild) root.removeChild(root.firstChild);
-      _cfg = await window.api.providersGet();
+      _cfg = await window.api.providersGetPublic();
 
       // Header row with settings button
       const header = el('div', { class: 'prov-header' });

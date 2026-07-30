@@ -50,8 +50,8 @@ function buildSettingsGeneralPane() {
 
   // ---- Section 1: Authentication ----
   root.appendChild(el('h4', { class: 'settings-group-title' }, '🔐 Authentication'));
-  const apiKeyRow = showRevealableKey(state.config.api_key || '', {
-    placeholder: 'sk-cp-xxxxxxxx  (or your PAYG key)',
+  const apiKeyRow = showRevealableKey('', {
+    placeholder: state.config.hasApiKey ? ('****' + (state.config.apiKeyLast4 || '****') + '  (enter new key to replace)') : 'sk-cp-xxxxxxxx  (or your PAYG key)',
     label: 'API key',
   });
   try {

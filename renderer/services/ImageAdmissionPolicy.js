@@ -9,8 +9,10 @@
 // Policy:
 //   - Default limit: 32 MP (megapixels) — not 80MP
 //   - Peak memory estimation: pixels * 4 bytes * concurrent_buffers
-//   - Dynamic adjustment based on available RAM (if detectable)
-//   - Hard ceiling: 64 MP regardless of RAM
+//   - MED-016: limits are STATIC (not dynamically adjusted by RAM).
+//     The previous comment claimed "dynamic adjustment based on available
+//     RAM" but no such logic existed. The constants below are the policy.
+//   - Hard ceiling: 64 MP regardless of source
 //
 // Usage:
 //   const { checkAdmission, ADMISSION_LIMITS } = require('./ImageAdmissionPolicy');

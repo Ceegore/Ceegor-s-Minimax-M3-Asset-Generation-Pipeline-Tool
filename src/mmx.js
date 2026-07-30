@@ -139,7 +139,10 @@ function compareSemver(a, b) {
 // The mmx-cli range this build was developed + tested against. An installed
 // runtime outside the tested range triggers a warn (Phase A) / block (Phase B).
 // Bump the floor as the project's pinned/tested version advances.
-const SUPPORTED_MMX = { min: '1.0.16', recommended: '1.0.18' };
+// MED-034: exact version pin. The min must match ContractRegistry's
+// VERSION_CONSTRAINTS.min (1.0.18). The previous value (1.0.16) allowed
+// blocked versions to pass the runtime check.
+const SUPPORTED_MMX = { min: '1.0.18', recommended: '1.0.18' };
 
 // safeCall wraps a best-effort renderer callback so a throw (e.g. a buggy
 // onLog in the LogService) cannot abort a long-running mmx job. Used for
@@ -262,8 +265,11 @@ function runMmx({ args, apiKey, cwd, onLog, onChunk, jobId, sessionOnly }) {
       } else {
         keySyncedToConfig = _syncApiKeyToMmxCliConfig(apiKey);
         if (!keySyncedToConfig) {
-          fullArgs.push('--api-key', apiKey);
-          keyInArgv = true;
+          // HIGH-002: NO argv fallback. When ~/.mmx sync fails, use the
+          // same ephemeral env+bootstrap path as session-only mode. The
+          // key never appears in the OS process command line.
+          childEnv = { ...childEnv, MINIMAX_API_KEY: apiKey };
+          spawnArgs = ['-e', SESSION_KEY_BOOTSTRAP, ...fullArgs];
         }
       }
     }

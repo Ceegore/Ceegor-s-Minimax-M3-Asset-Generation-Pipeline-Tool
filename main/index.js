@@ -59,6 +59,9 @@ function _flushLog() {
     try {
       const st = fs.statSync(RENDERER_LOG);
       if (st.size > _LOG_ROTATE_BYTES) {
+        // MED-031: delete existing .old before rename — on Windows, rename
+        // fails if destination exists, causing permanent rotation failure.
+        try { fs.unlinkSync(RENDERER_LOG + '.old'); } catch (_) {}
         fs.renameSync(RENDERER_LOG, RENDERER_LOG + '.old');
       }
     } catch (_) { /* best-effort rotation */ }
@@ -105,17 +108,25 @@ if (!_gotSingleInstanceLock) {
 // secrets from memory, write crash report) then exit. The previous
 // handler only logged and continued, leaving the app in an undefined
 // state with potentially corrupted in-memory data.
+// MED-032: crash reports are redacted via DeepRedactor to prevent
+// secrets (API keys, tokens) from leaking into crash logs.
 let _crashCleanupDone = false;
 function _emergencyCrashCleanup(kind, err) {
   if (_crashCleanupDone) return;
   _crashCleanupDone = true;
   try {
     const ts = new Date().toISOString();
-    const msg = `[main] ${kind}: ${err && err.stack ? err.stack : err}`;
+    const rawMsg = `[main] ${kind}: ${err && err.stack ? err.stack : err}`;
+    // MED-032: redact secrets from the crash message.
+    let msg = rawMsg;
+    try {
+      const { redactString } = require('../src/deepRedactor');
+      msg = redactString(rawMsg);
+    } catch (_) { /* best-effort: if redactor fails, use raw */ }
     // 1. Log to file
     if (RENDERER_LOG) fs.appendFileSync(RENDERER_LOG, ts + ' ' + msg + '\n');
     console.error(msg);
-    // 2. Write crash report
+    // 2. Write crash report (redacted)
     try {
       const crashDir = path.join(app.getPath('userData'), 'crashes');
       fs.mkdirSync(crashDir, { recursive: true });

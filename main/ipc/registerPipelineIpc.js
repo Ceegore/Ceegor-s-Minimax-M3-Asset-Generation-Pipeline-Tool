@@ -140,6 +140,36 @@ function register(deps) {
           results.push({ ok: false, src: it.srcAbsPath, error: 'Read grant required: ' + readAuthz.error });
           continue;
         }
+        // MED-013: validate that the source file is actually an image.
+        // Check magic bytes to prevent importing non-image files.
+        try {
+          const fd = fs.openSync(it.srcAbsPath, 'r');
+          const header = Buffer.alloc(12);
+          const bytesRead = fs.readSync(fd, header, 0, 12, 0);
+          fs.closeSync(fd);
+          if (bytesRead < 4) {
+            results.push({ ok: false, src: it.srcAbsPath, error: 'File too small to be a valid image.' });
+            continue;
+          }
+          // Check common image magic bytes: PNG, JPEG, GIF, WebP, BMP, TIFF, AVIF
+          const isImage =
+            (header[0] === 0x89 && header[1] === 0x50 && header[2] === 0x4E && header[3] === 0x47) || // PNG
+            (header[0] === 0xFF && header[1] === 0xD8 && header[2] === 0xFF) || // JPEG
+            (header[0] === 0x47 && header[1] === 0x49 && header[2] === 0x46) || // GIF
+            (header[0] === 0x52 && header[1] === 0x49 && header[2] === 0x46 && header[3] === 0x46 &&
+             header[8] === 0x57 && header[9] === 0x45 && header[10] === 0x42 && header[11] === 0x50) || // WebP (RIFF....WEBP)
+            (header[0] === 0x42 && header[1] === 0x4D) || // BMP
+            (header[0] === 0x49 && header[1] === 0x49 && header[2] === 0x2A && header[3] === 0x00) || // TIFF (little-endian)
+            (header[0] === 0x4D && header[1] === 0x4D && header[2] === 0x00 && header[3] === 0x2A) || // TIFF (big-endian)
+            (header[4] === 0x66 && header[5] === 0x74 && header[6] === 0x79 && header[7] === 0x70); // AVIF/HEIF (ftyp box)
+          if (!isImage) {
+            results.push({ ok: false, src: it.srcAbsPath, error: 'Source file is not a recognized image format (PNG, JPEG, GIF, WebP, BMP, TIFF, or AVIF required).' });
+            continue;
+          }
+        } catch (validateErr) {
+          results.push({ ok: false, src: it.srcAbsPath, error: 'Could not validate image: ' + String(validateErr.message || validateErr) });
+          continue;
+        }
         const column = model.STORAGE_COLUMNS.includes(it.destColumn) ? it.destColumn : 'original';
         // Validate a caller-supplied imageId charset (no path separators) so a
         // hostile/buggy payload can't create nested subdirs under the column.
@@ -183,6 +213,35 @@ function register(deps) {
     try {
       if (!payload || typeof payload.srcAbsPath !== 'string' || !payload.srcAbsPath) {
         return { ok: false, error: 'Source path is required.' };
+      }
+      // SEC-003: require a read grant for the source file (matching
+      // pipeline:import logic). Without a valid grant, the read is rejected.
+      const readGrantId = payload.readGrantId || payload.grantId;
+      const readAuthz = _authorizePath(readGrantId, 'read', payload.srcAbsPath);
+      if (!readAuthz.ok) {
+        return { ok: false, error: 'Read grant required for source: ' + readAuthz.error };
+      }
+      // SEC-003: validate source is an image (magic bytes). Reject non-image
+      // files before copying them into the workspace.
+      const srcBuf = Buffer.alloc(16);
+      let fd;
+      try {
+        fd = fs.openSync(payload.srcAbsPath, 'r');
+        fs.readSync(fd, srcBuf, 0, 16, 0);
+      } catch (e) {
+        return { ok: false, error: 'Cannot read source file: ' + ((e && e.message) || e) };
+      } finally {
+        if (fd !== undefined) try { fs.closeSync(fd); } catch (_) {}
+      }
+      const { fromMagic } = require('../../src/services/FormatRegistry');
+      const detected = fromMagic(srcBuf);
+      if (!detected || detected.category !== 'image') {
+        return { ok: false, error: 'Source file is not a recognized image format.' };
+      }
+      // SEC-003: size limit (64 MB max for a replacement image).
+      const stat = fs.statSync(payload.srcAbsPath);
+      if (stat.size > 64 * 1024 * 1024) {
+        return { ok: false, error: 'Source file exceeds 64 MB size limit.' };
       }
       // Validate imageId charset (no path separators) so a hostile payload can't
       // create arbitrary nested subdirs under the column folder.
@@ -343,8 +402,14 @@ function register(deps) {
       // workspace item (i.e. its path is under the workspace root) OR
       // the caller provides a valid read grant. This prevents a
       // compromised renderer from thumbnailing arbitrary OS files.
+      // MED-014: use realpath for membership check so a symlink inside
+      // the workspace cannot point to an arbitrary OS file.
       const srcResolved = path.resolve(payload.srcPath);
-      const isUnderWorkspace = srcResolved.startsWith(ws + path.sep) || srcResolved === ws;
+      let srcReal = srcResolved;
+      try { srcReal = fs.realpathSync(srcResolved); } catch (_) { /* file may not exist yet */ }
+      let wsReal = ws;
+      try { wsReal = fs.realpathSync(ws); } catch (_) {}
+      const isUnderWorkspace = srcReal.startsWith(wsReal + path.sep) || srcReal === wsReal;
       if (!isUnderWorkspace) {
         const readGrantId = payload.readGrantId;
         const readAuthz = _authorizePath(readGrantId, 'read', srcResolved);
@@ -377,9 +442,10 @@ function register(deps) {
       // DoS/OOM guard: refuse to buffer absurdly large sources into the main
       // process (a multi-GB "image" would OOM Electron). The renderer already
       // falls back to the raw file:// URL when ok is falsy.
-      const MAX_THUMB_SOURCE = 256 * 1024 * 1024; // 256 MB
+      // MED-015: reduced from 256MB to 128MB for better memory safety.
+      const MAX_THUMB_SOURCE = 128 * 1024 * 1024; // 128 MB
       if (size > MAX_THUMB_SOURCE) {
-        return { ok: false, error: 'Source too large for thumbnailing (' + Math.round(size / 1048576) + ' MB, cap 256 MB).' };
+        return { ok: false, error: 'Source too large for thumbnailing (' + Math.round(size / 1048576) + ' MB, cap 128 MB).' };
       }
       const key = crypto.createHash('sha1').update(`${payload.srcPath}:${size}:${mtimeMs}`).digest('hex').slice(0, 24);
       const thumbPath = path.join(thumbsDir, `${key}.webp`);
@@ -398,11 +464,18 @@ function register(deps) {
       const tmpPath = `${thumbPath}.tmp-${crypto.randomUUID()}`;
       // P5 (M-021): cleanup temp in finally block so a partial webp is
       // never left behind on error (previously leaked on rename failure).
+      // MED-015: limit output thumbnail size to 512KB to prevent disk bloat.
+      const MAX_THUMB_OUTPUT = 512 * 1024; // 512 KB
       try {
-        await sharp(srcBuf)
+        const info = await sharp(srcBuf)
           .resize({ width: 320, withoutEnlargement: true })
           .webp({ quality: 80 })
           .toFile(tmpPath);
+        // MED-015: verify output size is reasonable.
+        if (info && info.size > MAX_THUMB_OUTPUT) {
+          await fs.promises.unlink(tmpPath).catch(() => {});
+          return { ok: false, error: 'Generated thumbnail exceeds 512KB limit.' };
+        }
         await fs.promises.rename(tmpPath, thumbPath);
         return { ok: true, thumbPath };
       } finally {

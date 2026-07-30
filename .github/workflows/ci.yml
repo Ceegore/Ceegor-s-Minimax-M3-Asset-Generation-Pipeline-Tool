@@ -18,6 +18,9 @@
 # Harness finding architecture-gate-not-in-ci:
 #   - Architecture lint gate (scripts/lint.js) now runs in CI, first, so the
 #     "CI-enforced" claim in docs/DECISIONS_AND_RULES.md is actually true.
+#
+# MED-002: Status badge requirement. Add to README.md:
+#   ![CI](https://github.com/<owner>/<repo>/actions/workflows/ci.yml/badge.svg)
 # ============================================================================
 
 name: CI

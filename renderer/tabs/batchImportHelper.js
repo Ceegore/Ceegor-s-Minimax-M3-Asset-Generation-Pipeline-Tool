@@ -1178,7 +1178,7 @@ async function startAllBatchGen() {
     return;
   }
 
-  if (!state.config.api_key) {
+  if (!state.config.hasApiKey) {
     toast('No API key configured. Click ⚙ to open Settings.', 'err');
     return;
   }

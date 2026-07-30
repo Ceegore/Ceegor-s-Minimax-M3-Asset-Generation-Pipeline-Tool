@@ -38,6 +38,7 @@ const fs = require('fs');
 const path = require('path');
 const { randomUUID } = require('crypto');
 const sharp = require('sharp'); // KGO8-009: mask/source dimension check
+const { SHARP_PIXEL_LIMIT } = require('../services/ArtifactFinalizer');
 const assetPaths = require('../../src/assetPaths');
 const inpaint = require('../../src/inpaint');
 const { MODELS, getModel } = require('../../src/inpaint/modelRegistry');
@@ -66,7 +67,8 @@ function register(deps) {
   // R3.2.2: result passes through the ImageOperationResult legacy
   // adapter (validates the 9 contract fields, maps `path` →
   // `outputPath`, preserves `path` as legacy alias).
-  secureHandle('inpaint:runOnnx', { getMainWindow }, wrapInpaintHandler(async (_e, args) => {
+  // HIGH-025: wire the 32 MB payload limit for the ONNX inpaint handler.
+  secureHandle('inpaint:runOnnx', { getMainWindow, maxPayloadBytes: 32 * 1024 * 1024 }, wrapInpaintHandler(async (_e, args) => {
     if (!args || typeof args !== 'object') return bad('Arguments required.');
     // R1.5b.3: pre-validate the arg shape BEFORE the grant
     // check, so a missing srcPath yields the legacy "Source
@@ -93,16 +95,16 @@ function register(deps) {
     if (!outAuthz.ok) {
       return bad(`Output path "${outPath}" is not authorised by the grant (${outAuthz.error})`);
     }
-    // Write the mask to a temp PNG next to the source (covered
-    // by the same directory grant as srcPath). The mask is a
-    // child of dirname(srcPath) — if the grant is a directory
-    // grant for that parent, the 'write' authorisation on
-    // srcPath's parent covers the mask write. If the grant is a
-    // file grant for srcPath, the mask write is NOT covered
-    // — that's the renderer's responsibility to set up the
-    // right grant kind for the workflow.
-    const dir = path.dirname(srcPath);
-    const maskPath = path.join(dir, '.ie_inpaint_mask_' + randomUUID() + '.png');
+    // SEC-012: write masks to userData/tmp/<jobId>/ instead of beside
+    // the source image. A compromised renderer must not be able to
+    // place arbitrary files next to user documents via the mask write.
+    // The temp directory is Main-derived (not renderer-influenced).
+    const assetCfg = assetPaths.getConfig();
+    const tmpBase = (assetCfg && assetCfg.userDataPath)
+      ? path.join(assetCfg.userDataPath, 'tmp', args.jobId || 'inpaint-' + randomUUID())
+      : path.join(require('os').tmpdir(), 'minimax-inpaint-' + randomUUID());
+    await fsp.mkdir(tmpBase, { recursive: true });
+    const maskPath = path.join(tmpBase, '.ie_inpaint_mask_' + randomUUID() + '.png');
 
     // KGO8-009: reject a mask whose dimensions differ from the source, for
     // the same reason as the Telea handler — inpaint_node.js rescales the
@@ -125,8 +127,8 @@ function register(deps) {
       if (st.size > MAX_INPAINT_SOURCE) {
         return bad('Source image too large for heal (' + Math.round(st.size / 1048576) + ' MB, cap 256 MB).');
       }
-      const mm = await sharp(maskBuf).metadata();
-      const sm = await sharp(await fsp.readFile(srcPath)).metadata();
+      const mm = await sharp(maskBuf, { limitInputPixels: SHARP_PIXEL_LIMIT }).metadata();
+      const sm = await sharp(await fsp.readFile(srcPath), { limitInputPixels: SHARP_PIXEL_LIMIT }).metadata();
       if (mm.width !== sm.width || mm.height !== sm.height) {
         return bad(`Mask is ${mm.width}×${mm.height} but the image is ${sm.width}×${sm.height} — they must match.`);
       }
@@ -148,7 +150,9 @@ function register(deps) {
       if (!r || !r.ok) return bad((r && r.stderr) || 'inpaint failed');
       return { ok: true, path: outPath };
     } finally {
-      try { await fsp.unlink(maskPath); } catch (_) {}
+      // SEC-012 / MED-043: cleanup the entire temp directory in finally
+      // so no mask artifacts leak on success or error.
+      try { await fsp.rm(tmpBase, { recursive: true, force: true }); } catch (_) {}
     }
     // R3.2.2: result passes through `adaptInpaintResult` (validates
     // the 9 contract fields, maps `path` → `outputPath`, preserves

@@ -164,9 +164,9 @@ async function copyTo(src, destDir) {
   }
   const st = await fs.stat(src);
   if (st.isDirectory()) {
-    // Recursive directory copy. We use fssync.cpSync for a fast, OS-friendly
-    // copy that preserves the directory tree.
-    fssync.cpSync(src, dest, { recursive: true, errorOnExist: true });
+    // MED-022: async recursive directory copy. The previous fssync.cpSync
+    // blocked the main-process event loop for large trees.
+    await fs.cp(src, dest, { recursive: true, errorOnExist: true });
   } else {
     // R8: COPYFILE_EXCL — if a file appears at `dest` between the rename-loop
     // above and this copy (TOCTOU), fail instead of silently overwriting it.
@@ -196,20 +196,26 @@ function reveal(p) {
 // opens a fresh Explorer window. The caller passes a file path; the parent
 // dir is resolved here so the renderer doesn't have to know the platform-
 // specific separator logic.
-function openInExplorer(p) {
+// MED-023: detect file vs directory. If `p` is a directory, open it
+// directly; if it's a file, open its parent folder. The previous code
+// always opened path.dirname(p), which for a directory path opened the
+// grandparent — confusing when the user right-clicks a folder.
+async function openInExplorer(p) {
   if (!p || typeof p !== 'string') {
     throw new Error('Path is required.');
   }
   const path = require('path');
-  // `path.dirname` returns the parent dir for a file path,
-  // and the path itself for a directory path. We want the
-  // "containing" folder either way, so the resulting
-  // Explorer window always lands on a folder.
-  const parent = path.dirname(p);
+  let target;
+  try {
+    const st = await fs.stat(p);
+    target = st.isDirectory() ? p : path.dirname(p);
+  } catch {
+    // If stat fails (deleted?), fall back to parent-of-p.
+    target = path.dirname(p);
+  }
   // shell.openPath returns a Promise<string> ('' on success,
-  // an error string on failure). We wrap it so the IPC
-  // handler gets a clean {ok, error} shape.
-  return shell.openPath(parent).then((err) => {
+  // an error string on failure).
+  return shell.openPath(target).then((err) => {
     if (err) throw new Error(String(err));
   });
 }

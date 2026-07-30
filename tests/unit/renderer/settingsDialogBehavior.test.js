@@ -673,8 +673,9 @@ test('settings dialog: "Don\'t save" checkbox strips api_key from the IPC payloa
     'apiKeyNoSave must be true at the top level (the privacy switch signal)');
   assert.equal(sent.cfg && sent.cfg.api_key, '',
     'cfg.api_key must be empty in the payload when "Don\'t save" is on');
-  // state.config.api_key MUST be the entered key for the current session.
-  assert.equal(sandbox.state.config.api_key, 'sk-test-temporary-key', 'api_key must be kept in state.config for the live session');
+  // SEC-001: the raw API key no longer lives in state.config (public DTO).
+  // The session key is routed to the main process via the sessionApiKey field.
+  assert.equal(sent.sessionApiKey, 'sk-test-temporary-key', 'sessionApiKey must be sent to main for in-memory storage');
   // state.apiKeyNoSave must reflect the checkbox.
   assert.equal(sandbox.state.apiKeyNoSave, true, 'state.apiKeyNoSave must mirror the checkbox');
 });

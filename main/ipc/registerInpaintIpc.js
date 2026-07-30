@@ -14,6 +14,7 @@
 const { ipcMain } = require('electron');
 const sharp = require('sharp');
 require('../../src/cpuGuard').applySharpThreadCap(sharp);
+const { SHARP_PIXEL_LIMIT } = require('../services/ArtifactFinalizer');
 const path = require('path');
 const crypto = require('crypto');
 const { Worker } = require('worker_threads');
@@ -53,7 +54,9 @@ function register(deps) {
   // `try { ... } catch (e) { ... }` is removed; `wrapInpaintHandler`
   // provides equivalent throw-catching. Backend is 'telea' (not
   // 'inpaint' — the operation is Telea-style, not ONNX model-based).
-  secureHandle('inpaint:runTelea', { getMainWindow }, wrapInpaintHandler(async (_e, args) => {
+  // HIGH-025: wire the 32 MB payload limit so a compromised renderer
+  // cannot send an unbounded base64 mask/image to the inpaint handler.
+  secureHandle('inpaint:runTelea', { getMainWindow, maxPayloadBytes: 32 * 1024 * 1024 }, wrapInpaintHandler(async (_e, args) => {
     if (!args || typeof args !== 'object') return bad('Arguments required.');
     const srcPath = args.srcPath;
     if (!srcPath || typeof srcPath !== 'string') return bad('Source path required.');
@@ -82,13 +85,13 @@ function register(deps) {
       return bad('Source image too large for Telea heal (' + Math.round(srcStat.size / 1048576) + ' MB, cap 256 MB).');
     }
     const srcBuf = await fs.promises.readFile(srcPath);
-    const meta = await sharp(srcBuf).metadata();
+    const meta = await sharp(srcBuf, { limitInputPixels: SHARP_PIXEL_LIMIT }).metadata();
     const w = meta.width, h = meta.height;
     // PE-022: pixel ceiling guard.
     if (w * h > MAX_PIXELS) {
       return bad('Image too large for Telea heal (' + w + '×' + h + ' = ' + (w * h) + ' px; max ' + MAX_PIXELS + '). Use the AI Resynthesize tier for large images.');
     }
-    const raw = await sharp(srcBuf).ensureAlpha().raw().toBuffer();
+    const raw = await sharp(srcBuf, { limitInputPixels: SHARP_PIXEL_LIMIT }).ensureAlpha().raw().toBuffer();
     const rgba = new Uint8ClampedArray(raw); // raw is RGBA uint8
 
     // Build the mask.

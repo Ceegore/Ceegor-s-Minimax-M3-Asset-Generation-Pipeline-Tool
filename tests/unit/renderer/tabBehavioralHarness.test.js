@@ -209,7 +209,7 @@ function buildSandbox() {
     fbWrite: () => Promise.resolve({ ok: true }),
     fbOpenDialog: () => Promise.resolve(null),
     setConfig: () => Promise.resolve({ ok: true, config: {} }),
-    getConfig: () => Promise.resolve({ api_key: 'sk-test', output_dir: 'C:\\temp\\pipeline-test', region: 'global', theme: 'dark', styles: [] }),
+    getConfigPublic: () => Promise.resolve({ ok: true, hasApiKey: true, apiKeyLast4: 'test', output_dir: 'C:\\temp\\pipeline-test', region: 'global', theme: 'dark', styles: [] }),
     configPath: () => Promise.resolve('C:\\Users\\me\\AppData\\Roaming\\MiniMaxAssetTool\\config.txt'),
     defaultOutputDir: () => Promise.resolve('C:\\Users\\me\\AppData\\Roaming\\MiniMaxAssetTool\\generated'),
     pickFolder: () => Promise.resolve(null),
@@ -248,7 +248,7 @@ function buildSandbox() {
   // `var state = window.state;` at module top-level so this needs
   // to exist before any tab loads.
   const state = {
-    config: { api_key: 'sk-test-1234567890', output_dir: 'C:\\temp\\pipeline-test', region: 'global', theme: 'dark', styles: [] },
+    config: { hasApiKey: true, apiKeyLast4: '7890', api_key: 'sk-test-1234567890', output_dir: 'C:\\temp\\pipeline-test', region: 'global', theme: 'dark', styles: [] },
     fbDir: '',
     fbDirs: { image: '', speech: '', music: '', video: '' },
     currentTab: 'image',
@@ -484,6 +484,7 @@ function loadTabInSandbox(tabKey) {
   // here, so the test must set the config explicitly AFTER section24
   // has registered the state object.
   sandbox.state.config.api_key = 'sk-test-1234567890';
+  sandbox.state.config.hasApiKey = true;
   sandbox.state.config.output_dir = 'C:\\temp\\pipeline-test';
   // Pre-register the <section id="tab-XXX"> elements so the tab's
   // `const root = $('#tab-image');` returns the SAME element we'll
@@ -608,6 +609,7 @@ async function buildAndClickGenerate(tabKey) {
   // generic per-tab guards (api_key check, prompt-non-empty check)
   // pass without each test having to wire them up individually.
   sandbox.state.config.api_key = sandbox.state.config.api_key || 'sk-test-1234567890';
+  sandbox.state.config.hasApiKey = true;
   sandbox.state.config.output_dir = sandbox.state.config.output_dir || 'C:\\temp\\pipeline-test';
   sandbox.api.fbEnsureDir = () => Promise.resolve({ ok: true, path: sandbox.state.config.output_dir });
   sandbox.api.fbMkdir = () => Promise.resolve({ ok: true });

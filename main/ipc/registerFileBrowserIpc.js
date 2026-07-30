@@ -39,25 +39,35 @@ const { secureHandle } = require('./secureHandle');
 
 const MAX_WRITE_BYTES = 25 * 1024 * 1024;
 
+// MED-020: parallel drive enumeration with an overall deadline instead of
+// sequential per-letter probing. A slow/unresponsive network drive no longer
+// blocks the entire listing.
 async function listDrives() {
   if (process.platform === 'win32') {
-    const out = [];
     const letters = 'CDEFGHIJKLMNOPQRSTUVWXYZ';
     const PER_LETTER_TIMEOUT_MS = 1500;
-    for (const ch of letters) {
-      const root = ch + ':\\';
-      try {
-        const st = await Promise.race([
-          fsp.stat(root),
-          new Promise((_, reject) => {
-            setTimeout(() => reject(new Error('stat timeout')), PER_LETTER_TIMEOUT_MS);
-          }),
-        ]);
-        if (st && st.isDirectory()) out.push({ name: root, label: ch + ':' });
-      } catch (_) {
-        // Drive not mounted, no permission, or stat timeout
-        // — skip silently.
-      }
+    const OVERALL_DEADLINE_MS = 4000;
+    const results = await Promise.race([
+      Promise.allSettled(
+        [...letters].map(async (ch) => {
+          const root = ch + ':\\';
+          const st = await Promise.race([
+            fsp.stat(root),
+            new Promise((_, reject) => {
+              setTimeout(() => reject(new Error('stat timeout')), PER_LETTER_TIMEOUT_MS);
+            }),
+          ]);
+          if (st && st.isDirectory()) return { name: root, label: ch + ':' };
+          return null;
+        })
+      ),
+      new Promise((resolve) => {
+        setTimeout(() => resolve([]), OVERALL_DEADLINE_MS);
+      }),
+    ]);
+    const out = [];
+    for (const r of results) {
+      if (r && r.status === 'fulfilled' && r.value) out.push(r.value);
     }
     return out;
   }
@@ -227,21 +237,33 @@ function register(deps) {
     catch (e) { return { ok: false, error: String(e.message || e) }; }
   });
 
-  // fb:reveal highlights `p` in an existing Explorer window. This
-  // is a READ-side operation (no file mutation), so per S1 §3
-  // it does NOT need a grant. We keep it ungated for backward
-  // compat with the existing file-browser UX.
-  secureHandle('fb:reveal', { getMainWindow }, (_e, p) => {
+  // HIGH-015: fb:reveal requires a read-grant and blocks UNC paths.
+  // MED-024: pre-check existence before calling shell.showItemInFolder.
+  secureHandle('fb:reveal', { getMainWindow }, async (_e, p, grantId) => {
     if (!p || typeof p !== 'string') return { ok: false, error: 'p is required.' };
+    // HIGH-015: block UNC paths (\\server\share) — shell operations on
+    // remote paths can leak credentials or hang on unreachable hosts.
+    if (/^\\\\/.test(p)) return { ok: false, error: 'UNC paths are not allowed.' };
+    const authz = _authorizePath(grantId, 'read', p);
+    if (!authz.ok) return authz;
+    // MED-024: pre-check existence so we report a useful error instead of
+    // silently doing nothing.
+    try { await fsp.access(p, fs.constants.F_OK); } catch {
+      return { ok: false, error: 'File does not exist (it may have been moved or deleted).' };
+    }
     const revealed = fb.reveal(p);
-    if (!revealed) return { ok: false, error: 'Could not reveal the file (it may have been moved or deleted).' };
+    if (!revealed) return { ok: false, error: 'Could not reveal the file.' };
     return { ok: true };
   });
 
-  // fb:openInExplorer opens a NEW Explorer window at the file's
-  // parent folder. Read-side; ungated (same as reveal).
-  secureHandle('fb:openInExplorer', { getMainWindow }, async (_e, p) => {
+  // HIGH-015: fb:openInExplorer requires a read-grant and blocks UNC paths.
+  // MED-023: detect file vs directory — open directories directly, files via
+  // their parent folder.
+  secureHandle('fb:openInExplorer', { getMainWindow }, async (_e, p, grantId) => {
     if (!p || typeof p !== 'string') return { ok: false, error: 'p is required.' };
+    if (/^\\\\/.test(p)) return { ok: false, error: 'UNC paths are not allowed.' };
+    const authz = _authorizePath(grantId, 'read', p);
+    if (!authz.ok) return authz;
     try {
       await fb.openInExplorer(p);
       return { ok: true };

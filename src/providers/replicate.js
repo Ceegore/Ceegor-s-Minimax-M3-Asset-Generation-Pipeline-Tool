@@ -40,6 +40,14 @@ async function run({ apiKey, model, input, signal, onProgress }) {
     if (signal && signal.aborted) throw new Error('cancelled');
     if (Date.now() - start > MAX_WAIT_MS) throw new Error('replicate poll timed out after 10 min');
     if (!pred.urls || !pred.urls.get) throw new Error('replicate: no poll URL in prediction response');
+    // SEC-007: only send Authorization to the canonical Replicate API origin.
+    // A malicious prediction response could set urls.get to an attacker-
+    // controlled host, leaking the API key.
+    let pollUrl;
+    try { pollUrl = new URL(pred.urls.get); } catch (_) { throw new Error('replicate: invalid poll URL'); }
+    if (pollUrl.origin !== 'https://api.replicate.com') {
+      throw new Error('replicate: poll URL origin mismatch (expected api.replicate.com, got ' + pollUrl.origin + ')');
+    }
     await new Promise((r) => setTimeout(r, 2000));
     const g = await fetch(pred.urls.get, {
       headers: { Authorization: 'Bearer ' + apiKey },
@@ -51,11 +59,39 @@ async function run({ apiKey, model, input, signal, onProgress }) {
   }
   if (pred.status !== 'succeeded') throw new Error('replicate ' + pred.status + ': ' + (pred.error || ''));
 
+  // FUNC-024: recursive output normalization for video/image/files objects.
   const out = pred.output;
-  const urls = Array.isArray(out) ? out
-    : (typeof out === 'string' ? [out]
-    : (out && (out.url || out.audio) ? [out.url || out.audio] : []));
+  const urls = _normalizeOutput(out);
   return urls.map((u) => ({ url: u, b64: null, ext: _ext(u), contentType: null }));
+}
+
+/**
+ * FUNC-024: Recursively normalize Replicate output into a flat URL list.
+ * Handles: arrays, strings, {url}, {audio}, {video}, {image}, nested maps.
+ * @param {*} out
+ * @returns {string[]}
+ */
+function _normalizeOutput(out) {
+  if (!out) return [];
+  if (typeof out === 'string') return [out];
+  if (Array.isArray(out)) return out.flatMap(_normalizeOutput);
+  if (typeof out === 'object') {
+    const results = [];
+    // Known URL-bearing keys in Replicate FileOutput objects
+    for (const key of ['url', 'audio', 'video', 'image', 'file', 'output']) {
+      if (out[key]) results.push(..._normalizeOutput(out[key]));
+    }
+    // If none of the known keys matched, try all string values
+    if (results.length === 0) {
+      for (const v of Object.values(out)) {
+        if (typeof v === 'string' && (v.startsWith('http://') || v.startsWith('https://'))) {
+          results.push(v);
+        }
+      }
+    }
+    return results;
+  }
+  return [];
 }
 
 // Thin per-modality wrappers map (prompt/params) → Replicate `input`.

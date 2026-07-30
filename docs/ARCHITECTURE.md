@@ -1,6 +1,6 @@
 # Architecture
 
-> **Release version:** v1.0.0. `package.json` is the sole release-version
+> **Release version:** v1.0.2. `package.json` is the sole release-version
 > source of truth. The historical phase label below is not an artifact version.
 
 > **Stand:** v1.2.0+ (Atomic-Architecture-Refactoring abgeschlossen, Phase 0–7).

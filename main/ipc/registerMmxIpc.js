@@ -89,7 +89,8 @@ function register({ getMainWindow, appRoot }) {
   // is required IF the args contain a path flag (--out, --out-dir,
   // --download, -o). For args with no path flag, the call still
   // succeeds without a grant (e.g. `mmx quota`).
-  secureHandle('mmx:run', { getMainWindow }, async (_e, args, grantId) => {
+  // HIGH-011: optional 4th arg `readGrantId` for input file paths.
+  secureHandle('mmx:run', { getMainWindow }, async (_e, args, grantId, readGrantId) => {
     try {
       if (!Array.isArray(args) || args.length < 1) {
         return { ok: false, code: -1, stdout: '', stderr: 'mmx: first arg (subcommand) is required', parsed: null };
@@ -106,7 +107,8 @@ function register({ getMainWindow, appRoot }) {
       // (the renderer forgot to mint a grant for the output dir).
       const pathFlags = _collectMmxPathFlags(safeArgs);
       if (pathFlags.length > 0) {
-        const grantAuthz = _authorizeMmxPaths(grantId, pathFlags);
+        // HIGH-011: pass optional readGrantId for input file paths.
+        const grantAuthz = _authorizeMmxPaths(grantId, pathFlags, undefined, readGrantId);
         if (grantAuthz) {
           return { ok: false, code: -1, stdout: '', stderr: grantAuthz, parsed: null };
         }
@@ -135,7 +137,9 @@ function register({ getMainWindow, appRoot }) {
   // renderer forgot to mint a grant for the output dir / cwd).
   // For payload with no path flags AND no cwd, the call still
   // succeeds without a grant (e.g. `mmx quota` from a Diagnose flow).
+  // HIGH-011: optional readGrantId in payload for input file paths.
   secureHandle('mmx:run:job', { getMainWindow }, async (_e, payload, grantId) => {
+    const readGrantId = payload && payload.readGrantId;
     try {
       const args = payload && payload.args;
       const jobId = payload && payload.jobId;
@@ -172,7 +176,8 @@ function register({ getMainWindow, appRoot }) {
       // a missing grant for a path-bearing call fails closed.
       const pathFlags = _collectMmxPathFlags(safeArgs);
       if (pathFlags.length > 0 || (typeof cwd === 'string' && cwd)) {
-        const grantAuthz = _authorizeMmxPaths(grantId, pathFlags, cwd);
+        // HIGH-011: pass optional readGrantId for input file paths.
+        const grantAuthz = _authorizeMmxPaths(grantId, pathFlags, cwd, readGrantId);
         if (grantAuthz) {
           return { ok: false, code: -1, stdout: '', stderr: grantAuthz, parsed: null };
         }

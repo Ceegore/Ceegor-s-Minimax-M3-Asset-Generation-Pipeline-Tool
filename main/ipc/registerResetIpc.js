@@ -18,10 +18,12 @@ const { secureHandle } = require('./secureHandle');
 // Deletes ONLY the tool's own settings/state files (+ the mmx CLI api_key).
 // NEVER the user's generated assets. Returns a per-file result so the UI
 // reports partial failures honestly instead of claiming a clean reset.
+// HIGH-017: also deletes providers.json and SecretStore blobs.
 function deleteLocalDataFiles() {
   const dir = configDir();
   const results = [];
-  const bases = ['config.txt', 'state.json', 'batches.json', 'state.jobs.archive.jsonl'];
+  // HIGH-017: added providers.json to the reset targets.
+  const bases = ['config.txt', 'state.json', 'batches.json', 'state.jobs.archive.jsonl', 'providers.json'];
   try {
     const entries = fs.readdirSync(dir);
     for (const base of bases) {
@@ -35,6 +37,18 @@ function deleteLocalDataFiles() {
     }
   } catch (e) {
     results.push({ file: dir, ok: false, error: 'readdir failed: ' + String((e && e.message) || e) });
+  }
+  // HIGH-017: clear SecretStore blobs (userData/secrets/).
+  try {
+    const secretsDir = path.join(app.getPath('userData'), 'secrets');
+    if (fs.existsSync(secretsDir)) {
+      fs.rmSync(secretsDir, { recursive: true, force: true });
+      results.push({ file: 'secrets/', ok: true });
+    } else {
+      results.push({ file: 'secrets/', ok: true, skipped: 'absent' });
+    }
+  } catch (e) {
+    results.push({ file: 'secrets/', ok: false, error: String((e && e.message) || e) });
   }
   try { results.push({ file: '~/.mmx/config.json (api_key)', ok: clearApiKeyFromMmxCliConfig() }); }
   catch (e) { results.push({ file: '~/.mmx/config.json', ok: false, error: String((e && e.message) || e) }); }

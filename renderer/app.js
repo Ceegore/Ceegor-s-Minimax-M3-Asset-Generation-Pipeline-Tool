@@ -41,6 +41,12 @@ async function init() {
   //   4) The DRIVES list                 -> DISABLED (no-op)
   const FB_DRIVES_SENTINEL = '__DRIVES__';
   function isDrivesList() { return state.fbDir === FB_DRIVES_SENTINEL; }
+  // FUNC-003: cached canonical browser root resolved from the main process.
+  // When config.output_dir is blank the main process owns the effective
+  // default (<userData>/generated). We cache it here so the synchronous
+  // isAtOutputRoot() and Up-button handler always have the canonical value
+  // even before the async boot resolution completes.
+  let _effectiveOutputRoot = '';
   // Detect a drive root by path shape (platform-agnostic). The
   // renderer runs with contextIsolation on and nodeIntegration off,
   // so `process.platform` is not available; matching the path string
@@ -57,8 +63,11 @@ async function init() {
   }
   // KGO7-007: output_dir is the browse CEILING (the S1 model removed
   // `fb:trust-ancestors`, so fb:list on the parent is rejected).
+  // FUNC-003: prefer the live config value (reflects Settings changes);
+  // fall back to the cached _effectiveOutputRoot (resolved from main at
+  // boot) only when config is blank — so the ceiling holds on fresh install.
   function isAtOutputRoot() {
-    const outRoot = (state.config && state.config.output_dir) || '';
+    const outRoot = (state.config && state.config.output_dir) || _effectiveOutputRoot || '';
     return !!outRoot && !!state.fbDir && String(state.fbDir).toLowerCase() === String(outRoot).toLowerCase();
   }
   function updateFbUpButton() {
@@ -101,7 +110,8 @@ async function init() {
         if (typeof window.logAction === 'function') window.logAction('file-browser', 'up-noop', { reason: 'drives-list' });
         return;
       }
-      const outRoot = state.config.output_dir || '';
+      // FUNC-003: prefer the live config value; fall back to cached root.
+      const outRoot = state.config.output_dir || _effectiveOutputRoot || '';
       // When no folder has been opened yet (e.g. a fresh install
       // where a prompt was typed and Generate hit), jump
       // to output_dir (always a real folder via the defaultOutputDir
@@ -479,7 +489,18 @@ async function init() {
   }
 
   // Config
-  state.config = await window.api.getConfig();
+  // SEC-001: use secret-free DTO (no raw api_key crosses IPC).
+  const _cfgPublic = await window.api.getConfigPublic();
+  state.config = {
+    hasApiKey: !!(_cfgPublic && _cfgPublic.hasApiKey),
+    apiKeyLast4: (_cfgPublic && _cfgPublic.apiKeyLast4) || '',
+    output_dir: (_cfgPublic && _cfgPublic.output_dir) || '',
+    report_dir: (_cfgPublic && _cfgPublic.report_dir) || '',
+    region: (_cfgPublic && _cfgPublic.region) || 'global',
+    theme: (_cfgPublic && _cfgPublic.theme) || 'dark',
+    styles: (_cfgPublic && Array.isArray(_cfgPublic.styles)) ? _cfgPublic.styles : [],
+    external_tools: (_cfgPublic && Array.isArray(_cfgPublic.external_tools)) ? _cfgPublic.external_tools : [],
+  };
   if (!Array.isArray(state.config.styles)) state.config.styles = [];
   if (!state.config.theme) state.config.theme = 'dark';
   applyTheme(state.config.theme);
@@ -488,14 +509,14 @@ async function init() {
   if (typeof window.logAction === 'function') {
     const c = state.config || {};
     window.logAction('boot', 'config-loaded', {
-      api_key_set: !!(c.api_key && c.api_key.length > 0),
+      api_key_set: !!c.hasApiKey,
       output_dir: c.output_dir || '(empty)',
       region: c.region || '(empty)',
       theme: c.theme || '(empty)',
       styles: Array.isArray(c.styles) ? c.styles.length : 0,
     });
   }
-  if (!state.config.api_key) {
+  if (!state.config.hasApiKey) {
     toast('No API key. Click ⚙ to add one.', 'warn', 6000);
   }
 
@@ -622,6 +643,9 @@ async function init() {
   // The default output dir resolves to a per-user, per-app location
   // (e.g. %APPDATA%). The main process owns the resolution so both
   // sides stay in sync via the same `effectiveOutputDir(cfg)` helper.
+  // FUNC-003: resolve the canonical browser root from main and cache it
+  // so isAtOutputRoot() and the Up-button handler always have the
+  // effective value, even on a fresh install with blank config.
   if (!state.config.output_dir) {
     try {
       state.config.output_dir = await window.api.defaultOutputDir();
@@ -630,6 +654,7 @@ async function init() {
       // ensureSubDir() guard will toast a clear error.
     }
   }
+  _effectiveOutputRoot = state.config.output_dir || '';
 
   showTab(startTab);
 

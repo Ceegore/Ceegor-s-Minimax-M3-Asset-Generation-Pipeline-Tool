@@ -27,6 +27,7 @@
 
 const { spawnSync } = require('child_process');
 const { findNodeExe, findMmxEntry, needsRunAsNode } = require('./mmxResolve');
+const { COMMAND_MATRIX, isVersionAllowed } = require('./services/ContractRegistry');
 
 // Known subcommands the app uses. The probe checks each one's --help.
 // Note: sound-effect is not a bundled CLI subcommand or supported speech flag.
@@ -127,15 +128,17 @@ function _buildSnapshot() {
   const topFlags = helpProbe ? _parseFlags(helpProbe.stdout + '\n' + helpProbe.stderr) : [];
 
   // 3. Per-subcommand probes.
+  // FUNC-001: use ContractRegistry COMMAND_MATRIX instead of hardcoded
+  // [sub, 'generate', '--help']. Speech uses 'synthesize', not 'generate'.
   const subcommands = {};
   for (const sub of KNOWN_SUBCOMMANDS) {
-    // gewv2 NF-01 fix: `mmx <sub> --help` only prints the parent command
-    // GROUP listing (e.g. "image generate  Generate images") — it has no
-    // flags. The real per-flag help lives at `mmx <sub> generate --help`.
-    // The old probe left `flags`/`models` empty (or scraped a couple of
-    // stray flags from prose) for every subcommand, making
-    // isFlagSupported() return false for every real flag.
-    const subProbe = _probe([sub, 'generate', '--help'], 4000);
+    const cmd = COMMAND_MATRIX[sub];
+    if (!cmd) {
+      subcommands[sub] = { available: false, flags: [], models: [] };
+      continue;
+    }
+    // cmd is e.g. ['image', 'generate'] or ['speech', 'synthesize']
+    const subProbe = _probe([...cmd, '--help'], 4000);
     if (subProbe && subProbe.status === 0) {
       const combined = subProbe.stdout + '\n' + subProbe.stderr;
       subcommands[sub] = {
@@ -153,6 +156,8 @@ function _buildSnapshot() {
 
   return {
     version,
+    // FUNC-002: hard-reject blocked versions (1.0.16, 1.0.17).
+    versionAllowed: isVersionAllowed(version),
     topFlags,
     subcommands,
     hasDryRun,

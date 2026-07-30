@@ -464,7 +464,8 @@ contextBridge.exposeInMainWorld('api', {
   pathJoin: (...args) => _winJoin(...args),
 
   // ---- config ----
-  getConfig: () => ipcRenderer.invoke('config:get'),
+  // SEC-001: `config:get` (raw, includes api_key) REMOVED. The renderer
+  // uses only the secret-free DTO via `config:getPublic`.
   // P0-B (360° Audit C-001): secret-free config DTO. Returns hasApiKey,
   // apiKeyLast4, output_dir, region, theme, styles — NEVER the raw api_key.
   getConfigPublic: () => ipcRenderer.invoke('config:getPublic'),
@@ -886,8 +887,8 @@ contextBridge.exposeInMainWorld('api', {
   m3Chat: (payload) => ipcRenderer.invoke('m3:chat', payload),
 
   // ---- Other APIs tab (non-MiniMax providers) ----
-  // Config persistence for providers.json (separate from config.txt).
-  providersGet: () => ipcRenderer.invoke('providers:get'),
+  // SEC-002: `providers:get` (raw, includes apiKey) REMOVED. The renderer
+  // uses only the secret-free DTO via `providers:getPublic`.
   // P0-B (360° Audit C-002): secret-free provider DTO. Returns providers
   // with hasKey boolean + apiKeyLast4 instead of raw apiKey values.
   providersGetPublic: () => ipcRenderer.invoke('providers:getPublic'),

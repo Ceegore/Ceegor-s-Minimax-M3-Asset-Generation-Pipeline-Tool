@@ -53,15 +53,9 @@ const PURPOSE_TO_ORIGIN = Object.freeze({
  * @param {{ getMainWindow: () => (Electron.BrowserWindow|null) }} deps
  */
 function register({ getMainWindow }) {
-  secureHandle('config:get', { getMainWindow }, () => {
-    // SYS-006: defensive envelope — never return null. The renderer
-    // dereferences .styles immediately; a null would crash the boot.
-    try {
-      const c = cfgMod.read();
-      if (c && typeof c === 'object') return c;
-    } catch (_) { /* fall through to default */ }
-    return { api_key: '', output_dir: '', region: 'global', theme: 'dark', styles: [] };
-  });
+  // SEC-001: `config:get` REMOVED. The raw config (including api_key) no
+  // longer crosses the IPC boundary. The renderer uses `config:getPublic`
+  // (registerConfigPublicIpc.js) which returns a secret-free DTO.
   secureHandle('config:set', { getMainWindow }, (_e, payload) => {
     try {
       // R1.2a: accept the {cfg, grants} form. For backward
@@ -91,7 +85,7 @@ function register({ getMainWindow }) {
       const looksLikeWrapped = !!payload && typeof payload === 'object' && !Array.isArray(payload)
         && 'cfg' in payload;
       if (looksLikeWrapped && !isWrapped) {
-        return { ok: false, config: cfgMod.read(), error: 'Config must be a plain object.' };
+        return { ok: false, config: _publicConfig(cfgMod.read()), error: 'Config must be a plain object.' };
       }
       const grants = (isWrapped && payload.grants && typeof payload.grants === 'object' && !Array.isArray(payload.grants))
         ? payload.grants : {};
@@ -117,7 +111,7 @@ function register({ getMainWindow }) {
       }
 
       if (cfg == null || typeof cfg !== 'object' || Array.isArray(cfg)) {
-        return { ok: false, config: cfgMod.read(), error: 'Config must be a plain object.' };
+        return { ok: false, config: _publicConfig(cfgMod.read()), error: 'Config must be a plain object.' };
       }
       // S1 §4: output_dir / report_dir changes REQUIRE a matching
       // grant. Compare the new payload against the on-disk state so
@@ -142,7 +136,7 @@ function register({ getMainWindow }) {
         if (!grants.output_dir || typeof grants.output_dir !== 'string') {
           return {
             ok: false,
-            config: prev,
+            config: _publicConfig(prev),
             error: 'output_dir changed but no grant provided; use config:pickFolder to obtain a config-output grant and pass it as grants.output_dir.',
           };
         }
@@ -152,12 +146,12 @@ function register({ getMainWindow }) {
         // IPC handler's responsibility.
         const outGrant = pathGrantService.inspect(grants.output_dir);
         if (!outGrant) {
-          return { ok: false, config: prev, error: 'output_dir grant rejected: grant not found' };
+          return { ok: false, config: _publicConfig(prev), error: 'output_dir grant rejected: grant not found' };
         }
         if (outGrant.origin !== 'config-output') {
           return {
             ok: false,
-            config: prev,
+            config: _publicConfig(prev),
             error: 'output_dir grant rejected: grant origin "' + outGrant.origin + '" does not match purpose (must be a config-output grant)',
           };
         }
@@ -166,25 +160,25 @@ function register({ getMainWindow }) {
           path: newOutputDir,
         });
         if (!authz.ok) {
-          return { ok: false, config: prev, error: 'output_dir grant rejected: ' + authz.error };
+          return { ok: false, config: _publicConfig(prev), error: 'output_dir grant rejected: ' + authz.error };
         }
       }
       if (reportDirChanged) {
         if (!grants.report_dir || typeof grants.report_dir !== 'string') {
           return {
             ok: false,
-            config: prev,
+            config: _publicConfig(prev),
             error: 'report_dir changed but no grant provided; use config:pickFolder to obtain a config-report grant and pass it as grants.report_dir.',
           };
         }
         const repGrant = pathGrantService.inspect(grants.report_dir);
         if (!repGrant) {
-          return { ok: false, config: prev, error: 'report_dir grant rejected: grant not found' };
+          return { ok: false, config: _publicConfig(prev), error: 'report_dir grant rejected: grant not found' };
         }
         if (repGrant.origin !== 'config-report') {
           return {
             ok: false,
-            config: prev,
+            config: _publicConfig(prev),
             error: 'report_dir grant rejected: grant origin "' + repGrant.origin + '" does not match purpose (must be a config-report grant)',
           };
         }
@@ -193,7 +187,7 @@ function register({ getMainWindow }) {
           path: newReportDir,
         });
         if (!authz.ok) {
-          return { ok: false, config: prev, error: 'report_dir grant rejected: ' + authz.error };
+          return { ok: false, config: _publicConfig(prev), error: 'report_dir grant rejected: ' + authz.error };
         }
       }
       const safe = sanitize(Object.assign({}, prev, cfg)); // KGO5-013: merge preserves absent fields
@@ -221,7 +215,7 @@ function register({ getMainWindow }) {
       }
       return {
         ok: true,
-        config: cfgMod.read(),
+        config: _publicConfig(cfgMod.read()),
         error: privacyWarning,
         warnings: privacyWarning ? [privacyWarning] : [],
       };
@@ -231,7 +225,7 @@ function register({ getMainWindow }) {
       if (!prev || typeof prev !== 'object') {
         prev = { api_key: '', output_dir: '', region: 'global', theme: 'dark', styles: [] };
       }
-      return { ok: false, config: prev, error: (e && e.message) || String(e) };
+      return { ok: false, config: _publicConfig(prev), error: (e && e.message) || String(e) };
     }
   });
 
@@ -350,11 +344,17 @@ function parseStylePresetsFromMarkdown(mdContent) {
 
 function loadPremadeStylesFromDisk() {
   const fsMod = require('fs');
-  const candidates = [
-    path.join(process.cwd(), 'IMAGE_STYLE_PRESETS_ENGLISH_v2.0.md'),
-    path.join(__dirname, '../../IMAGE_STYLE_PRESETS_ENGLISH_v2.0.md'),
-    path.join(path.dirname(process.execPath), 'IMAGE_STYLE_PRESETS_ENGLISH_v2.0.md'),
-  ];
+  // MED-049: in packaged builds, ONLY load from app resources (__dirname
+  // or execPath). process.cwd() is user-controlled (wherever the shortcut
+  // points) and could serve a malicious file in production.
+  let isPackaged = false;
+  try { const { app } = require('electron'); isPackaged = app.isPackaged; } catch (_) {}
+  const candidates = [];
+  if (!isPackaged) {
+    candidates.push(path.join(process.cwd(), 'IMAGE_STYLE_PRESETS_ENGLISH_v2.0.md'));
+  }
+  candidates.push(path.join(__dirname, '../../IMAGE_STYLE_PRESETS_ENGLISH_v2.0.md'));
+  candidates.push(path.join(path.dirname(process.execPath), 'IMAGE_STYLE_PRESETS_ENGLISH_v2.0.md'));
   for (const p of candidates) {
     if (fsMod.existsSync(p)) {
       try {
@@ -364,6 +364,29 @@ function loadPremadeStylesFromDisk() {
     }
   }
   return [];
+}
+
+/**
+ * SEC-001: Build a secret-free config DTO for IPC responses.
+ * The raw api_key NEVER crosses the IPC boundary.
+ * @param {object} cfg - Raw config from cfgMod.read().
+ * @returns {object} Public-safe config shape.
+ */
+function _publicConfig(cfg) {
+  if (!cfg || typeof cfg !== 'object') {
+    return { hasApiKey: false, apiKeyLast4: '', output_dir: '', report_dir: '', region: 'global', theme: 'dark', styles: [], external_tools: [] };
+  }
+  const key = typeof cfg.api_key === 'string' ? cfg.api_key : '';
+  return {
+    hasApiKey: key.length > 0,
+    apiKeyLast4: key.length >= 4 ? key.slice(-4) : '',
+    output_dir: cfg.output_dir || '',
+    report_dir: cfg.report_dir || '',
+    region: cfg.region === 'cn' ? 'cn' : 'global',
+    theme: cfg.theme === 'light' ? 'light' : 'dark',
+    styles: Array.isArray(cfg.styles) ? cfg.styles : [],
+    external_tools: Array.isArray(cfg.external_tools) ? cfg.external_tools : [],
+  };
 }
 
 module.exports = { register, parseStylePresetsFromMarkdown, loadPremadeStylesFromDisk };

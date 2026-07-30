@@ -132,7 +132,7 @@ test('pipeline:import sanitises a malicious displayName (no path traversal)', as
     const { handlers } = setupElectronMock(cfgDir);
     for (const k of Object.keys(require.cache)) { if (k.includes('PathSecurityService') || k.includes('pipelineModel') || k.includes('config.js') || k.includes('registerPipelineIpc') || k.includes('WorkspaceService')) delete require.cache[k]; }
     require('../../../../main/ipc/registerPipelineIpc').register({ appRoot: process.cwd(), getMainWindow: () => null });
-    const src = path.join(cfgDir, 'src.png'); fs.writeFileSync(src, Buffer.from([0x89]));
+    const src = path.join(cfgDir, 'src.png'); fs.writeFileSync(src, Buffer.from([0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A]));
     // R1.4 Phasenpruefung-2: explicit workspaceId (minted) so the
     // test exercises the routing contract, not the auto-mint fallback.
     //
@@ -172,7 +172,7 @@ test('pipeline:replace copies with a _replaceN infix (GIMP round-trip)', async (
     const { handlers } = setupElectronMock(cfgDir);
     for (const k of Object.keys(require.cache)) { if (k.includes('PathSecurityService') || k.includes('pipelineModel') || k.includes('config.js') || k.includes('registerPipelineIpc') || k.includes('WorkspaceService')) delete require.cache[k]; }
     require('../../../../main/ipc/registerPipelineIpc').register({ appRoot: process.cwd(), getMainWindow: () => null });
-    const src = path.join(cfgDir, 'fixed.png'); fs.writeFileSync(src, Buffer.from([0x89]));
+    const src = path.join(cfgDir, 'fixed.png'); fs.writeFileSync(src, Buffer.from([0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A]));
     // R1.4 Phasenpruefung-2: explicit workspaceId.
     // R1.4 Phasenpruefung-3 (CRITICAL fix): use `minted.id`.
     const { defaultService: workspaceService } = require('../../../../main/services/WorkspaceService');
@@ -180,7 +180,13 @@ test('pipeline:replace copies with a _replaceN infix (GIMP round-trip)', async (
       origin: 'picker-workspace', purpose: 'pipelineIpc test (replace)', path: outDir,
     });
     const workspaceId = minted.id;
-    const r = await handlers['pipeline:replace']({}, { workspaceId, srcAbsPath: src, column: 'crop', imageId: 'img_r', displayName: 'hero.png' });
+    // P0-D (C-006): mint the required read grant for the source file.
+    const { defaultService: grantService } = require('../../../../main/services/PathGrantService');
+    const readGrant = grantService.mintFileGrant({
+      origin: 'picker-file', purpose: 'pipelineIpc test replace', path: src, capabilities: ['read'],
+    });
+    assert.equal(readGrant.ok, true, 'read grant minted');
+    const r = await handlers['pipeline:replace']({}, { workspaceId, srcAbsPath: src, column: 'crop', imageId: 'img_r', displayName: 'hero.png', readGrantId: readGrant.grantId });
     assert.ok(r.ok, r.error);
     assert.match(r.dst, /replace1\.png$/, 'first replace gets _replace1');
     assert.ok(fs.existsSync(r.dst));

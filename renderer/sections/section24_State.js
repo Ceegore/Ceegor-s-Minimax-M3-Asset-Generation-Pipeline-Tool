@@ -45,14 +45,12 @@ window.STATE_PERSIST_KEYS = [
   'pipeline',
 ];
 window.state = {
-  config: { api_key: '', output_dir: '', region: 'global', theme: 'dark', styles: [] },
+  config: { hasApiKey: false, apiKeyLast4: '', output_dir: '', region: 'global', theme: 'dark', styles: [] },
   // When the user enables "Don't save" on the API-key row in ⚙ Settings, the
   // entered key is NOT written to config.txt and is NOT loaded from config.txt
-  // on the next launch (the user has to re-enter it). The in-memory
-  // `state.config.api_key` IS set to the entered value so the current session
-  // works as normal — only the persisted-to-disk form is suppressed. Persisted
-  // to state.json so the checkbox state survives a restart (no surprise
-  // un-checks).
+  // on the next launch (the user has to re-enter it). SEC-001: the raw key
+  // never crosses the IPC boundary; only hasApiKey/apiKeyLast4 are exposed.
+  // Persisted to state.json so the checkbox state survives a restart.
   apiKeyNoSave: false,
   voices: [],
   voicesLoaded: false,

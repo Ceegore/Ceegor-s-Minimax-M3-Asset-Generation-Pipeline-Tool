@@ -29,7 +29,7 @@
     "build:release": "node scripts/zip-portable.js",
     "build:dev": "node scripts/build-dev-zip.js",
     "build:full": "electron-builder --win dir --x64",
-    "verify:release": "node scripts/verify-release.js --require-archive",
+    "verify:release": "node scripts/verify-release.js --require-archive --require-signature",
     "sign:release": "node scripts/sign-release.js",
     "sbom": "node scripts/generate-sbom.js",
     "set-fuses": "node scripts/set-fuses.js",

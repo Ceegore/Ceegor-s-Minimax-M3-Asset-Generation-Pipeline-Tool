@@ -244,7 +244,7 @@ window.TABS.image = {
       if (typeof window.logAction === 'function') {
         window.logAction('generate', 'click-generate', {
           tab: 'image',
-          has_api_key: !!state.config.api_key,
+          has_api_key: !!state.config.hasApiKey,
           upscale_enabled: !!state.upscaleEnabled,
         });
       }
@@ -264,7 +264,7 @@ window.TABS.image = {
         }
         return;
       }
-      if (!state.config.api_key) {
+      if (!state.config.hasApiKey) {
         if (typeof window.logAction === 'function') {
           window.logAction('generate', 'guard-blocked', { reason: 'no-api-key', tab: 'image' });
         }
@@ -588,7 +588,7 @@ window.TABS.image = {
           if (!useOutDir) args.push('--out', outFile);
           // H3-B9: log the command to the structured log (replaces the
           // removed .lastcmd span). The command is masked to hide the API key.
-          const maskedCmd = maskLine(`mmx ${args.join(' ')}`, state.config && state.config.api_key);
+          const maskedCmd = maskLine(`mmx ${args.join(' ')}`);
           if (ctx && ctx.onSecondary) ctx.onSecondary(maskedCmd);
 
           // Per-variant start time. We use this (not the whole-run start
@@ -622,6 +622,12 @@ window.TABS.image = {
             const firstMsg = formatMmxError(r);
             const isRateLimit = /rate|limit|throttl|too many|429/i.test(firstMsg);
             const maxRetries = 3;
+            // FUNC-017: attempt isolation — each retry writes to a unique
+            // output path so a partial/corrupt file from attempt N doesn't
+            // pollute attempt N+1. Only the successful attempt's file is
+            // promoted to the canonical outFile; failed attempt files remain
+            // on disk (with _attempt_N suffix) as an inventory of failures.
+            const failedAttemptPaths = [];
             for (let attempt = 1; attempt <= maxRetries && !cancel.wasCancelled(); attempt++) {
               // Exponential backoff: 1.5s, 3s, 6s (×2 if rate-limited)
               const baseDelay = 1500 * Math.pow(2, attempt - 1);
@@ -629,12 +635,22 @@ window.TABS.image = {
               await new Promise((res) => setTimeout(res, delay));
               if (cancel.wasCancelled()) break;
               setStatus(`Retrying image variant ${v}/${variantsCount} (attempt ${attempt + 1}/${maxRetries + 1})…`, true);
-              // F4: retry progress routes to status bar only.
-              r = await window.api.mmxRunJob({ args, jobId: ctrl.jobId }, mmxGrant);
+              // FUNC-017: derive an attempt-isolated output path.
+              const attemptOutFile = useOutDir ? runDir : outFile.replace(/(\.\w+)$/, `_attempt_${attempt}$1`);
+              const retryArgs = args.slice();
+              if (!useOutDir) {
+                const outIdx = retryArgs.indexOf('--out');
+                if (outIdx !== -1) retryArgs[outIdx + 1] = attemptOutFile;
+              }
+              r = await window.api.mmxRunJob({ args: retryArgs, jobId: ctrl.jobId }, mmxGrant);
               if (r.ok) {
+                // Promote: the successful attempt's file becomes the canonical output.
+                if (!useOutDir) outFile = attemptOutFile;
                 toast(`Image variant ${v}/${variantsCount} succeeded on retry ${attempt}.`, 'ok', 2500);
                 break;
               }
+              // Inventory the failed attempt's partial file (best-effort).
+              if (!useOutDir) failedAttemptPaths.push(attemptOutFile);
             }
             if (!r.ok) toast(`Image variant ${v}/${variantsCount} failed after ${maxRetries + 1} attempts: ${firstMsg}`, 'err', 6000);
           }

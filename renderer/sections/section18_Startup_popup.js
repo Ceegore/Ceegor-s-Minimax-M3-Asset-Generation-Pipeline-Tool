@@ -165,7 +165,7 @@ function showStartupPopup(opts) {
       el('button', { class: 'primary', onclick: () => {
         markSeen();
         close();
-        if (!state.config.api_key || !state.config.output_dir) {
+        if (!state.config.hasApiKey || !state.config.output_dir) {
           openFirstTimeSetup();
         } else if (!state.realesrganFirstRunDismissed) {
           openOptionalAddons({ autoOpened: true }).catch(() => {});

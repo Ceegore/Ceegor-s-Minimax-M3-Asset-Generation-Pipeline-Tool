@@ -170,7 +170,7 @@ window.TABS.video = {
     genBtn.addEventListener('click', async () => {
       // Breadcrumb the click BEFORE guards.
       if (typeof window.logAction === 'function') {
-        window.logAction('generate', 'click-generate', { tab: 'video', has_api_key: !!state.config.api_key });
+        window.logAction('generate', 'click-generate', { tab: 'video', has_api_key: !!state.config.hasApiKey });
       }
       // Wrap the WHOLE click handler in a try/catch so an unexpected
       // throw during pre-flight (e.g. a missing helper) surfaces as a
@@ -193,7 +193,7 @@ window.TABS.video = {
         }
         return;
       }
-      if (!state.config.api_key) {
+      if (!state.config.hasApiKey) {
         if (typeof window.logAction === 'function') {
           window.logAction('generate', 'guard-blocked', { reason: 'no-api-key', tab: 'video' });
         }
@@ -336,7 +336,7 @@ window.TABS.video = {
           appendBoolFlag(args, fastPretreat.input, '--fast-pretreatment');
           appendFlag(args, pollInterval.input);
           // H3-B9: log the command to the structured log (replaces .lastcmd).
-          const maskedCmd = maskLine(`mmx ${args.join(' ')}`, state.config && state.config.api_key);
+          const maskedCmd = maskLine(`mmx ${args.join(' ')}`);
           if (ctx && ctx.onSecondary) ctx.onSecondary(maskedCmd);
           const statusMsg = variantsCount > 1
             ? `Submitting video job… variant ${v}/${variantsCount} (each takes 1-3 min)`

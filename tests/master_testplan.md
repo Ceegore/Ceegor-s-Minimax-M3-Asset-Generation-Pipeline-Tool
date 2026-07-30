@@ -870,3 +870,36 @@
 5. **Video Conservation:** TC_E2E_VID_001 uses the cheapest model (Hailuo-2.3-Fast, 6s, 768P). Do NOT add more video tests.
 6. **Window Position:** All tests run at 1400×900 @ (519, 0). Never fullscreen. Verify position in Phase 1 only.
 7. **AI Import/Export Test (TC_E2E_BATCH_004):** This test simulates the full external-LLM workflow. The import file content is pre-defined in the test steps. The test executor creates `_testtext1_import.md` exactly as specified, then imports it. No video is generated in this test.
+
+---
+
+## MED-004: Risk-Based Coverage Targets
+
+Coverage gates are calibrated by risk tier, not arbitrary percentages:
+
+| Tier | Component | Target | Rationale |
+|------|-----------|--------|-----------|
+| **Critical** | PathGrantService, secureHandle, SecretStore | 95%+ | Security boundary — any gap is a potential vulnerability |
+| **Critical** | ArchiveService, state persistence | 90%+ | Data integrity — corruption loses user history |
+| **High** | IPC handlers (register*Ipc.js) | 85%+ | Main process surface — bugs crash the app |
+| **High** | Provider adapters (openaiCompatible, replicate) | 80%+ | Cost-bearing paths — bugs waste API credits |
+| **Medium** | Renderer services (JobRunner, GrantCache) | 70%+ | User-facing — bugs degrade UX but don't lose data |
+| **Medium** | Audio/Image processing | 65%+ | Compute-heavy — bugs fail visibly |
+| **Low** | UI helpers, formatters | 50%+ | Cosmetic — bugs are visible and easily fixed |
+
+### Gate Enforcement
+
+- **CI gates** (`.github/workflows/ci.yml`):
+  - Unit line coverage: fail below 50%
+  - IPC coverage: fail below 95%
+  - UI-surface coverage: fail below 96%
+
+- **Local development**:
+  - Run `npm run test:coverage` for full report
+  - Run `npm run test:coverage:gate -- --threshold=<N>` to check specific tier
+
+### Exemptions
+
+- Generated code (protobuf, etc.) is excluded from coverage
+- Test fixtures and mocks are excluded
+- Vendor bundles (ffmpeg-static, sharp) are excluded

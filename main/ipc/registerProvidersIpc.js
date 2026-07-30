@@ -19,7 +19,7 @@ const { authorizePath } = require('./grantAuthorizer');
 // P0-A (360° Audit C-008): feature-flag gate for custom provider URLs.
 const { customProviderUrlsEnabled } = require('../services/FeatureFlags');
 // P1-D (360° Audit C-008, H-020): SSRF protection for provider base URLs.
-const { validateProviderUrl } = require('../../src/providers/urlPolicy');
+const { validateProviderUrl, validateOutputUrl } = require('../../src/providers/urlPolicy');
 // P1-A (360° Audit H-001): secure IPC wrapper with sender/frame/origin validation.
 const { secureHandle } = require('./secureHandle');
 // P2-C (360° Audit H-014, H-015): cloud job concurrency & rate limiting.
@@ -59,7 +59,9 @@ async function downloadToFile(url, dest, signal) {
 
 function register({ getMainWindow }) {
   // ---- Config persistence ----
-  secureHandle('providers:get', { getMainWindow }, () => providersStore.read());
+  // SEC-002: `providers:get` REMOVED. The raw provider config (including
+  // apiKey values) no longer crosses the IPC boundary. The renderer uses
+  // `providers:getPublic` which returns a secret-free DTO.
 
   // P0-B (360° Audit C-002): secret-free provider DTO for the renderer.
   // Returns provider metadata with `hasKey` boolean instead of raw apiKey.
@@ -96,8 +98,20 @@ function register({ getMainWindow }) {
       }
       // P1-D (C-008, H-020): validate ALL provider base URLs for SSRF safety.
       // Even in dev mode, block localhost/private IPs to prevent accidental SSRF.
+      // MED-041: basic schema validation for each provider entry.
       if (data && Array.isArray(data.providers)) {
         for (const p of data.providers) {
+          // MED-041: reject entries without a string id or with unknown fields
+          // that could confuse the store.
+          if (!p.id || typeof p.id !== 'string') {
+            return { ok: false, error: 'Each provider must have a string "id" field.' };
+          }
+          if (p.kind && typeof p.kind !== 'string') {
+            return { ok: false, error: `Provider "${p.id}": "kind" must be a string.` };
+          }
+          if (p.baseUrl && typeof p.baseUrl !== 'string') {
+            return { ok: false, error: `Provider "${p.id}": "baseUrl" must be a string.` };
+          }
           if (p.baseUrl && typeof p.baseUrl === 'string' && p.baseUrl.length > 0) {
             const urlCheck = validateProviderUrl(p.baseUrl, { allowHttp: !require('electron').app.isPackaged });
             if (!urlCheck.ok) {
@@ -113,12 +127,20 @@ function register({ getMainWindow }) {
   });
 
   // ---- Model discovery ----
+  // MED-005: gate model listing through CloudJobGate so a compromised
+  // renderer cannot flood the provider's /models endpoint.
   secureHandle('providers:listModels', { getMainWindow }, async (_e, { providerId }) => {
     try {
       const p = providersStore.provider(providerId);
       const a = ADAPTERS[p.kind];
       if (!a || !a.listModels) return { ok: true, models: [] };
-      return { ok: true, models: await a.listModels({ baseUrl: p.baseUrl, apiKey: p.apiKey }) };
+      const gateSlot = cloudJobGate.acquire(p.baseUrl || providerId);
+      if (!gateSlot.ok) return { ok: false, error: gateSlot.error };
+      try {
+        return { ok: true, models: await a.listModels({ baseUrl: p.baseUrl, apiKey: p.apiKey }) };
+      } finally {
+        cloudJobGate.release(gateSlot.id);
+      }
     } catch (e) { return { ok: false, error: String(e.message || e) }; }
   });
 
@@ -132,7 +154,9 @@ function register({ getMainWindow }) {
       return { ok: false, error: 'providers:generate requires a request object.' };
     }
     // P2-C (H-014, H-015): acquire cloud job gate slot before API call.
-    const gateSlot = cloudJobGate.acquire(req.providerId || 'unknown');
+    // MED-040: pass baseUrl for origin-based rate limiting.
+    const provider = providersStore.provider(req.providerId);
+    const gateSlot = cloudJobGate.acquire((provider && provider.baseUrl) || req.providerId || 'unknown');
     if (!gateSlot.ok) return { ok: false, error: gateSlot.error };
     const ctrl = new AbortController();
     if (req.jobId) inflight.set(req.jobId, ctrl);
@@ -184,6 +208,11 @@ function register({ getMainWindow }) {
         if (o.b64) {
           fs.writeFileSync(dest, Buffer.from(o.b64, 'base64'));
         } else {
+          // SEC-006: validate output URL before download (SSRF protection).
+          const urlCheck = validateOutputUrl(o.url);
+          if (!urlCheck.ok) {
+            return { ok: false, error: 'Output URL blocked: ' + urlCheck.error };
+          }
           // Stream to disk with a hard cap — the old Buffer.from(arrayBuffer())
           // buffered the entire body in main-process memory with no size limit.
           try {
@@ -214,7 +243,10 @@ function register({ getMainWindow }) {
   });
 
   // ---- Cancel ----
-  secureHandle('providers:cancel', { getMainWindow }, (_e, { jobId }) => {
+  // MED-008: null safety — a missing/invalid jobId is a no-op, not a crash.
+  secureHandle('providers:cancel', { getMainWindow }, (_e, payload) => {
+    const jobId = payload && payload.jobId;
+    if (!jobId || typeof jobId !== 'string') return { ok: true, skipped: 'no-jobId' };
     const c = inflight.get(jobId);
     if (c) c.abort();
     return { ok: true };

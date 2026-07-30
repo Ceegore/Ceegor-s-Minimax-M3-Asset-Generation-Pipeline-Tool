@@ -11,7 +11,9 @@ test('pickAndCopy: successfully copies picked file to target', async () => {
   await fs.mkdir(tmpDir, { recursive: true });
 
   const srcFile = path.join(tmpDir, 'mock-model.onnx');
-  await fs.writeFile(srcFile, 'dummy ONNX content');
+  // SEC-013: pickAndCopy validates the file header. ONNX models start
+  // with protobuf field tag 0x08. Write a valid header so validation passes.
+  await fs.writeFile(srcFile, Buffer.concat([Buffer.from([0x08, 0x07]), Buffer.from('dummy ONNX content')]));
 
   const showOpenDialogMock = async () => ({
     canceled: false,
@@ -27,8 +29,9 @@ test('pickAndCopy: successfully copies picked file to target', async () => {
   const expectedDest = path.join(appRoot, 'bin', 'models', 'isnet-general-use.onnx');
   assert.equal(result.destPath, expectedDest);
 
-  const copiedContent = await fs.readFile(expectedDest, 'utf8');
-  assert.equal(copiedContent, 'dummy ONNX content');
+  const copiedContent = await fs.readFile(expectedDest);
+  assert.equal(copiedContent[0], 0x08, 'ONNX header byte preserved');
+  assert.ok(copiedContent.includes(Buffer.from('dummy ONNX content')), 'content preserved');
 
   // Clean up
   try { await fs.rm(tmpDir, { recursive: true, force: true }); } catch (_) {}

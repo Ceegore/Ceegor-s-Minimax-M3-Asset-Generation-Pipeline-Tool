@@ -10,7 +10,7 @@ Windows batch asset production for MiniMax: turn a GDD or story into image, spee
 
 ## Release title
 
-MiniMax Asset Tool v1.0.1 — BatchGen UX overhaul + packaging fix
+MiniMax Asset Tool v1.0.2 — Security hardening + audit remediation
 
 ## Release body
 

@@ -56,7 +56,7 @@ test('ISOLATION: registerProvidersIpc.js uses grantAuthorizer (not a custom gate
 
 test('ISOLATION: providers IPC channels are distinct from mmx channels', () => {
   const s = src('main/ipc/registerProvidersIpc.js');
-  assert.ok(s.includes("'providers:get'"), 'has providers:get');
+  assert.ok(s.includes("'providers:getPublic'"), 'has providers:getPublic');
   assert.ok(s.includes("'providers:set'"), 'has providers:set');
   assert.ok(s.includes("'providers:generate'"), 'has providers:generate');
   assert.ok(s.includes("'providers:cancel'"), 'has providers:cancel');
@@ -81,7 +81,7 @@ test('ISOLATION: showTab lazy-builds providers tab', () => {
 
 test('ISOLATION: preload exposes providers bridge entries', () => {
   const s = src('preload.js');
-  assert.ok(s.includes('providersGet'), 'has providersGet');
+  assert.ok(s.includes('providersGetPublic'), 'has providersGetPublic');
   assert.ok(s.includes('providersSet'), 'has providersSet');
   assert.ok(s.includes('providersListModels'), 'has providersListModels');
   assert.ok(s.includes('providersGenerate'), 'has providersGenerate');

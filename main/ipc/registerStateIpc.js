@@ -62,13 +62,18 @@ function register(deps) {
     // Now: read errors return {}; migration errors are caught LOCALLY
     // and set reauthorizationRequired so the user re-prompts, but the
     // underlying state.json is preserved.
+    // MED-029: standardized envelope — add ok:true to the returned state
+    // object for R3.1 envelope compliance while maintaining backward
+    // compatibility (renderer can still access state.tabs directly).
     let s;
     try {
       s = stateMod.read();
     } catch (_) {
-      return {};
+      return { ok: false, error: 'state read failed' };
     }
-    if (!s || typeof s !== 'object') return s;
+    if (!s || typeof s !== 'object') return { ok: true };
+    // MED-029: mark envelope as successful.
+    s.ok = true;
     // R1.4: NO addTrusted. The persisted paths in columnFolders
     // and workspace were the security loophole the SYS-001 family
     // tested for. Resolution now goes through WorkspaceService:

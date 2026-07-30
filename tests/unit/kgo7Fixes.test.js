@@ -45,15 +45,17 @@ function loadAdoptConfig(state) {
   return sandbox.window.adoptConfig;
 }
 
-test('KGO7-003: adoptConfig keeps the session key when the privacy switch is on', () => {
-  const state = { apiKeyNoSave: true, config: { api_key: 'sk-SESSION-0123456789', theme: 'dark' } };
+test('KGO7-003: adoptConfig returns the public DTO as-is (SEC-001: session key lives in main)', () => {
+  const state = { apiKeyNoSave: true, config: { hasApiKey: true, theme: 'dark' } };
   const adoptConfig = loadAdoptConfig(state);
   assert.equal(typeof adoptConfig, 'function', 'ipcResult.js must expose window.adoptConfig');
-  // The envelope read back from disk has an EMPTY key (by design).
-  const fromDisk = { api_key: '', theme: 'light', styles: [{ name: 'x', value: 'y' }] };
+  // SEC-001: config:set returns a public DTO (no raw api_key). The session
+  // key lives exclusively in the main process (SessionCredentialStore).
+  // adoptConfig simply returns the response DTO without modification.
+  const fromDisk = { hasApiKey: false, apiKeyLast4: '', theme: 'light', styles: [{ name: 'x', value: 'y' }] };
   const adopted = adoptConfig(fromDisk);
-  assert.equal(adopted.api_key, 'sk-SESSION-0123456789',
-    'the session key must survive a save made under the privacy switch');
+  assert.equal(adopted.hasApiKey, false,
+    'hasApiKey comes from the response (the main process tracks the session key)');
   assert.equal(adopted.theme, 'light', 'every other field must come from the response');
   assert.equal(adopted.styles.length, 1, 'the saved styles must come from the response');
 });

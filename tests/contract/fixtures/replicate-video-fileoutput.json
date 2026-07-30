@@ -1,0 +1,19 @@
+{
+  "id": "pred-xyz001",
+  "model": "minimax/video-01",
+  "version": "v1",
+  "status": "succeeded",
+  "output": {
+    "video": {
+      "url": "https://replicate.delivery/pbxt/xyz001/output.mp4",
+      "mime_type": "video/mp4",
+      "size": 4521984
+    },
+    "thumbnail": {
+      "url": "https://replicate.delivery/pbxt/xyz001/thumb.jpg",
+      "mime_type": "image/jpeg",
+      "size": 12048
+    }
+  },
+  "metrics": { "predict_time": 45.2 }
+}

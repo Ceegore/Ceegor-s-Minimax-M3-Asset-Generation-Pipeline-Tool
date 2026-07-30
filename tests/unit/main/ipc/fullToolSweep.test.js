@@ -190,7 +190,6 @@ test('preload bridge exposes every tool function and maps to the expected channe
     'fileSaveAs',
     'fixImageExtension',
     'getAppVersion',
-    'getConfig',
     'getConfigPublic',
     'getPremadeStyles',
     'imageMetadata',
@@ -238,7 +237,6 @@ test('preload bridge exposes every tool function and maps to the expected channe
     'pipelineTrash',
     'providersCancel',
     'providersGenerate',
-    'providersGet',
     'providersGetPublic',
     'providersListModels',
     'providersSet',
@@ -267,7 +265,7 @@ test('preload bridge exposes every tool function and maps to the expected channe
 
   const checks = [
     ['getAppVersion', [], 'app:version'],
-    ['getConfig', [], 'config:get'],
+    ['getConfigPublic', [], 'config:getPublic'],
     ['setConfig', [{ api_key: 'sk-test' }], 'config:set'],
     ['pickFolderFull', [{ purpose: 'config-output' }], 'config:pickFolder'],
     ['configPath', [], 'config:path'],
@@ -366,7 +364,7 @@ test('preload bridge exposes every tool function and maps to the expected channe
     ['jobCancelAll', [], 'job:cancel-all'],
     ['jobList', [], 'job:list'],
     // Other APIs tab (non-MiniMax providers).
-    ['providersGet', [], 'providers:get'],
+    ['providersGetPublic', [], 'providers:getPublic'],
     ['providersSet', [{ providers: [] }], 'providers:set'],
     ['providersListModels', [{ providerId: 'openrouter' }], 'providers:listModels'],
     ['providersGenerate', [{ jobId: 'j1', modality: 'image', providerId: 'openrouter', model: 'x', prompt: 'p', outDir: 'C:\\out', grantId: 'g' }], 'providers:generate'],
@@ -484,6 +482,7 @@ test('app, config, state, batches, and file browser handlers pass a real filesys
     const registrars = [
       'main/ipc/registerAppIpc.js',
       'main/ipc/registerConfigIpc.js',
+      'main/ipc/registerConfigPublicIpc.js',
       'main/ipc/registerStateIpc.js',
       'main/ipc/registerBatchesIpc.js',
       'main/ipc/registerFileBrowserIpc.js',
@@ -497,8 +496,9 @@ test('app, config, state, batches, and file browser handlers pass a real filesys
     assert.equal(appVersion.name, PACKAGE_JSON.name);
     assert.equal(appVersion.productName, PACKAGE_JSON.build.productName);
 
-    const currentConfig = electron.handlers['config:get']();
-    assert.equal(currentConfig.api_key, 'sk-initial');
+    const currentConfig = electron.handlers['config:getPublic']();
+    // SEC-001: config:getPublic returns a secret-free DTO.
+    assert.equal(currentConfig.hasApiKey, true);
     assert.equal(currentConfig.output_dir, outputDir);
 
     const savedResult = electron.handlers['config:set'](null, {
@@ -515,7 +515,8 @@ test('app, config, state, batches, and file browser handlers pass a real filesys
     assert.equal(savedResult.ok, true);
     assert.equal(savedResult.error, null);
     const savedConfig = savedResult.config;
-    assert.equal(savedConfig.api_key, 'sk-updated');
+    // SEC-001: config:set returns a public DTO (no raw api_key).
+    assert.equal(savedConfig.hasApiKey, true);
     assert.equal(savedConfig.region, 'cn');
     assert.equal(savedConfig.theme, 'light');
     assert.equal(savedConfig.ignored, undefined);
@@ -596,11 +597,11 @@ test('app, config, state, batches, and file browser handlers pass a real filesys
     assert.ok(listRes.items.some((item) => item.name === path.basename(copyRes.path)));
     assert.ok(listRes.items.some((item) => item.name === path.basename(moveRes.path)));
 
-    const revealRes = electron.handlers['fb:reveal'](null, moveRes.path);
+    const revealRes = await electron.handlers['fb:reveal'](null, moveRes.path, outputGrantId);
     assert.deepEqual(revealRes, { ok: true });
     assert.deepEqual(electron.showItemInFolderCalls, [moveRes.path]);
 
-    const openExplorerRes = await electron.handlers['fb:openInExplorer'](null, moveRes.path);
+    const openExplorerRes = await electron.handlers['fb:openInExplorer'](null, moveRes.path, outputGrantId);
     assert.deepEqual(openExplorerRes, { ok: true });
     assert.deepEqual(electron.openPathCalls, [path.dirname(moveRes.path)]);
 

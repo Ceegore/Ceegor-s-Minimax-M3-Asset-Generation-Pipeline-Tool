@@ -92,10 +92,10 @@ function read() {
     }
     // Sanitise the scalar model-key + settings fields on read too (see ./stateSanitizers.js).
     sanitiseScalarStateFields(raw);
-    // Apply the popupPolicy migration on read as well, so a legacy
-    // 'once-fresh' from an earlier install is downgraded to 'never'
-    // immediately on first launch (the write-side migration alone only
-    // takes effect after the first save).
+    // Apply the popupPolicy normalisation on read as well, so an
+    // invalid or legacy value from an earlier install is clamped to
+    // the whitelist immediately on first launch (the write-side
+    // normalisation alone only takes effect after the first save).
     _migrateLegacyPopupPolicy(raw);
     return raw;
   } catch (e) {

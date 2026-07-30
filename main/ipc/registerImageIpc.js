@@ -213,15 +213,14 @@ function register(deps) {
   //      a USER file.
   // http(s) URLs are still accepted as "exists" (the API server validates
   // them, not the filesystem).
-  // image:writeBase64 — uncapped atomic base64 write for the in-app pixel
+  // image:writeBase64 — atomic base64 write for the in-app pixel
   // editor. The general fb:write channel caps writes at 25 MB
   // (MAX_WRITE_BYTES), but a large 4x-upscaled PNG exported from the editor
   // can exceed that. This handler mirrors fb:write's path validation + atomic
-  // tmp-rename but skips the size cap. Absurd payloads are still rejected
-  // beyond a generous IMAGE_MAX_BASE64_CHARS (~256 MB decoded) — enough for
-  // any realistic raster, small enough that a compromised renderer can't
-  // trivially OOM the main process.
-  const IMAGE_MAX_BASE64_CHARS = Math.ceil(256 * 1024 * 1024 * 4 / 3);
+  // tmp-rename but uses a higher cap. HIGH-007: reduced from 256 MB to 64 MB
+  // decoded — a 64 MB raster is ~60 megapixels at 4 bpp, far beyond any
+  // realistic editor export, while limiting OOM exposure.
+  const IMAGE_MAX_BASE64_CHARS = Math.ceil(64 * 1024 * 1024 * 4 / 3);
   secureHandle('image:writeBase64', { getMainWindow, maxPayloadBytes: 64 * 1024 * 1024 }, async (_e, outPath, base64Data, grantId) => {
     try {
       if (!outPath || typeof outPath !== 'string') {
@@ -239,7 +238,7 @@ function register(deps) {
       const writeAuthz = _authorizePath(grantId, 'write', outAbs);
       if (!writeAuthz.ok) return { ok: false, error: writeAuthz.error };
       if (base64Data.length > IMAGE_MAX_BASE64_CHARS) {
-        return { ok: false, error: 'Image payload too large (max ~256 MB).' };
+        return { ok: false, error: 'Image payload too large (max ~64 MB decoded).' };
       }
       const buf = Buffer.from(base64Data, 'base64');
       // Atomic write: tmp + rename (same convention as fb:write / state.js).
@@ -257,7 +256,11 @@ function register(deps) {
     }
   });
 
-  secureHandle('image:refExists', { getMainWindow }, async (_e, p) => {    if (!p || typeof p !== 'string') return { ok: true, exists: false };
+  // HIGH-014: image:refExists now requires a read-grant. The previous
+  // implementation was ungated, allowing a compromised renderer to probe
+  // arbitrary paths for existence. The sensitive-dir denylist remains as
+  // defense-in-depth.
+  secureHandle('image:refExists', { getMainWindow }, async (_e, p, grantId) => {    if (!p || typeof p !== 'string') return { ok: true, exists: false };
     const trimmed = p.trim();
     // http(s) references are validated by the API server, not the
     // filesystem — report them as "exists" so the renderer doesn't block
@@ -273,6 +276,11 @@ function register(deps) {
     }
     const abs = pathUtils.normalize(trimmed);
     if (!abs) return { ok: true, exists: false };
+    // HIGH-014: require a valid read-grant for the path.
+    if (grantId) {
+      const authz = _authorizePath(grantId, 'read', abs);
+      if (!authz.ok) return { ok: true, exists: false, reason: 'not authorized' };
+    }
     // Explicitly block well-known sensitive directories. The check is by
     // segment, not by full-string match, so a nested path like
     //   "C:\Users\me\Documents\Windows\photo.jpg"

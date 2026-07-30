@@ -1,0 +1,26 @@
+{
+  "id": "gen-img001",
+  "model": "stability-ai/stable-diffusion",
+  "object": "chat.completion",
+  "created": 1700000000,
+  "choices": [
+    {
+      "index": 0,
+      "message": {
+        "role": "assistant",
+        "content": "![image](https://cdn.openrouter.ai/images/gen-img001/output_0.jpeg)"
+      },
+      "finish_reason": "stop"
+    }
+  ],
+  "images": {
+    "data": [
+      {
+        "type": "image_url",
+        "image_url": {
+          "url": "https://cdn.openrouter.ai/images/gen-img001/output_0.jpeg"
+        }
+      }
+    ]
+  }
+}

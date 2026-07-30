@@ -20,13 +20,21 @@ function maskApiKey(key) {
 /**
  * Replace every occurrence of the raw key in `line` with its masked
  * form. Safe for log output.
+ * SEC-001: the renderer no longer holds the raw API key, so when
+ * `apiKey` is falsy, pattern-based masking is applied instead
+ * (matches sk-cp-*, sk-*, Bearer tokens).
  * @param {string} line
- * @param {string} apiKey
+ * @param {string} [apiKey] - Raw key (legacy; may be undefined).
  * @returns {string}
  */
 function maskLine(line, apiKey) {
-  if (!apiKey || typeof line !== 'string') return line;
-  return line.split(apiKey).join(maskApiKey(apiKey));
+  if (typeof line !== 'string') return line;
+  if (apiKey) return line.split(apiKey).join(maskApiKey(apiKey));
+  // Pattern-based fallback (SEC-001: renderer has no raw key).
+  return line
+    .replace(/sk-cp-[a-zA-Z0-9_-]{8,}/g, 'sk-cp-[REDACTED]')
+    .replace(/sk-[a-zA-Z0-9_-]{8,}/g, 'sk-[REDACTED]')
+    .replace(/Bearer\s+[a-zA-Z0-9._-]{8,}/gi, 'Bearer [REDACTED]');
 }
 
 /**

@@ -176,16 +176,54 @@ async function validateProviderUrlWithDns(urlStr, opts) {
       }
     }
   } catch (_) {
-    // DNS resolution failure — allow through (the fetch will fail anyway)
-    // This avoids blocking providers with transient DNS issues.
+    // MED-035: DNS resolution errors = reject (fail-closed).
+    // A hostname that can't resolve should never be fetched.
+    return { ok: false, error: `DNS resolution failed for ${hostname} (SSRF protection)` };
   }
 
+  return { ok: true };
+}
+
+/**
+ * SEC-006: Validate a provider OUTPUT URL before downloading.
+ * Provider responses may contain URLs pointing to internal services.
+ * This validates scheme/host/DNS before any fetch is made.
+ *
+ * @param {string} urlStr - The output URL from a provider response.
+ * @returns {{ok: true} | {ok: false, error: string}}
+ */
+function validateOutputUrl(urlStr) {
+  if (!urlStr || typeof urlStr !== 'string') {
+    return { ok: false, error: 'Output URL is required' };
+  }
+  let parsed;
+  try { parsed = new URL(urlStr); } catch (_) {
+    return { ok: false, error: 'Invalid output URL format' };
+  }
+  // Only https allowed for output downloads
+  if (parsed.protocol !== 'https:') {
+    return { ok: false, error: 'Output URL must be HTTPS (got ' + parsed.protocol + ')' };
+  }
+  const hostname = parsed.hostname;
+  if (isLoopback(hostname)) {
+    return { ok: false, error: 'Output URL points to loopback (SSRF blocked)' };
+  }
+  if (/^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(hostname) && isPrivateIPv4(hostname)) {
+    return { ok: false, error: 'Output URL points to private IP (SSRF blocked)' };
+  }
+  if (hostname.includes(':') && isPrivateIPv6(hostname)) {
+    return { ok: false, error: 'Output URL points to private IPv6 (SSRF blocked)' };
+  }
+  if (hostname === '169.254.169.254' || hostname === 'metadata.google.internal') {
+    return { ok: false, error: 'Output URL points to cloud metadata (SSRF blocked)' };
+  }
   return { ok: true };
 }
 
 module.exports = {
   validateProviderUrl,
   validateProviderUrlWithDns,
+  validateOutputUrl,
   isLoopback,
   isPrivateIPv4,
   isPrivateIPv6,

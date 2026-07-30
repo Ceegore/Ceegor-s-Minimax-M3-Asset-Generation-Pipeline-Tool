@@ -51,10 +51,9 @@
     const state = window.state;
     if (!saved || typeof saved !== 'object') return (state && state.config) || saved;
     if (!state) return saved;
-    const prevKey = (state.config && state.config.api_key) || '';
-    // Only ever UPGRADE an empty key back to the session value; never
-    // overwrite a key the response actually carries.
-    if (state.apiKeyNoSave && prevKey && !saved.api_key) saved.api_key = prevKey;
+    // SEC-001: config:set now returns a public DTO (no raw api_key).
+    // Preserve hasApiKey/apiKeyLast4 from the response; the session
+    // key lives exclusively in the main process.
     return saved;
   }
 

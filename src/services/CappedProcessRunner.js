@@ -97,6 +97,7 @@ function killProcessTree(child) {
  *   signal?: AbortSignal,
  *   onStdout?: (chunk: Buffer) => void,
  *   onStderr?: (chunk: Buffer) => void,
+ *   tempFiles?: string[],
  * }} opts
  * @returns {Promise<{ok: boolean, code: number|null, stdout: string, stderr: string, timedOut: boolean, canceled: boolean}>}
  */
@@ -111,6 +112,7 @@ function runCapped(opts) {
     signal,
     onStdout,
     onStderr,
+    tempFiles = [],
   } = opts;
 
   return new Promise((resolve) => {
@@ -122,6 +124,7 @@ function runCapped(opts) {
     let canceled = false;
     let settled = false;
     let timer = null;
+    let onAbort = null;
 
     const child = spawn(command, args, {
       cwd: cwd || undefined,
@@ -136,6 +139,17 @@ function runCapped(opts) {
       if (settled) return;
       settled = true;
       if (timer) { clearTimeout(timer); timer = null; }
+      // HIGH-031: remove the abort listener to prevent memory leaks.
+      if (onAbort && signal) {
+        try { signal.removeEventListener('abort', onAbort); } catch (_) {}
+      }
+      // HIGH-033: cleanup temp files in finally.
+      if (tempFiles.length) {
+        const fs = require('fs');
+        for (const tf of tempFiles) {
+          try { fs.unlinkSync(tf); } catch (_) {}
+        }
+      }
       resolve(result);
     }
 
@@ -147,7 +161,7 @@ function runCapped(opts) {
 
     // External cancel (AbortSignal)
     if (signal) {
-      const onAbort = () => {
+      onAbort = () => {
         canceled = true;
         killProcessTree(child);
       };

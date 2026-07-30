@@ -26,6 +26,15 @@ const path = require('path');
 /** Minimum file size for a valid artifact (1 KB). */
 const MIN_ARTIFACT_SIZE = 1024;
 
+/**
+ * HIGH-008: Main-side pixel limit for Sharp operations.
+ * 100 megapixels (10000×10000) is far beyond any realistic generation
+ * output but prevents decompression-bomb OOM in the main process.
+ * Pass as `{ limitInputPixels: SHARP_PIXEL_LIMIT }` to every sharp()
+ * call that reads untrusted input.
+ */
+const SHARP_PIXEL_LIMIT = 100_000_000;
+
 /** Magic byte signatures for known file types. */
 const MAGIC_BYTES = Object.freeze({
   png: Buffer.from([0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A]),
@@ -155,9 +164,12 @@ async function validateAndFinalize(opts) {
       await fs.promises.mkdir(path.dirname(finalPath), { recursive: true });
       await fs.promises.rename(tempPath, finalPath);
     } catch (e) {
-      // If rename fails (cross-device), fall back to copy+delete
+      // If rename fails (cross-device), fall back to copy+delete.
+      // MED-017: use COPYFILE_EXCL to prevent overwriting an existing file
+      // at the destination (the rename would have failed if the dest existed
+      // on the same device, so this mirrors that behaviour cross-device).
       try {
-        await fs.promises.copyFile(tempPath, finalPath);
+        await fs.promises.copyFile(tempPath, finalPath, fs.constants.COPYFILE_EXCL);
         await fs.promises.unlink(tempPath);
       } catch (e2) {
         return { ok: false, error: `Failed to finalize artifact: ${e2.message}` };
@@ -168,9 +180,48 @@ async function validateAndFinalize(opts) {
   return { ok: true, path: resultPath, size: stat.size };
 }
 
+/**
+ * HIGH-009: Full decode + dimension validation for image artifacts.
+ * Uses Sharp to fully decode the image (not just header parsing),
+ * catching corrupt/truncated files that pass magic-byte checks but
+ * fail during actual decompression. Also enforces the pixel limit
+ * (HIGH-008) to prevent decompression bombs.
+ *
+ * @param {string} filePath - Path to the image file.
+ * @param {{ maxWidth?: number, maxHeight?: number }} [opts]
+ * @returns {Promise<{ok: true, width: number, height: number} | {ok: false, error: string}>}
+ */
+async function validateImageDecode(filePath, opts) {
+  opts = opts || {};
+  let sharp;
+  try {
+    sharp = require('sharp');
+  } catch (_) {
+    // Sharp not available (e.g. in tests) — fall back to magic-byte-only.
+    return { ok: true, width: 0, height: 0, skipped: true };
+  }
+  try {
+    const meta = await sharp(filePath, { limitInputPixels: SHARP_PIXEL_LIMIT }).metadata();
+    if (!meta || !meta.width || !meta.height) {
+      return { ok: false, error: 'Image decode produced zero dimensions — file is likely corrupt.' };
+    }
+    if (opts.maxWidth && meta.width > opts.maxWidth) {
+      return { ok: false, error: `Image width ${meta.width} exceeds maximum ${opts.maxWidth}.` };
+    }
+    if (opts.maxHeight && meta.height > opts.maxHeight) {
+      return { ok: false, error: `Image height ${meta.height} exceeds maximum ${opts.maxHeight}.` };
+    }
+    return { ok: true, width: meta.width, height: meta.height };
+  } catch (e) {
+    return { ok: false, error: `Image full-decode failed (corrupt or unsupported): ${e.message || e}` };
+  }
+}
+
 module.exports = {
   validateAndFinalize,
+  validateImageDecode,
   checkMagicBytes,
   MAGIC_BYTES,
   MIN_ARTIFACT_SIZE,
+  SHARP_PIXEL_LIMIT,
 };
