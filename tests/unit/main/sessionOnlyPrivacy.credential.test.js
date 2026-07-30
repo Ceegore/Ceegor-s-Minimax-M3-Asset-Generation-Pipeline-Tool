@@ -232,7 +232,9 @@ test('R0.1-002.D: a diagnose snapshot must not leak the in-memory session-only A
   // pre-render ausgibt (String-Vergleich gegen Source = grobe, aber
   // ausreichende Heuristik).
   const src = fs.readFileSync(MMX_IPC, 'utf8');
-  const hasDiagnoseHandler = /ipcMain\.handle\(['"]mmx:diagnose['"]/.test(src);
+  // P1-A (C-001): registrars now use the secureHandle wrapper instead of
+  // bare ipcMain.handle — accept either spelling.
+  const hasDiagnoseHandler = /(?:ipcMain\.handle|secureHandle)\(['"]mmx:diagnose['"]/.test(src);
   assert.ok(hasDiagnoseHandler, 'precondition: mmx:diagnose must exist for this regression to apply');
 
   // Wenn diagnose den Key loggt oder zurückgibt, taucht er in
@@ -252,7 +254,7 @@ test('R0.1-002.D: a diagnose snapshot must not leak the in-memory session-only A
   // registerMmxIpc.js stays under the frozen 384-LOC SIZE-BUDGET)
   // for the redaction contract: the builder is where `apiKeyLength`
   // and the `deepRedact` call live today.
-  const handlerBody = src.split(/ipcMain\.handle\(\s*['"]mmx:diagnose['"]/)[1] || '';
+  const handlerBody = src.split(/(?:ipcMain\.handle|secureHandle)\(\s*['"]mmx:diagnose['"]/)[1] || '';
   let hasRedactionInDiagnose = /apiKeyLength|REDACTED|api_key_len|\*\*\*/i.test(handlerBody);
   if (!hasRedactionInDiagnose) {
     const snapshotSrc = fs.readFileSync(path.join(ROOT, 'main', 'ipc', 'diagnoseSnapshot.js'), 'utf8');

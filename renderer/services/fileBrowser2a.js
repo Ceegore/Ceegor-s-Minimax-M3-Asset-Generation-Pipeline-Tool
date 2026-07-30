@@ -58,16 +58,13 @@ function markFbItemActive(path) {
 }
 
 function previewImageFromFile(p) {
-  // Pause any playing <audio>/<video> in the preview pane before
-  // replacing its innerHTML. The browser does NOT reliably pause
-  // detached media, so without this the previously-previewed song
-  // kept playing in the background after the user clicked an image.
+  // Pause any playing <audio>/<video> before replacing the pane — the
+  // browser does NOT reliably pause detached media, so the previously-
+  // previewed song would keep playing in the background.
   _stopPreviewMedia();
-  // Images from the file browser go to the new Picture preview pane
-  // (bottom-right of the log bar), not the tab's generation preview.
-  // The tab's generation preview is reserved for content that the user
-  // just generated. We pre-load the image to grab the natural dimensions
-  // so the overlay has the right size info, and so the title hint shows.
+  // File-browser images go to the Picture preview pane (bottom-right of
+  // the log bar), NOT the tab's generation preview. Pre-load the image
+  // to grab the natural dimensions for the overlay / title hint.
   if (!p) {
     // A null/empty path resets the pane to the empty state instead of
     // rendering a broken <img src=""> (onerror would fire and the pane
@@ -76,17 +73,18 @@ function previewImageFromFile(p) {
     if (content) content.innerHTML = '<div class="preview-pane-empty">Click an image in the file browser to preview it here.</div>';
     state._lastPreviewPath = null;
     state._previewBatch = null;
+    state._previewRevision = (state._previewRevision || 0) + 1; // P4.5: void pending commits
     return;
   }
-  // If the user clicks the same file twice, the preview is already
-  // showing it — don't waste a re-decode + flicker on the redundant
-  // click. We compare on the file path (the naturalWidth wouldn't
-  // have changed since the file didn't change).
+  // Same file twice → the preview already shows it; skip the redundant
+  // re-decode + flicker (compared on path — the file didn't change).
   if (state._lastPreviewPath === p) return;
   state._lastPreviewPath = p;
-  // A single-image preview always replaces the multi-image grid (if
-  // any was showing). Clear _previewBatch so the image-overlay's
-  // arrow-key handler doesn't try to navigate the now-stale batch.
+  // P4.5 (DB-H-005): revision counter — each preview commit is tagged
+  // with the revision current at click time (see `commit` below).
+  const rev = (state._previewRevision = (state._previewRevision || 0) + 1);
+  // A single-image preview always replaces the multi-image grid. Clear
+  // _previewBatch so the overlay's arrow-keys don't walk a stale batch.
   state._previewBatch = null;
   // The file shown in the preview pane should always be the active row
   // in the folder explorer. Mark it before the async image decode so the
@@ -95,8 +93,12 @@ function previewImageFromFile(p) {
   const url = fileUrl(p);
   const filename = (p || '').split(/[\\/]/).pop() || 'image';
   const preLoad = new Image();
-  preLoad.onload = () => updatePreviewPane(url, filename, preLoad.naturalWidth, preLoad.naturalHeight, p);
-  preLoad.onerror = () => updatePreviewPane(url, filename, 0, 0, p);
+  // P4.5 (DB-H-005): commit only if {revision, path} is still current —
+  // a slow decode's late onload must not clobber a newer preview (another
+  // image, an audio/video pane, or the multi-image grid).
+  const commit = (w, h) => { if (state._previewRevision === rev && state._lastPreviewPath === p) updatePreviewPane(url, filename, w, h, p); };
+  preLoad.onload = () => commit(preLoad.naturalWidth, preLoad.naturalHeight);
+  preLoad.onerror = () => commit(0, 0);
   preLoad.src = url;
 }
 
@@ -132,16 +134,14 @@ function previewImagesFromFiles(paths) {
     // Single image: delegate to the single-image preview path.
     return previewImageFromFile(valid[0]);
   }
-  // N > 1 → grid of thumbnails. Build the container once, then async-
-  // resolve each path's natural dimensions for the title hint.
+  // N > 1 → grid of thumbnails; container built once, dimensions async.
   content.innerHTML = '';
-  // Clear _lastPreviewPath so a later single-click preview of a file
-  // that was the last single-file preview (before this batch grid was
-  // shown) is not silently no-op'd by the early-return
-  // `if (state._lastPreviewPath === p) return;` check in
-  // previewImageFromFile. The grid is a separate UX mode from a
-  // single-file preview, so the cache must reset on every grid show.
+  // Clear _lastPreviewPath so a later single-click preview of the file
+  // last shown before this grid is not no-op'd by previewImageFromFile's
+  // `_lastPreviewPath === p` early-return. P4.5 (DB-H-005): also bump the
+  // revision so a still-pending single-image onload can't stomp the grid.
   state._lastPreviewPath = null;
+  state._previewRevision = (state._previewRevision || 0) + 1;
   // Stash the current batch on state so the image overlay's
   // arrow-key handler (added in a later feature) can navigate to
   // the previous / next thumbnail without re-fetching the list

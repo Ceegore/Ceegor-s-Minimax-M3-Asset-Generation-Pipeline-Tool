@@ -245,6 +245,11 @@
     // catch threw a ReferenceError (swallowed by that cleanup's own
     // try/catch) and the `.ie_heal_src_*.png` temp leaked on every heal error.
     let tmpPath = null;
+    // P5 (DA-M-005): hoist the healed OUTPUT path too. If the base reload
+    // (or any later step) throws AFTER inpaint wrote its result, the catch
+    // must delete that output — otherwise an orphaned `_healed.png` leaks
+    // in the work dir on every failed heal. Mirrors the tmpPath hoist above.
+    let healOutPath = null;
     try {
       temp = h.session.renderSceneAtNaturalSize();
       const bakedB64 = temp.toDataURL({ format: 'image/png', multiplier: 1 }).split(',')[1];
@@ -333,6 +338,7 @@
     }
     if (!r || !r.ok) throw new Error((r && r.error) || 'inpaint failed');
     if (usedAiFallback) r.aiFallback = true;
+    healOutPath = (r && r.path) ? r.path : null; // P5 (DA-M-005): track for catch-path cleanup
 
     // PE-010: slot-revision guard. If the editor closed, the originating
     // slot vanished, or its base was replaced (revision bumped) while the
@@ -428,6 +434,9 @@
         if (window.api && window.api.fbDelete) {
           // BGR-009 fix: mint delete grant (R1.3 gate).
           if (typeof tmpPath === 'string') { const dg = (window.GrantHelper) ? await window.GrantHelper.ensureDelete(tmpPath) : undefined; await window.api.fbDelete(tmpPath, dg); }
+          // P5 (DA-M-005): also remove the healed output if it was written
+          // before the failure — a reload throw must not orphan it on disk.
+          if (typeof healOutPath === 'string' && healOutPath !== tmpPath) { const dg2 = (window.GrantHelper) ? await window.GrantHelper.ensureDelete(healOutPath) : undefined; await window.api.fbDelete(healOutPath, dg2); }
         }
       } catch (_) { /* temp cleanup is best-effort */ }
       throw e;  // re-throw so the caller can handle

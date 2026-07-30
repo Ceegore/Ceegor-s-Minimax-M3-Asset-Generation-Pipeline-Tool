@@ -117,12 +117,28 @@ test('R1.5a.3: upscale:realesrgan:run with a directory grant covering both src+d
   const src = path.join(TMP, 'upscale-src.png');
   const dst = path.join(TMP, 'upscale-dst.png');
   fs.writeFileSync(src, Buffer.from([0]));
+  // P4.1 (DB-H-002/008): the handler now validates the output artifact
+  // (existence + size + PNG magic); the mocked run() writes nothing, so
+  // pre-create a valid PNG at dst.
+  fs.writeFileSync(dst, Buffer.concat([Buffer.from([0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A]), Buffer.alloc(120, 0)]));
   // A directory grant for TMP covers BOTH src and dst.
   const dirGrant = mintDirectoryGrant(defaultService, TMP);
   const r = await handlers.get('upscale:realesrgan:run')({ sender: { send() {} } }, src, dst, {}, dirGrant.grantId);
   assert.equal(r.ok, true, 'upscale:run with valid grant must succeed: ' + r.stderr);
   assert.equal(r.code, 0);
   assert.equal(r.outputPath, dst);
+});
+
+test('P4.1: upscale:realesrgan:run flips ok:true to a failure when the output PNG was never written', async () => {
+  const { handlers } = loadIpc(defaultMock());
+  const { defaultService } = require(PATH_GRANT);
+  const src = path.join(TMP, 'p41-src.png');
+  const dst = path.join(TMP, 'p41-dst-missing.png');
+  fs.writeFileSync(src, Buffer.from([0]));
+  const dirGrant = mintDirectoryGrant(defaultService, TMP);
+  const r = await handlers.get('upscale:realesrgan:run')({ sender: { send() {} } }, src, dst, {}, dirGrant.grantId);
+  assert.equal(r.ok, false, 'ok:true with a missing artifact must be rejected');
+  assert.match(String(r.stderr || r.error), /output failed validation/i);
 });
 
 test('R1.5a.3: upscale:realesrgan:run without a grantId is REJECTED', async () => {

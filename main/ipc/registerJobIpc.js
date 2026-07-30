@@ -19,15 +19,18 @@
 
 const { ipcMain } = require('electron');
 const jobRegistry = require('../../src/jobRegistry');
+// P1-A (360° Audit H-001): secure IPC wrapper.
+const { secureHandle } = require('./secureHandle');
 
 /**
  * @param {{ getMainWindow: () => (Electron.BrowserWindow|null) }} _deps
  */
-function register(_deps) {
+function register(deps) {
+  const getMainWindow = (deps && typeof deps.getMainWindow === 'function') ? deps.getMainWindow : () => null;
   // Cancel a specific job by jobId.
   // Returns { ok: true } if the job was found and kill was attempted,
   // { ok: false, error } if the job was not found.
-  ipcMain.handle('job:cancel', (_event, opts) => {
+  secureHandle('job:cancel', { getMainWindow }, (_event, opts) => {
     const jobId = opts && opts.jobId;
     if (!jobId) return { ok: false, error: 'Missing jobId' };
     const found = jobRegistry.cancel(jobId);
@@ -37,15 +40,25 @@ function register(_deps) {
 
   // Cancel ALL registered jobs (panic button / app shutdown).
   // Returns { ok: true, count } where count is the number of jobs killed.
-  ipcMain.handle('job:cancel-all', () => {
+  secureHandle('job:cancel-all', { getMainWindow }, () => {
     const count = jobRegistry.cancelAll();
     return { ok: true, count };
   });
 
   // Query active jobs (for debugging / ActiveJobsWidget extension).
   // Returns { ok: true, jobs: [...] }.
-  ipcMain.handle('job:list', () => {
-    const jobs = jobRegistry.getActiveJobs();
+  secureHandle('job:list', { getMainWindow }, () => {
+    // P5 (M-039): never hand the renderer the job `meta` — backends store
+    // srcPath/dstPath there, so passing it through leaked absolute file
+    // paths to any renderer caller. Project only the fields a job widget
+    // needs; the paths stay main-side.
+    const jobs = jobRegistry.getActiveJobs().map((j) => ({
+      jobId: j.jobId,
+      runId: j.runId,
+      backend: j.backend,
+      startedAt: j.startedAt,
+      alive: j.alive,
+    }));
     return { ok: true, jobs };
   });
 }

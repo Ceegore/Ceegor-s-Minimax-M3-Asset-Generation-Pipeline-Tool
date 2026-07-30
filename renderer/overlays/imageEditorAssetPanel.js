@@ -228,12 +228,20 @@
     const canvasEl = el('canvas', {});
     P.canvasHost.appendChild(canvasEl);
     const handle = window.ImageEditorCanvas.createEditorSession(canvasEl, w, h);
+    P.handle = handle;
+    applySessionPrefs(ctrl, P, handle);
+    return handle;
+  }
+
+  // Shared post-create wiring: brush prefs + outline cursor + active tool.
+  // Used by createAssetSession AND the staged-swap commit in
+  // loadAssetFromPath (P3-B, DA-H-002).
+  function applySessionPrefs(ctrl, P, handle) {
     // Sync brush prefs (same defaults activateSlot applies to main slots).
     const s = handle.session;
     s.brushSize = ctrl.prefs.brushSize;
     s.brushOpacity = ctrl.prefs.brushOpacity;
     s.fg = ctrl.prefs.fg; s.bg = ctrl.prefs.bg;
-    P.handle = handle;
     // F2-P2: (re-)install the brush-outline cursor for the new session — the
     // per-canvas ie:viewport listener moves with the session (R4.5 disposer
     // pattern). Then make the canvas drawing-ready with the rail's tool.
@@ -247,20 +255,50 @@
     if (window.ImageEditorTools && window.ImageEditorTools.setTool) {
       try { window.ImageEditorTools.setTool(s, (ctrl.rail && ctrl.rail.tool) || 'pen'); } catch (_) {}
     }
-    return handle;
   }
 
-  // Load an on-disk image into the asset canvas (rebuilds the session at the
-  // image's natural size, sets it as base, auto-fits). Returns a Promise.
+  // Load an on-disk image into the asset canvas. P3-B (DA-H-002/DA-H-003):
+  //   - admission check BEFORE any Fabric session is created (DA-H-001);
+  //   - the new session is STAGED in a detached host and only swapped into
+  //     P.handle after setBaseImage succeeds — a failed load preserves the
+  //     previous session untouched;
+  //   - an assetLoadGeneration counter makes concurrent loads latest-wins
+  //     (a stale load discards its own staged session, never the live one).
+  // Returns a Promise.
   function loadAssetFromPath(ctrl, path) {
     const P = panelOf(ctrl); if (!P) return Promise.resolve();
+    const gen = (P.assetLoadGeneration = (P.assetLoadGeneration || 0) + 1);
     P.meta.textContent = 'Loading…';
     return loadImageFromFile(path).then((img) => {
-      if (ctrl.closed) return;
+      if (ctrl.closed || gen !== P.assetLoadGeneration) return;
       const w = img.naturalWidth || 1, h = img.naturalHeight || 1;
-      const handle = createAssetSession(ctrl, w, h);
+      // DA-H-001/DA-H-005: single admission policy, checked BEFORE the
+      // Fabric session exists (no buffers are allocated for a reject).
+      if (window.ImageAdmissionPolicy) {
+        const adm = window.ImageAdmissionPolicy.checkAdmission({ width: w, height: h, source: 'asset-panel' });
+        if (!adm.ok) throw new Error(adm.error);
+      }
+      // DA-H-002: stage in a detached host — the live session keeps
+      // painting until the swap.
+      const stagedHost = el('div', {});
+      const canvasEl = el('canvas', {});
+      stagedHost.appendChild(canvasEl);
+      const handle = window.ImageEditorCanvas.createEditorSession(canvasEl, w, h);
       return handle.setBaseImage(img).then(() => {
-        if (ctrl.closed) return;
+        if (ctrl.closed || gen !== P.assetLoadGeneration) {
+          // A newer load won while we decoded — discard OUR staged
+          // session; the live one belongs to the winner.
+          try { handle.dispose(); } catch (_) {}
+          return;
+        }
+        // Swap: dispose the old session ONLY after the new one is fully
+        // loaded (DA-H-002 — never destroy-then-fail).
+        if (P.handle) { try { P.handle.dispose(); } catch (_) {} P.handle = null; }
+        P.canvasHost.textContent = '';
+        // Move the staged Fabric wrapper into the live host.
+        while (stagedHost.firstChild) P.canvasHost.appendChild(stagedHost.firstChild);
+        P.handle = handle;
+        applySessionPrefs(ctrl, P, handle);
         P.path = path;
         P.revision = (P.revision || 0) + 1; // PE-010: asset base replaced (stale guard)
         P.meta.textContent = baseName(path) + ' · ' + w + '×' + h;
@@ -273,10 +311,19 @@
             handle.fitToContainer(P.wrap);
           }
         });
+      }, (e) => {
+        // setBaseImage failed — discard the staged session; the previous
+        // live session is untouched.
+        try { handle.dispose(); } catch (_) {}
+        throw e;
       });
     }).catch((e) => {
-      P.meta.textContent = 'Load failed';
-      toast('Asset load failed: ' + ((e && e.message) || e), 'err', 5000);
+      // Only the LATEST load may touch the meta line (stale failures
+      // must not clobber the winner's label).
+      if (gen === P.assetLoadGeneration) {
+        P.meta.textContent = (P.handle && P.path) ? (baseName(P.path)) : 'Load failed';
+        toast('Asset load failed: ' + ((e && e.message) || e), 'err', 5000);
+      }
     });
   }
 
@@ -317,7 +364,19 @@
     } finally { try { temp && temp.dispose(); } catch (_) {} }
 
     const fabric = h.session.fabric;
+    // P3-F (DA-M-009): capture the slot + handle + revision BEFORE the
+    // async decode; validate they are still current before committing.
+    const capturedRevision = P.revision || 0;
     fabric.Image.fromURL(dataUrl, { crossOrigin: 'anonymous' }).then((fImg) => {
+      if (ctrl.closed) return;
+      if (ctrl.queue[ctrl.activeIndex] !== slot || slot.handle !== h) {
+        toast('Send cancelled — the main canvas changed during the transfer.', 'warn', 3000);
+        return;
+      }
+      if ((P.revision || 0) !== capturedRevision) {
+        toast('Send cancelled — the asset changed during the transfer.', 'warn', 3000);
+        return;
+      }
       const s = h.session;
       const maxW = s.imgW * 0.6, maxH = s.imgH * 0.6;
       const scale = Math.min(maxW / (fImg.width || 1), maxH / (fImg.height || 1), 1);

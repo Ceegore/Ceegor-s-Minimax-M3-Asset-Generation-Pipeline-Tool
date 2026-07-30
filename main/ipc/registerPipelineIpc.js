@@ -2,8 +2,12 @@
 // Main-process handlers for the column-based image Pipeline. These do the
 // on-disk work the renderer can't (cross-volume copies, atomic moves,
 // thumbnail generation via Sharp). All destination paths are validated
-// against the path-security allow-list; SOURCE paths on import are reads
-// (not gated — the OS is authoritative for reads).
+// against the path-security allow-list.
+//
+// P0-D (360° Audit C-006, C-007): SOURCE paths on import now require a
+// Main-minted read grant per file. A compromised renderer can no longer
+// read arbitrary files by passing their paths to pipeline:import.
+// pipeline:thumb requires the source to be a registered workspace item.
 //
 // R1.4 (S1 §4 "Pipeline und State"): the per-call `workspace` STRING is
 // no longer accepted as an authority. Handlers now require a Main-minted
@@ -20,9 +24,13 @@ const { ipcMain } = require('electron');
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
+// P0-D (360° Audit C-006): grant-based read authorisation for source files.
+const { authorizePath: _authorizePath } = require('./grantAuthorizer');
+// P1-A (360° Audit H-001): secure IPC wrapper with sender/frame/origin validation.
+const { secureHandle } = require('./secureHandle');
 
 function register(deps) {
-  const { appRoot } = deps;
+  const { appRoot, getMainWindow } = deps;
   const pathSecurity = require('../services/PathSecurityService');
   const pathUtils = require('../../src/pathUtils');
   const cfgMod = require('../../src/config');
@@ -86,7 +94,7 @@ function register(deps) {
   // QA-001 fix: allow the renderer to mint a workspaceId for a user-chosen
   // pipeline folder. The path is validated against the allow-list so a
   // compromised renderer cannot mint arbitrary directories.
-  ipcMain.handle('pipeline:mintWorkspace', async (_e, payload) => {
+  secureHandle('pipeline:mintWorkspace', { getMainWindow }, async (_e, payload) => {
     const p = payload && typeof payload.path === 'string' ? payload.path : null;
     if (!p) return { ok: false, error: 'path required' };
     if (!dstOk(p)) return { ok: false, error: 'path is not under an allowed root' };
@@ -105,7 +113,7 @@ function register(deps) {
   // R1.4: the per-call `workspace` STRING is ignored. A `workspaceId` is
   // accepted (resolved through WorkspaceService); if neither is given,
   // the Main-derived app-output root is used.
-  ipcMain.handle('pipeline:import', async (_e, payload) => {
+  secureHandle('pipeline:import', { getMainWindow }, async (_e, payload) => {
     const items = payload && Array.isArray(payload.items) ? payload.items : [];
     const wsRes = resolveWorkspace(payload);
     if (!wsRes.ok) {
@@ -123,6 +131,15 @@ function register(deps) {
           results.push({ ok: false, error: 'Invalid source path.' });
           continue;
         }
+        // P0-D (360° Audit C-006): require a read grant for each source file.
+        // The renderer must mint a grant via pathGrant:mint before calling
+        // pipeline:import. Without a valid grant, the read is rejected.
+        const readGrantId = it.readGrantId || payload.readGrantId;
+        const readAuthz = _authorizePath(readGrantId, 'read', it.srcAbsPath);
+        if (!readAuthz.ok) {
+          results.push({ ok: false, src: it.srcAbsPath, error: 'Read grant required: ' + readAuthz.error });
+          continue;
+        }
         const column = model.STORAGE_COLUMNS.includes(it.destColumn) ? it.destColumn : 'original';
         // Validate a caller-supplied imageId charset (no path separators) so a
         // hostile/buggy payload can't create nested subdirs under the column.
@@ -135,8 +152,22 @@ function register(deps) {
           continue;
         }
         try { fs.mkdirSync(dstDir, { recursive: true }); } catch (_) { /* may already exist */ }
-        await fs.promises.copyFile(it.srcAbsPath, dst);
-        results.push({ ok: true, src: it.srcAbsPath, dst, imageId: id });
+        // P5 (M-014): COPYFILE_EXCL prevents silent overwrite. If the
+        // destination exists, retry with a UUID suffix.
+        let finalDst = dst;
+        try {
+          await fs.promises.copyFile(it.srcAbsPath, finalDst, fs.constants.COPYFILE_EXCL);
+        } catch (copyErr) {
+          if (copyErr.code === 'EEXIST') {
+            const ext = path.extname(dst);
+            const base = dst.slice(0, dst.length - ext.length);
+            finalDst = base + '_' + crypto.randomUUID() + ext;
+            await fs.promises.copyFile(it.srcAbsPath, finalDst, fs.constants.COPYFILE_EXCL);
+          } else {
+            throw copyErr;
+          }
+        }
+        results.push({ ok: true, src: it.srcAbsPath, dst: finalDst, imageId: id });
       } catch (e) {
         results.push({ ok: false, src: it && it.srcAbsPath, error: String((e && e.message) || e) });
       }
@@ -148,7 +179,7 @@ function register(deps) {
   // Replace a card's current file with one chosen from disc (the GIMP
   // round-trip). Copies the chosen file into the column folder with a
   // _replaceN infix so an existing file is never silently overwritten.
-  ipcMain.handle('pipeline:replace', async (_e, payload) => {
+  secureHandle('pipeline:replace', { getMainWindow }, async (_e, payload) => {
     try {
       if (!payload || typeof payload.srcAbsPath !== 'string' || !payload.srcAbsPath) {
         return { ok: false, error: 'Source path is required.' };
@@ -198,7 +229,7 @@ function register(deps) {
   // Soft-delete: move a card's files into <workspace>/.trash/<imageId>/ for the
   // session-undo. Best-effort (a missing source is skipped, not fatal). The
   // renderer purges .trash on board close.
-  ipcMain.handle('pipeline:trash', async (_e, payload) => {
+  secureHandle('pipeline:trash', { getMainWindow }, async (_e, payload) => {
     try {
       if (!payload || typeof payload.imageId !== 'string' || !/^[^\\/]+$/.test(payload.imageId)) {
         return { ok: false, error: 'A valid imageId is required.' };
@@ -219,7 +250,22 @@ function register(deps) {
       // so the second doesn't overwrite the first in the trash bin.
       const usedNames = new Set();
       for (const f of files) {
-        if (typeof f !== 'string' || !f || !dstOk(f)) continue;
+        if (typeof f !== 'string' || !f || !dstOk(f)) {
+          // P3.5 (DA-H-007): report (not silently skip) invalid entries; they
+          // block success so the renderer never drops a card whose files
+          // were not actually trashed.
+          failed.push({ from: String(f || ''), error: 'invalid path', blocking: true });
+          continue;
+        }
+        // P3.5 (DA-H-007): workspace membership — pipeline:trash may only move
+        // files that live INSIDE the resolved workspace. The workspaceId (minted
+        // via the native folder picker) is the move authorization; a path
+        // outside the workspace is rejected, never moved.
+        const rel = path.relative(ws, f);
+        if (!rel || rel.startsWith('..') || path.isAbsolute(rel)) {
+          failed.push({ from: f, error: 'outside workspace', blocking: true });
+          continue;
+        }
         let base = path.basename(f);
         let dstName = base;
         let c = 0;
@@ -244,8 +290,11 @@ function register(deps) {
             }
           }
           if (okMove) moved.push({ from: f, to: dst });
-          else failed.push({ from: f, error: 'move/copy failed' });
-        } catch (_) { failed.push({ from: f, error: 'exception' }); }
+          // P3.5 (DA-H-009): a failure only blocks success when the source
+          // still exists on disk (locked file etc.). An already-missing
+          // source stays best-effort — there is nothing left to lose.
+          else failed.push({ from: f, error: 'move/copy failed', blocking: fs.existsSync(f) });
+        } catch (_) { failed.push({ from: f, error: 'exception', blocking: fs.existsSync(f) }); }
       }
       // KGO2-021 fix: prune cached thumbnails in .thumbs for moved files
       try {
@@ -261,6 +310,13 @@ function register(deps) {
           }
         }
       } catch (_) {}
+      // P3.5 (DA-H-009): partial trash is NOT a success — any blocking failure
+      // (source still on disk) flips ok:false so the renderer keeps the card
+      // instead of stranding untracked files in the workspace.
+      const blocked = failed.some((x) => x.blocking);
+      if (blocked) {
+        return { ok: false, moved, failed, error: failed.filter((x) => x.blocking).length + ' file(s) could not be trashed.' };
+      }
       return { ok: true, moved, failed };
     } catch (e) {
       return { ok: false, error: String((e && e.message) || e) };
@@ -273,7 +329,7 @@ function register(deps) {
   // cache key is sha1(srcPath) so a changed file (Replace/Run) gets a fresh
   // thumb automatically. Lazily requires sharp so the handler doesn't crash
   // startup if sharp is somehow missing.
-  ipcMain.handle('pipeline:thumb', async (_e, payload) => {
+  secureHandle('pipeline:thumb', { getMainWindow }, async (_e, payload) => {
     try {
       if (!payload || typeof payload.srcPath !== 'string' || !payload.srcPath) {
         return { ok: false, error: 'srcPath required.' };
@@ -283,6 +339,19 @@ function register(deps) {
         return { ok: false, error: wsRes.error, reauthorizationRequired: !!wsRes.reauthorizationRequired };
       }
       const ws = wsRes.ws;
+      // P0-D (360° Audit C-007): the source file must be a registered
+      // workspace item (i.e. its path is under the workspace root) OR
+      // the caller provides a valid read grant. This prevents a
+      // compromised renderer from thumbnailing arbitrary OS files.
+      const srcResolved = path.resolve(payload.srcPath);
+      const isUnderWorkspace = srcResolved.startsWith(ws + path.sep) || srcResolved === ws;
+      if (!isUnderWorkspace) {
+        const readGrantId = payload.readGrantId;
+        const readAuthz = _authorizePath(readGrantId, 'read', srcResolved);
+        if (!readAuthz.ok) {
+          return { ok: false, error: 'Source is not a workspace item and no valid read grant provided: ' + readAuthz.error };
+        }
+      }
       const thumbsDir = path.join(ws, '.thumbs');
       if (!dstOk(thumbsDir)) return { ok: false, error: 'Thumbs dir is outside the allowed directories.' };
       await fs.promises.mkdir(thumbsDir, { recursive: true }).catch(() => {});
@@ -327,12 +396,20 @@ function register(deps) {
       // served from the cache — sharp's toFile could otherwise leave a partial
       // file at thumbPath that subsequent calls would return.
       const tmpPath = `${thumbPath}.tmp-${crypto.randomUUID()}`;
-      await sharp(srcBuf)
-        .resize({ width: 320, withoutEnlargement: true })
-        .webp({ quality: 80 })
-        .toFile(tmpPath);
-      await fs.promises.rename(tmpPath, thumbPath);
-      return { ok: true, thumbPath };
+      // P5 (M-021): cleanup temp in finally block so a partial webp is
+      // never left behind on error (previously leaked on rename failure).
+      try {
+        await sharp(srcBuf)
+          .resize({ width: 320, withoutEnlargement: true })
+          .webp({ quality: 80 })
+          .toFile(tmpPath);
+        await fs.promises.rename(tmpPath, thumbPath);
+        return { ok: true, thumbPath };
+      } finally {
+        // Best-effort: remove the temp if it still exists (rename failure,
+        // sharp OOM, etc.). After a successful rename this is a no-op.
+        try { await fs.promises.unlink(tmpPath); } catch (_) {}
+      }
     } catch (e) {
       return { ok: false, error: String((e && e.message) || e) };
     }

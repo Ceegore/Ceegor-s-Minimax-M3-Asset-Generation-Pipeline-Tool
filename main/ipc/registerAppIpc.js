@@ -3,12 +3,14 @@
 
 const { ipcMain } = require('electron');
 const path = require('path');
+// P1-A (360° Audit H-001): secure IPC wrapper.
+const { secureHandle } = require('./secureHandle');
 
 /**
- * @param {{ appRoot: string }} deps
+ * @param {{ appRoot: string, getMainWindow: () => (Electron.BrowserWindow|null) }} deps
  */
-function register({ appRoot }) {
-  ipcMain.handle('app:version', () => {
+function register({ appRoot, getMainWindow }) {
+  secureHandle('app:version', { getMainWindow }, () => {
     try {
       const pkg = require(path.join(appRoot, 'package.json'));
       return {

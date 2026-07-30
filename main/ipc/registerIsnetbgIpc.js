@@ -24,11 +24,14 @@ const { resolveModelKeyEx } = require('../../src/isnetbg/modelRegistry');
 const modelDownload = require('../../src/isnetbg/modelDownload');
 const { authorizePath: _authorizePath } = require('./grantAuthorizer');
 const { wrapInpaintHandler } = require('./legacyAdapter');
+// P1-A (360° Audit H-001): secure IPC wrapper.
+const { secureHandle } = require('./secureHandle');
 
 /**
  * @param {{ appRoot: string }} deps
  */
-function register(_deps) {
+function register(deps) {
+  const getMainWindow = (deps && typeof deps.getMainWindow === 'function') ? deps.getMainWindow : () => null;
   // KGO7-017: reclaim orphaned model-download temps at startup. A hard
   // kill mid-download leaves a `<model>.onnx.tmp-<pid>-<uuid>` file that
   // nothing ever removes — one measured leak was 161 MB, and no gate
@@ -43,7 +46,7 @@ function register(_deps) {
     }
   } catch (_) { /* best-effort */ }
 
-  ipcMain.handle('isnetbg:available', () => {
+  secureHandle('isnetbg:available', { getMainWindow }, () => {
     const available = isNetBg.isAvailable();
     const binaryPath = available ? isNetBg.getBinaryPath() : null;
     const modelPath = isNetBg.getModelPath();
@@ -66,7 +69,7 @@ function register(_deps) {
   // R3.2.3: result passes through `adaptInpaintResult` (validates
   // the 9 contract fields; the legacy envelope already has
   // `outputPath` so no path-Mapping is needed). Backend is 'isnet'.
-  ipcMain.handle('isnetbg:run', wrapInpaintHandler(async (_e, srcPath, dstPath, opts, grantId) => {
+  secureHandle('isnetbg:run', { getMainWindow }, wrapInpaintHandler(async (_e, srcPath, dstPath, opts, grantId) => {
     // R1.5a.4: read on srcPath + write on dstPath (replaces the
     // legacy isPathUnderAny + isParentUnderAny gates).
     const readAuthz = _authorizePath(grantId, 'read', srcPath);
@@ -91,7 +94,7 @@ function register(_deps) {
     return result;
   }, 'isnet'));
 
-  ipcMain.handle('isnetbg:download-model', async (e, modelKey) => {
+  secureHandle('isnetbg:download-model', { getMainWindow }, async (e, modelKey) => {
     try {
       const r = await modelDownload.downloadModel(modelKey, (p) => {
         try { e.sender.send('isnetbg:download-progress', { model: modelKey, ...p }); } catch (_) {}

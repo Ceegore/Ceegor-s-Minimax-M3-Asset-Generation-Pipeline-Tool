@@ -343,25 +343,22 @@ test('R6.2.G: n>1 with no fbEnsureDir helper still proceeds (no-op success, fall
     'no fbEnsureDir must NOT block the call — production code always has it, tests may not');
 });
 
-test('R6.2.H: n>1 with fbEnsureDir failing still proceeds (best-effort, fall back to user-facing outputDir)', async () => {
+test('R6.2.H/P4.2: n>1 with fbEnsureDir failing ABORTS (no fall back to the shared outputDir)', async () => {
+  // P4.2 (DB-H-001) supersedes the old R6.2 best-effort fallback: writing
+  // n>1 outputs into the SHARED outputDir would force mtime-based discovery,
+  // which races concurrent runs + the user's pre-existing files.
   resetState();
-  let mmxArgs = null;
+  let mmxCalled = false;
   global.window.api = {
     fbEnsureDir: async () => ({ ok: false, error: 'permission denied' }),
-    mmxRunJob: async ({ args }) => { mmxArgs = args; return { ok: true, code: 0 }; },
+    mmxRunJob: async ({ args }) => { mmxCalled = true; return { ok: true, code: 0 }; },
     fbList: async (p) => ({ ok: true, items: [{ name: '1.png', ext: '.png', isDir: false, path: p + '\\1.png' }] }),
   };
   const r = await runVariantDirect('image', { prompt: 'a dragon', n: 2 }, {});
-  // We fall back to the user-facing outputDir (no runSubdir) so the call
-  // still succeeds — R6.2's per-run subdir is a quality-of-life, not a
-  // hard requirement on the file system.
-  assert.equal(r.ok, true);
-  // The argv should still have --out-dir, but pointing at the user's
-  // fbDir (the fallback path), not at run_<id>/.
-  const outDirIdx = mmxArgs.indexOf('--out-dir');
-  assert.ok(outDirIdx >= 0);
-  assert.equal(mmxArgs[outDirIdx + 1], 'C:\\out',
-    'fbEnsureDir failure must fall back to the user-facing outputDir');
+  assert.equal(r.ok, false, 'run-dir creation failure must abort the item');
+  assert.match(r.error, /run directory/i);
+  assert.match(r.error, /permission denied/);
+  assert.equal(mmxCalled, false, 'mmx must NOT be spawned after a failed run-dir mint');
 });
 
 // ============================================================================
@@ -509,4 +506,90 @@ test('R6.2.N: failure cleanup checks runSubdir truthy (no fbDelete(null) when mi
   // because there is no runSubdir.
   assert.equal(fbDeleteCalled, false,
     'n=1 path has no runSubdir to clean up — fbDelete must NOT be called');
+});
+
+// ============================================================================
+// P4.6 (DB-H-007) — cancel inventories the private runSubdir
+// ============================================================================
+// A JobRunner fake whose runFn ctx reports an ALREADY-ABORTED signal and
+// whose `done` resolves with runFn's return value (the real JobRunner
+// contract the production cancel branch reads via `doneRes.status`).
+function makeCancellingJobRunner() {
+  return {
+    isTabRunning() { return false; },
+    run(runOpts) {
+      const ctrl = { jobId: 'fake-cancel-' + Math.random().toString(36).slice(2, 8), cancel() {} };
+      ctrl.done = new Promise((resolve) => {
+        queueMicrotask(async () => {
+          let res;
+          try { res = await runOpts.runFn({ signal: { aborted: true } }); } catch (_) { res = undefined; }
+          resolve(res);
+        });
+      });
+      return ctrl;
+    },
+  };
+}
+
+test('P4.6.A: cancelled n>1 run inventories the runSubdir — status partial + outputPaths, files kept (default policy)', async () => {
+  resetState();
+  global.window.JobRunner = makeCancellingJobRunner();
+  const deleted = [];
+  global.window.api = {
+    fbEnsureDir: async (p) => ({ ok: true, path: p }),
+    mmxRunJob: async () => ({ ok: true, code: 0 }),
+    fbList: async (p) => ({
+      ok: true,
+      items: [
+        { name: '1.png', ext: '.png', isDir: false, path: p + '\\1.png' },
+        { name: '2.png', ext: '.png', isDir: false, path: p + '\\2.png' },
+      ],
+    }),
+    fbDelete: async (p) => { deleted.push(p); return { ok: true }; },
+  };
+  const r = await runVariantDirect('image', { prompt: 'a dragon', n: 2 }, {});
+  delete global.window.JobRunner;
+  assert.equal(r.ok, false, 'a cancelled run is not ok');
+  assert.equal(r.status, 'partial', 'cancel with discovered files must report status partial');
+  assert.equal(r.outputPaths.length, 2, 'all discovered partial outputs must be in the result');
+  assert.ok(r.outputPaths[0].includes('\\run_'), `paths must come from the runSubdir, got ${r.outputPaths[0]}`);
+  assert.equal(r.outFile, r.outputPaths[0], 'outFile mirrors the first partial output');
+  assert.match(r.error, /2 partial output\(s\) kept/);
+  assert.equal(deleted.length, 0, 'default keepPartialOutputs policy must NOT delete the runSubdir');
+});
+
+test('P4.6.B: keepPartialOutputs:false deletes the runSubdir on cancel (cleanup policy)', async () => {
+  resetState();
+  global.window.JobRunner = makeCancellingJobRunner();
+  const deleted = [];
+  global.window.api = {
+    fbEnsureDir: async (p) => ({ ok: true, path: p }),
+    mmxRunJob: async () => ({ ok: true, code: 0 }),
+    fbList: async (p) => ({ ok: true, items: [{ name: '1.png', ext: '.png', isDir: false, path: p + '\\1.png' }] }),
+    fbDelete: async (p) => { deleted.push(p); return { ok: true }; },
+  };
+  const r = await runVariantDirect('image', { prompt: 'a dragon', n: 2 }, { keepPartialOutputs: false });
+  delete global.window.JobRunner;
+  assert.equal(r.ok, false);
+  assert.equal(r.status, 'cancel', 'cleanup policy reports a plain cancel (no kept outputs)');
+  assert.equal(r.outputPaths.length, 0, 'deleted outputs must NOT be reported as deliverables');
+  assert.equal(r.error, 'cancelled');
+  assert.equal(deleted.length, 1, 'cleanup policy must delete the runSubdir');
+  assert.ok(deleted[0].includes('\\run_'), `the deleted path must be the runSubdir, got ${deleted[0]}`);
+});
+
+test('P4.6.C: cancelled run with an empty runSubdir reports a plain cancel (no phantom partial)', async () => {
+  resetState();
+  global.window.JobRunner = makeCancellingJobRunner();
+  global.window.api = {
+    fbEnsureDir: async (p) => ({ ok: true, path: p }),
+    mmxRunJob: async () => ({ ok: true, code: 0 }),
+    fbList: async () => ({ ok: true, items: [] }),
+  };
+  const r = await runVariantDirect('image', { prompt: 'a dragon', n: 2 }, {});
+  delete global.window.JobRunner;
+  assert.equal(r.ok, false);
+  assert.equal(r.status, 'cancel');
+  assert.equal(r.outputPaths.length, 0);
+  assert.equal(r.error, 'cancelled');
 });

@@ -76,9 +76,18 @@ test('pipeline:import copies files into the workspace with the img_<id> naming',
     // explicit-workspaceId routing, so the workspace IS outDir.
     const ws = outDir;
 
+    // P0-D (360° Audit C-006): pipeline:import now requires a read grant
+    // per source file. Mint one via the same PathGrantService the
+    // production pathGrant:mint IPC uses.
+    const { defaultService: grantService } = require('../../../../main/services/PathGrantService');
+    const readGrant = grantService.mintFileGrant({
+      origin: 'picker-file', purpose: 'pipelineIpc test import', path: src, capabilities: ['read'],
+    });
+    assert.equal(readGrant.ok, true, 'read grant minted');
+
     const r = await handlers['pipeline:import']({}, {
       workspaceId,
-      items: [{ srcAbsPath: src, destColumn: 'original', imageId: 'img_test1', displayName: 'hero.png' }],
+      items: [{ srcAbsPath: src, destColumn: 'original', imageId: 'img_test1', displayName: 'hero.png', readGrantId: readGrant.grantId }],
     });
     assert.ok(r && Array.isArray(r.results));
     assert.equal(r.results.length, 1);
@@ -137,9 +146,15 @@ test('pipeline:import sanitises a malicious displayName (no path traversal)', as
     // R1.4 Phasenpruefung-3 (test assertion fix): with the explicit
     // workspaceId the workspace IS outDir, not the auto-mint fallback.
     const ws = outDir;
+    // P0-D (C-006): mint the required read grant for the source file.
+    const { defaultService: grantService } = require('../../../../main/services/PathGrantService');
+    const readGrant = grantService.mintFileGrant({
+      origin: 'picker-file', purpose: 'pipelineIpc test sanitise', path: src, capabilities: ['read'],
+    });
+    assert.equal(readGrant.ok, true, 'read grant minted');
     const r = await handlers['pipeline:import']({}, {
       workspaceId,
-      items: [{ srcAbsPath: src, destColumn: 'original', imageId: 'img_ev', displayName: '../../../etc/passwd.png' }],
+      items: [{ srcAbsPath: src, destColumn: 'original', imageId: 'img_ev', displayName: '../../../etc/passwd.png', readGrantId: readGrant.grantId }],
     });
     assert.ok(r.results[0].ok);
     const dst = r.results[0].dst;

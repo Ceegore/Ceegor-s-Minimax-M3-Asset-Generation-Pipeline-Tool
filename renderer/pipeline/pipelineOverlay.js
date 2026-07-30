@@ -54,6 +54,12 @@
       // the board falls back to the Main-derived app-output root.
       b.reauthorizationRequired = false;
       if (!userOk) {
+        // P3.4 (DA-H-006): never leave a stale workspaceId/workspace in state.
+        // The persisted id no longer resolves (session-scoped registry), so
+        // keeping it silently reroutes writes; clear both so the board
+        // deterministically re-resolves the Main-derived default output root.
+        b.workspaceId = null;
+        b.workspace = '';
         if (typeof window.scheduleStateSave === 'function') window.scheduleStateSave();
         return;
       }
@@ -62,14 +68,28 @@
         if (chosen && typeof chosen === 'string') {
           const sep = chosen.includes('\\') ? '\\' : '/';
           b.workspace = chosen.replace(/[\\/]+$/, '') + sep + 'pipeline' + sep + 'image';
+          // P3.4 (DA-H-006): the old workspaceId is dead either way; drop it
+          // before minting so a mint failure can't leave a stale id paired
+          // with the newly chosen path.
+          b.workspaceId = null;
           if (window.api.pipelineMintWorkspace) {
             const m = await window.api.pipelineMintWorkspace({ path: b.workspace });
             if (m && m.ok && m.workspaceId) b.workspaceId = m.workspaceId;
           }
           if (typeof window.scheduleStateSave === 'function') window.scheduleStateSave();
           if (typeof toast === 'function') toast('Pipeline folder re-authorized: ' + b.workspace);
+        } else {
+          // Picker dismissed: same as decline — no resolvable workspace remains.
+          b.workspaceId = null;
+          b.workspace = '';
+          if (typeof window.scheduleStateSave === 'function') window.scheduleStateSave();
         }
       } catch (e) {
+        // P3.4: on failure fall back to the default root rather than keeping
+        // a stale/half-updated workspace pairing.
+        b.workspaceId = null;
+        b.workspace = '';
+        if (typeof window.scheduleStateSave === 'function') window.scheduleStateSave();
         if (typeof toast === 'function') toast('Failed to re-authorize the pipeline folder.', 'err');
       }
     })();

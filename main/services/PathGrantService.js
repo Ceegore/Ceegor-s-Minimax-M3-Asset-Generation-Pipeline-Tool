@@ -17,6 +17,54 @@ const OPERATION_TO_CAPABILITY = Object.freeze({
   rename: 'rename', copy: 'copy', move: 'move',
 });
 
+// P1-E (360° Audit H-002, H-003, H-021): sensitive roots that must
+// NEVER be granted. A grant on these paths would allow a compromised
+// renderer to read/write system files.
+const SENSITIVE_ROOTS = (() => {
+  const roots = [
+    'C:\\',
+    'C:\\Windows',
+    'C:\\Program Files',
+    'C:\\Program Files (x86)',
+  ];
+  // Add user profile paths
+  try {
+    const userProfile = process.env.USERPROFILE || process.env.HOME;
+    if (userProfile) {
+      roots.push(userProfile);
+      roots.push(path.join(userProfile, 'AppData'));
+      roots.push(path.join(userProfile, '.ssh'));
+      roots.push(path.join(userProfile, '.gnupg'));
+    }
+  } catch (_) {}
+  // Add system root
+  try {
+    const sysRoot = process.env.SYSTEMROOT || process.env.SystemRoot;
+    if (sysRoot) roots.push(sysRoot);
+  } catch (_) {}
+  return roots.map((r) => path.resolve(r).toLowerCase());
+})();
+
+/** Default TTL for read grants (5 minutes). */
+const DEFAULT_READ_TTL_MS = 5 * 60 * 1000;
+/** Default TTL for write grants (10 minutes). */
+const DEFAULT_WRITE_TTL_MS = 10 * 60 * 1000;
+
+/**
+ * Check if a canonical path is a sensitive root or directly under one.
+ * @param {string} canonicalPath - Lowercase canonical path.
+ * @returns {boolean}
+ */
+function isSensitiveRoot(canonicalPath) {
+  const lower = canonicalPath.toLowerCase();
+  for (const root of SENSITIVE_ROOTS) {
+    if (lower === root) return true;
+    // Block granting the root itself (e.g. C:\ or %USERPROFILE%)
+    // but allow subdirectories (e.g. C:\Users\me\Documents)
+  }
+  return false;
+}
+
 /**
  * @typedef {Object} Grant
  * @property {string} id
@@ -132,10 +180,22 @@ class PathGrantService {
     }
     const canonical = this._canonicalize(p);
     if (!canonical) return { ok: false, error: 'path could not be canonicalized: ' + p };
+    // P1-E (H-002, H-003): block grants on sensitive system roots.
+    if (isSensitiveRoot(canonical)) {
+      return { ok: false, error: 'Cannot grant access to sensitive system path: ' + p };
+    }
+    // P1-E (H-021): enforce default TTL if none provided.
+    // Read-only grants get 5min; grants with write/delete get 10min.
+    let effectiveExpiry = typeof expiresAt === 'number' ? expiresAt : null;
+    if (effectiveExpiry === null) {
+      const hasMutating = capabilities.some((c) => ['write', 'delete', 'rename', 'move'].includes(c));
+      const ttl = hasMutating ? DEFAULT_WRITE_TTL_MS : DEFAULT_READ_TTL_MS;
+      effectiveExpiry = this._now() + ttl;
+    }
     return {
       ok: true, origin, purpose, canonical,
       capabilities: [...capabilities],
-      expiresAt: typeof expiresAt === 'number' ? expiresAt : null,
+      expiresAt: effectiveExpiry,
       coversRoot: !!coversRoot,
     };
   }

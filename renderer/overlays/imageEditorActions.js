@@ -1,10 +1,6 @@
 // renderer/overlays/imageEditorActions.js (Feature 5 — pixel editor)
 // Save / bake / heal-stub / external-handoff / format + alpha helpers.
-//
-// Extracted from imageEditorOverlay.js to stay under the 500-line lint cap.
-// These are pure-ish functions that take the controller (ctrl) and operate on
-// the active slot/session. They are attached to window.ImageEditorActions and
-// called by the overlay's footer buttons.
+// Attached to window.ImageEditorActions; called by overlay footer buttons.
 
 (function () {
   'use strict';
@@ -14,9 +10,7 @@
     return window.ImageUtils.mimeFromPath('x.' + fmt);
   }
 
-  // Derive <stem>_edited.<ext> from the source path, honouring the chosen
-  // output format. Mirrors the on-disk sibling-file convention used by
-  // _cropped_/_nobg_/_optimized_ (no metadata DB).
+  // Derive <stem>_edited.<ext> honouring the chosen output format.
   function derivedEditedPath(srcPath, fmt) {
     if (window.PureFuncs && window.PureFuncs.derivedOutputPath) {
       const base = window.PureFuncs.derivedOutputPath(srcPath, '_edited');
@@ -28,46 +22,31 @@
     return (dot >= 0 ? srcPath.slice(0, dot) : srcPath) + '_edited.' + fmt.replace('jpeg', 'jpg');
   }
 
-  // PE-021: full RGBA alpha scan (replaces the coarse step-15 sampling that
-  // missed isolated transparent pixels). Scans ONLY the alpha channel at
-  // stride 4 — O(n) but with a tiny constant (single byte compare per pixel).
-  // Used to (a) default the format to PNG, (b) warn before a JPEG export that
-  // would flatten transparency to a matte (pitfall §15).
-  //
-  // R4.2 (PE-001 migration): use `renderSceneAtNaturalSize(session)` instead
-  // of `session.canvas.toCanvasElement(1)` so the alpha scan runs at the
-  // NATURAL pixel coordinates — otherwise a user zoomed-in by 2× would
-  // scan the LIVE canvas at zoomed coords and miss most of the image.
-  function canvasHasAlpha(session) {
-    // R4.2-auditfix P-R42-05: dispose temp canvas after use to prevent
-    // memory leaks on repeated save operations.
+  // DA-M-002: tri-state alpha probe {ok, hasAlpha, error}. Fail-closed:
+  // on error the JPEG save gate blocks (never assumes "no alpha").
+  // R4.2: uses renderSceneAtNaturalSize (natural coords, not zoomed VPT).
+  function probeAlpha(session) {
     let temp;
     try {
       temp = session.renderSceneAtNaturalSize();
       const c = temp.toCanvasElement(1);
       const ctx = c.getContext('2d');
       const data = ctx.getImageData(0, 0, c.width, c.height).data;
-      // Full scan: check every pixel's alpha channel (offset 3 in each
-      // 4-byte RGBA group). Early-exit on the first semi-transparent pixel.
       for (let i = 3; i < data.length; i += 4) {
-        if (data[i] < 255) return true;
+        if (data[i] < 255) return { ok: true, hasAlpha: true, error: null };
       }
-      return false;
-    } catch (_) { return false; }
+      return { ok: true, hasAlpha: false, error: null };
+    } catch (e) { return { ok: false, hasAlpha: false, error: (e && e.message) || String(e) }; }
     finally { try { temp && temp.dispose(); } catch (_) {} }
   }
 
-  // Composite the scene onto a white matte → dataURL (for JPEG export of a
-  // transparent canvas). The matte colour is white by default (best default for
-  // web asset delivery); callers can extend this later to pick a custom matte.
-  //
-  // R4.2 (PE-001 migration): source is `renderSceneAtNaturalSize(session)`
-  // (NOT `session.canvas.toCanvasElement(1)`) so the matte composite runs
-  // at the natural pixel coordinates — otherwise a user zoomed-in would
-  // composite a partial image onto the white matte.
-  //
-  // R4.2-auditfix P-R42-05: dispose the temp canvas after use to prevent
-  // memory leaks on repeated JPEG exports.
+  // Boolean wrapper for callers that only need format selection.
+  function canvasHasAlpha(session) {
+    return probeAlpha(session).hasAlpha;
+  }
+
+  // Composite onto white matte → dataURL (JPEG export of transparent canvas).
+  // R4.2: natural-size render; P-R42-05: dispose temp canvas.
   function flattenOntoMatte(session, fmt, matte) {
     const temp = session.renderSceneAtNaturalSize();
     try {
@@ -95,7 +74,13 @@
     const slot = activeSlot(ctrl); if (!slot) { toast('Load an image first.', 'warn'); return; }
     const h = activeSession(ctrl); if (!h) { toast('Load an image first.', 'warn'); return; }
     const fmt = ctrl.prefs.outFormat || 'png';
-    const hasAlpha = canvasHasAlpha(h.session);
+    // DA-M-002: use tri-state probe — block JPEG when alpha is unknown.
+    const alphaProbe = probeAlpha(h.session);
+    if (fmt === 'jpeg' && !alphaProbe.ok) {
+      toast('Cannot determine transparency state (' + (alphaProbe.error || 'canvas error') + '). JPEG export blocked — save as PNG instead.', 'err', 6000);
+      return;
+    }
+    const hasAlpha = alphaProbe.hasAlpha;
     if (fmt === 'jpeg' && hasAlpha) {
       const ok = await asyncConfirm('JPEG cannot store transparency. Transparent areas will be filled with white. Continue?', 'JPEG Export');
       if (!ok) return;
@@ -144,7 +129,10 @@
       // `h.toDataURL` which uses the LIVE canvas's VPT). The temp
       // canvas has identity VPT so the saved PNG is at the natural
       // pixel coordinates — NOT zoom/pan/fit-corrupted.
-      if (fmt === 'jpeg' && canvasHasAlpha(h.session)) {
+      // DA-M-002: fail closed — if alpha is unknown, treat as present
+      // (use matte) rather than silently flattening without the matte.
+      const innerProbe = probeAlpha(h.session);
+      if (fmt === 'jpeg' && (!innerProbe.ok || innerProbe.hasAlpha)) {
         // flattenOntoMatte owns its own temp + dispose.
         dataUrl = flattenOntoMatte(h.session, fmt, '#ffffff');
       } else {
@@ -166,12 +154,12 @@
     finally { try { temp && temp.dispose(); } catch (_) {} }
     const b64 = dataUrl.split(',')[1];
     if (ctrl.onSaveOverride) {
-      // gewv2 GEW-004 fix: normalize the override's return value (a bare
-      // path string, e.g. pipelineCardCorrect.js) into the { ok, path }
-      // contract onSave now expects.
+      // gewv2 GEW-004 + P3.6 (DA-M-012): STRICT success contract — only {ok:true, path:string}
+      // (or a bare legacy path string, e.g. pipelineCardCorrect.js) counts; anything else is an explicit error, so onSave never reports a phantom "Saved".
       const overridden = await ctrl.onSaveOverride(b64, fmt);
-      if (overridden && typeof overridden === 'object') return overridden;
-      return { ok: true, path: overridden };
+      if (typeof overridden === 'string' && overridden) return { ok: true, path: overridden };
+      if (overridden && overridden.ok === true && typeof overridden.path === 'string' && overridden.path) return { ok: true, path: overridden.path };
+      return { ok: false, error: (overridden && overridden.error) || 'save override returned an invalid result' };
     }
     let outPath = derivedEditedPath(slot.path, fmt);
     // PE-032: save collision policy. If the derived path already exists
@@ -189,7 +177,11 @@
             outPath = await nextFreeVersion(outPath);
           }
         }
-      } catch (_) { /* existence check failed — proceed with original path */ }
+      } catch (_) {
+        // DA-M-004: fail CLOSED. If we cannot determine whether the file
+        // exists, auto-version rather than risk silent overwrite.
+        outPath = await nextFreeVersion(outPath);
+      }
     }
     // R1.5a.follow-up Phase 4: mint grant for outPath before write.
     // PRE-1: use window.GrantCache (no require in sandbox).
@@ -612,6 +604,6 @@
 
   window.ImageEditorActions = {
     onSave, onBake, onHeal, onRemoveBg, onExternal,
-    canvasHasAlpha, flattenOntoMatte, derivedEditedPath, mimeForFmt, nextFreeVersion,
+    canvasHasAlpha, probeAlpha, flattenOntoMatte, derivedEditedPath, mimeForFmt, nextFreeVersion,
   };
 })();

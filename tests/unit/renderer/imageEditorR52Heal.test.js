@@ -273,3 +273,23 @@ test('R5.2.Heal.H: integration check — pre-snapshot on success + cancel-cleanu
   assert.equal(sessionB._undo.length, 0, 'R5.2.Heal.H scenario B: reload-throw — session._undo is empty (cancel-cleanup)');
   assert.equal(pushedB, false, 'R5.2.Heal.H scenario B: reload-throw — pushedPreSnapshot is false');
 });
+
+test('P5 DA-M-005: runHeal catch deletes the healed OUTPUT (not just the bake temp) on reload failure', () => {
+  // DA-M-005: a heal writes its result to r.path BEFORE the base reload.
+  // If reloadBaseFromPath (or a later step) throws, the catch must delete
+  // that output too — otherwise an orphaned `_healed.png` leaks on every
+  // failed heal. The bake-temp (tmpPath) cleanup alone is not enough.
+  assert.ok(/let healOutPath = null;/.test(healSrc),
+    'DA-M-005: the healed output path must be hoisted above the try (like tmpPath) so the catch can reach it');
+  assert.ok(/healOutPath = \(r && r\.path\) \? r\.path : null/.test(healSrc),
+    'DA-M-005: healOutPath must be captured right after the inpaint result is validated');
+  const block = extractRunHeal();
+  assert.ok(block, 'DA-M-005: runHeal function must exist in imageEditorHeal.js');
+  const allCatch = block.match(/catch\s*\(\s*\w+\s*\)\s*\{[\s\S]*?(?=\s*\}\s*finally|\s*\}\s*\}\s*\(\);)/g);
+  const r52Catch = allCatch ? allCatch.find((c) => /pushedPreSnapshot/.test(c)) : null;
+  assert.ok(r52Catch, 'DA-M-005: must have the R5.2 cancel-cleanup catch block');
+  assert.ok(/fbDelete\(healOutPath/.test(r52Catch),
+    'DA-M-005: the cancel-cleanup catch must fbDelete(healOutPath) so a failed reload does not orphan the healed output');
+  assert.ok(/healOutPath !== tmpPath/.test(r52Catch),
+    'DA-M-005: the output cleanup must be guarded by healOutPath !== tmpPath (never double-delete the same file)');
+});

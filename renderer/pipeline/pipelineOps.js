@@ -2,6 +2,8 @@
 // Image operations wrappers for pipeline board items.
 
 (function () {
+  // P3.5 (DA-H-010): file-placement helpers in pipelineFileOps.js (loaded first).
+  const { same, ensureDirFor, copyFileIntoPlace, moveFileIntoPlace, removeExistingOutput, path } = window.PipelineFileOps;
   // Per-resource queues (key = 'spawn:realesrgan' / 'spawn:isnetbg').
   const _queues = {};
   function queue(key) {
@@ -38,13 +40,21 @@
     const next = PipelineModel.nextColumn(column);
     const board = window.state.pipeline.image;
     let dst = null;
-    const passedThrough = (column === 'crop' && (!Number(settings.w) || !Number(settings.h))) ||
+    // DA-M-014: crop pass-through only when BOTH axes unset; resize when EITHER.
+    const passedThrough = (column === 'crop' && !Number(settings.w) && !Number(settings.h)) ||
       (column === 'resize' && (!Number(settings.width) || !Number(settings.height)));
     try {
       if (column === 'upscale') {
-        dst = await runSerial('spawn:realesrgan', () => doUpscale(item, src, settings, board));
+        // P3.5 (DA-H-011): re-check cancel when the queued job STARTS.
+        dst = await runSerial('spawn:realesrgan', () => {
+          if (_cancel[item.id]) return null;
+          return doUpscale(item, src, settings, board);
+        });
       } else if (column === 'removebg') {
-        dst = await runSerial('spawn:isnetbg', () => doRemoveBg(item, src, settings, board));
+        dst = await runSerial('spawn:isnetbg', () => {
+          if (_cancel[item.id]) return null;
+          return doRemoveBg(item, src, settings, board);
+        });
       } else if (column === 'crop') {
         dst = await doCrop(item, src, settings, board);
       } else if (column === 'resize') {
@@ -52,7 +62,16 @@
       } else if (column === 'optimize') {
         dst = await doOptimize(item, src, settings, board);
       }
-      if (_cancel[item.id]) { item.status = 'idle'; PipelineBoard.updateCard(item); return; }
+      if (_cancel[item.id]) {
+        // P3.5 (DA-H-011): clean up partial output of a cancelled run.
+        if (dst) {
+          try {
+            const delGrant = (window.GrantHelper) ? await window.GrantHelper.ensureDelete(dst) : undefined;
+            if (!delGrant || delGrant.ok !== false) window.api.fbDelete(dst, delGrant).catch(() => {});
+          } catch (_) { /* best-effort cleanup */ }
+        }
+        item.status = 'idle'; PipelineBoard.updateCard(item); return;
+      }
       if (!dst) throw new Error('Operation produced no output file.');
       // Record the output + advance.
       let nameTransition = null;
@@ -125,10 +144,7 @@
             : 4;
           const dstPng = outPath(board, item.id, name, 'upscale', { mult: settings.multiplier, ext: 'png' });
           await ensureDirFor(dstPng);
-          // BGR pipeline-grant fix: dstPng (and its .tmp.png sibling) lives in THIS
-          // column's folder, a sibling of the src's folder — a grant minted on
-          // pathDirname(src) fails the handler's 'write' check on dstPng. Mint on
-          // the common ancestor of src + dstPng (covers src read + dst/tempOut write).
+          // BGR: mint on common ancestor of src + dst (covers read + write).
           const resrGrant = (window.GrantHelper) ? await window.GrantHelper.ensureTransform(src, dstPng) : undefined;
           if (resrGrant && resrGrant.ok === false) throw new Error('Grant failure: ' + (resrGrant.error || 'authorization denied'));
           if (settings.multiplier === modelNativeScale) {
@@ -192,19 +208,14 @@
           }
         }
       } catch (e) {
-        // If the caller forced Canvas fallback off but Real-ESRGAN is missing
-        // or failed, fall through to the canvas path (best-effort) — UNLESS the
-        // user explicitly wants Real-ESRGAN only (useCanvasFallback
-        // is honoured as a hard toggle below).
+        // Real-ESRGAN missing/failed → fall through to canvas path unless
+        // it was a hard run failure (re-throw those).
         if (settings.useCanvasFallback === false) {
-          // Only fall through when Real-ESRGAN was unavailable (not a hard
-          // failure of an actual run). Re-throw real run failures.
           if (e && /failed/i.test(e.message)) throw e;
         }
       }
     }
-    // Canvas fallback: upscaleImageFile (section08) writes the file ITSELF and
-    // returns the on-disk PATH (not a dataURL). Use that path directly.
+    // Canvas fallback: upscaleImageFile writes the file and returns the path.
     if (typeof window.upscaleImageFile !== 'function') {
       throw new Error('No upscaler available (install Real-ESRGAN or enable Canvas fallback).');
     }
@@ -225,15 +236,32 @@
       throw new Error('Source and destination paths are identical.');
     }
     await ensureDirFor(dst);
-    // BGR pipeline-grant fix: dst lives in THIS column's folder (a sibling of the
-    // src's folder) — a grant minted on pathDirname(src) fails the handler's
-    // 'write' check on dst. Mint on the common ancestor of src + dst.
+    // DA-M-015: skipIfTransparent — copy through if source already has alpha.
+    if (settings.skipIfTransparent) {
+      try {
+        const img = await loadImageFromFile(src);
+        const c = document.createElement('canvas');
+        c.width = Math.min(img.naturalWidth, 64);
+        c.height = Math.min(img.naturalHeight, 64);
+        const ctx = c.getContext('2d');
+        ctx.drawImage(img, 0, 0, c.width, c.height);
+        const data = ctx.getImageData(0, 0, c.width, c.height).data;
+        let hasTransparent = false;
+        for (let i = 3; i < data.length; i += 4) {
+          if (data[i] < 250) { hasTransparent = true; break; }
+        }
+        if (hasTransparent) {
+          await copyFileIntoPlace(src, dst);
+          return dst;
+        }
+      } catch (_) { /* probe failed — fall through to backend */ }
+    }
+    // BGR: mint on common ancestor of src + dst.
     const isnetGrant = (window.GrantHelper) ? await window.GrantHelper.ensureTransform(src, dst) : undefined;
     if (isnetGrant && isnetGrant.ok === false) throw new Error('Grant failure: ' + (isnetGrant.error || 'authorization denied'));
     const r = await window.api.isnetbgRun(src, dst, { model: settings.model, useGpu: settings.useGpu, jobId: item.id, postClean: settings.postClean, featherPx: settings.featherPx, defringe: settings.defringe, refine: settings.refine }, isnetGrant);
     if (!r || !r.ok) throw new Error((r && (r.stderr || r.error)) || 'background removal failed');
-    // KGO-020 fix: warn if the result appears to be 100% transparent (no salient subject).
-    // Load the output and sample a few pixels to detect an all-empty mask.
+    // KGO-020: warn if result is 100% transparent (no subject detected).
     try {
       const img = await loadImageFromFile(dst);
       const c = document.createElement('canvas');
@@ -256,8 +284,7 @@
 
   async function doCrop(item, src, settings, board) {
     if (typeof window.cropImageFile !== 'function') throw new Error('cropImageFile unavailable.');
-    // Compute the crop rectangle from anchor + W×H (mirror runPostProcessChain's
-    // auto-crop). W/H of 0 = use source dims (no-op crop).
+    // Crop rect from anchor + W×H. W/H of 0 = use source dims (no-op).
     const img = await loadImageFromFile(src);
     const uW = img.naturalWidth, uH = img.naturalHeight;
     const wantW = settings.w || uW;
@@ -265,9 +292,7 @@
     const w = Math.min(wantW, uW);
     const h = Math.min(wantH, uH);
     if (w === uW && h === uH && settings.mode !== 'drag') {
-      // No-op crop: copy the source into the crop folder under the documented
-      // name so the per-column-folder invariant holds (selfHeal + recoverBoard
-      // + finalize all assume files live in their column's folder).
+      // No-op crop: copy source into crop folder (per-column-folder invariant).
       const ext = (src.split('.').pop() || 'png').toLowerCase();
       const dst = outPath(board, item.id, item.name || 'image', 'crop', { ext });
       await copyFileIntoPlace(src, dst);
@@ -298,11 +323,7 @@
     return dst;
   }
 
-  // Resize to a free target resolution. The renderer computes the final
-  // (width,height) pair (aspect-link handled in the card settings); the engine
-  // does fit:'fill' Lanczos3 + subtle sharpen on downscale. W=H=0 means "no
-  // target set" → no-op copy-through (mirrors crop with W=H=0) so the
-  // per-column-folder invariant holds.
+  // Resize to target W×H (Lanczos3 + sharpen on downscale). W=H=0 → no-op copy.
   async function doResize(item, src, settings, board) {
     const w = Math.max(0, Math.floor(Number(settings.width) || 0));
     const h = Math.max(0, Math.floor(Number(settings.height) || 0));
@@ -369,75 +390,6 @@
 
   // ---- helpers ----
 
-  // Ensure dst's parent folder exists before handing the path to a writer
-  // that does NOT create directories (the sharp resize/optimize IPCs, the
-  // Real-ESRGAN and IS-Net binaries). Without this, the first real op into a
-  // fresh column folder failed with ENOENT — the no-op copy paths go through
-  // copyFileIntoPlace (which ensures the folder), masking the gap.
-  async function ensureDirFor(dst) {
-    // BGR-009 fix: mint mkdir grant for fbEnsureDir (R1.3 gate).
-    const dirGrant = (window.GrantHelper) ? await window.GrantHelper.ensureDir(path.dirname(dst)) : undefined;
-    const r = await window.api.fbEnsureDir(path.dirname(dst), dirGrant);
-    if (!r || !r.ok) throw new Error('Could not create destination folder: ' + ((r && r.error) || 'unknown'));
-  }
-
-  // Copy src to dst (which may be in a different folder), creating the dst
-  // folder if needed. fbCopy copies into a DIRECTORY and auto-renames on
-  // collision (returning the actual destination in c.path), so use that path
-  // as the rename source rather than assuming the source basename.
-  const same = (a, b) => String(a || '').replace(/[\\/]+/g, '\\').toLowerCase() === String(b || '').replace(/[\\/]+/g, '\\').toLowerCase(); // R7: NTFS is case-insensitive — treat a case-only difference as the SAME file (else a case-only rename deletes the source / renames a file onto itself).
-  async function copyFileIntoPlace(src, dst) {
-    if (same(src, dst)) return;
-    const dstDir = path.dirname(dst);
-    // BGR-009 fix: mint grants for fbEnsureDir/fbCopy/fbRename (R1.3 gate).
-    const dirGrant = (window.GrantHelper) ? await window.GrantHelper.ensureDir(dstDir) : undefined;
-    const r = await window.api.fbEnsureDir(dstDir, dirGrant);
-    if (!r || !r.ok) throw new Error('Could not create destination folder: ' + (r && r.error));
-    await removeExistingOutput(dst, src);
-    // gewv2 GEW-002 fix: ensureCopy returns { ok, srcGrant, destGrant }.
-    const cp = (window.GrantHelper) ? await window.GrantHelper.ensureCopy(src, dstDir) : undefined;
-    const c = await window.api.fbCopy(src, dstDir, cp && cp.srcGrant, cp && cp.destGrant);
-    if (!c || !c.ok) throw new Error('Copy failed: ' + ((c && c.error) || 'unknown'));
-    const copiedAs = (c.path && typeof c.path === 'string') ? c.path : path.join(dstDir, path.basename(src));
-    if (!same(copiedAs, dst)) {
-      const renameGrant = (window.GrantHelper) ? await window.GrantHelper.ensureRename(copiedAs) : undefined;
-      const rn = await window.api.fbRename(copiedAs, path.basename(dst), renameGrant);
-      if (!rn || !rn.ok) throw new Error('Rename failed: ' + ((rn && rn.error) || 'unknown'));
-    }
-  }
-
-  async function moveFileIntoPlace(src, dst) {
-    const dstDir = path.dirname(dst);
-    const dstName = path.basename(dst);
-    await ensureDirFor(dst);
-    // Replace a previous deterministic result so Back → Run is repeatable.
-    // fb:move auto-renames on collision, while fb:rename correctly rejects a
-    // collision; remove the old canonical output before placing the new one.
-    await removeExistingOutput(dst, src);
-    // BGR-009 fix: mint move grant (R1.3 gate).
-    // gewv2 GEW-002 fix: ensureMove returns { ok, srcGrant, destGrant }.
-    const mv = (window.GrantHelper) ? await window.GrantHelper.ensureMove(src, dstDir) : undefined;
-    const r = await window.api.fbMove(src, dstDir, mv && mv.srcGrant, mv && mv.destGrant);
-    if (!r || !r.ok) throw new Error((r && r.error) || 'Failed to move file');
-    const movedAs = r.path || path.join(dstDir, path.basename(src));
-    if (!same(movedAs, dst)) {
-      const renameGrant = (window.GrantHelper) ? await window.GrantHelper.ensureRename(movedAs) : undefined;
-      const rn = await window.api.fbRename(movedAs, dstName, renameGrant);
-      if (!rn || !rn.ok) throw new Error((rn && rn.error) || 'Rename failed');
-    }
-  }
-
-  async function removeExistingOutput(dst, src) {
-    if (!window.api.fbExists) return;
-    // BGR-009 fix: mint read+delete grants (R1.3 gate).
-    const existsGrant = (window.GrantHelper) ? await window.GrantHelper.ensureRead(dst) : undefined;
-    const exists = await window.api.fbExists(dst, existsGrant).catch(() => null);
-    if (!exists || !exists.exists || same(src, dst)) return;
-    const deleteGrant = (window.GrantHelper) ? await window.GrantHelper.ensureDelete(dst) : undefined;
-    const deleted = await window.api.fbDelete(dst, deleteGrant);
-    if (!deleted || !deleted.ok) throw new Error((deleted && deleted.error) || 'Failed to replace existing output');
-  }
-
   // Delegate to the bridged PipelineModel.outPath (pipelineModelBridge.js) so
   // the file name the renderer computes is identical to the name the
   // main-process IPC handlers compute.
@@ -449,15 +401,6 @@
     }
     throw new Error('PipelineModel.outPath unavailable \u2014 cannot compute output path for ' + column + '/' + id);
   }
-
-  const path = {
-    sep(p) { return (String(p).includes('\\')) ? '\\' : '/'; },
-    // KGO-021 fix: return '' (not '.') for a separator-less input so callers
-    // like ensureDirFor/fbEnsureDir fail loudly instead of resolving to CWD.
-    dirname(p) { const s = path.sep(p); return String(p).split(s).slice(0, -1).join(s); },
-    basename(p) { const s = path.sep(p); return String(p).split(s).pop() || ''; },
-    join(...parts) { const s = path.sep(parts[0] || ''); return parts.map((x, i) => i > 0 ? String(x).replace(/^[\\/]+/, '') : String(x).replace(/[\\/]+$/, '')).filter(Boolean).join(s); },
-  };
 
   function syncItemNameExtension(item, dstPath) {
     if (!item || !dstPath) return null;

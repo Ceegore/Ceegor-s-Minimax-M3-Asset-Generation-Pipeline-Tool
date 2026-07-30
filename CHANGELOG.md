@@ -2,6 +2,50 @@
 
 Notable user-facing changes are recorded here.
 
+## 1.0.2 - 2026-07-30
+
+### Added
+
+- Secure IPC wrapper (`secureHandle`) with sender-frame and origin validation on every registered channel.
+- Artifact finalization service: validates output files (size, magic bytes) before reporting success to the renderer.
+- SSRF protection (`urlPolicy`) for all provider HTTP calls (blocks loopback, link-local, private ranges).
+- Payload limits service: enforces maximum argument sizes on IPC mutations.
+- Cloud job gate and confirmation token service for paid API call authorization.
+- Feature flags service for staged rollout of experimental capabilities.
+- Secret store with OS-credential-backend abstraction (no secrets in argv or localStorage).
+- Image admission policy: validates type, dimensions, and file size before pipeline entry.
+- Capped process runner: bounds concurrent backend spawns (prevents resource exhaustion).
+- Corrupt-state backup: automatic `.corrupt` snapshot before overwriting a damaged state file.
+- Image editor exit guard: unsaved-changes confirmation before discarding edits.
+- Electron fuse configuration script (`set-fuses`) and SBOM generation (`generate-sbom`).
+- Release signing scaffold (`sign-release`) for future Authenticode integration.
+- Dependabot configuration for automated dependency updates.
+- SECURITY.md vulnerability reporting policy.
+- Security, stress, and release test suites.
+
+### Improved
+
+- All 30 IPC handler modules migrated to `secureHandle` with consistent error envelopes.
+- PathGrantService: hardened canonicalization (ancestor-walk for non-existent paths), case-insensitive comparison, single-use grant consumption, and TTL eviction.
+- Pipeline ops refactored: extracted `pipelineFileOps` and `pipelineCardMutations` for testability.
+- `mmxArgSanitizer` expanded with comprehensive argument allow-lists and type coercion.
+- Audio trim/cut: added duration guards and format validation.
+- Archive service: hardened zip extraction with path-traversal protection.
+- File browser: improved serialization and race-condition handling.
+- Batch direct runner: normalized parameter shapes and improved partial-cancel recovery.
+- Provider IPC: added URL validation, timeout enforcement, and response-size caps.
+- Reset IPC: added confirmation gate and state backup before destructive operations.
+- Window creation: added CSP hardening and devtools policy.
+
+### Fixed
+
+- Falsy-zero bugs: `webpEffort=0`, `padMs=0`, and optimizer quality parameters no longer collapse to defaults via `|| fallback`.
+- Batch cancel path now recovers output-dir files so the job records its outputs.
+- State sanitizer bounds: `tileSize` and `gpuId` correctly clamped (no out-of-range passthrough).
+- Image editor heal: proper grant forwarding for inpaint IPC calls.
+- Pipeline grant resolution: consistent `ensurePathGrant` usage across all card operations.
+- External tools IPC: corrected parameter forwarding for Real-ESRGAN and ISNetBG.
+
 ## 1.0.1 - 2026-07-29
 
 ### Added

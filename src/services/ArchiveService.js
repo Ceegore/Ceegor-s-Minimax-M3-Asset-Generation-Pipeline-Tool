@@ -37,6 +37,7 @@
 const fs = require('fs');
 const path = require('path');
 const { randomUUID } = require('crypto');
+const { deepRedact } = require('../deepRedactor');
 
 function archivePath(configDir) {
   return path.join(configDir, 'state.jobs.archive.jsonl');
@@ -46,6 +47,22 @@ function archivePath(configDir) {
 // of bytes written. Crash-safe: a partial final line from a
 // previous crash is detected via the trailing-newline check and
 // silently dropped.
+// P5 (M-027): redact secrets and normalize paths before persisting.
+// The archive must never contain API keys, bearer tokens, or full
+// absolute paths (which leak usernames / directory structure).
+// outputPaths are reduced to basenames; title/subtitle pass through
+// deepRedact (scrubs Authorization headers, --api-key, env secrets).
+function _sanitizeSummary(summary) {
+  const out = deepRedact(summary);
+  if (Array.isArray(out.outputPaths)) {
+    out.outputPaths = out.outputPaths.map((p) => {
+      if (typeof p !== 'string') return p;
+      return path.basename(p);
+    });
+  }
+  return out;
+}
+
 function append(configDir, summary) {
   if (!configDir) throw new Error('ArchiveService.append: configDir is required');
   if (!summary || typeof summary !== 'object') throw new Error('ArchiveService.append: summary must be an object');
@@ -56,7 +73,7 @@ function append(configDir, summary) {
   // This is the only "rewrite" we ever do; the rest of the API
   // is strictly append-only.
   _trimPartialLastLine(p);
-  const line = JSON.stringify(summary) + '\n';
+  const line = JSON.stringify(_sanitizeSummary(summary)) + '\n';
   fs.appendFileSync(p, line, 'utf8');
   return Buffer.byteLength(line, 'utf8');
 }
@@ -65,12 +82,16 @@ function append(configDir, summary) {
 // { lines, nextOffset, hasMore }. The caller can pass the returned
 // `nextOffset` to read the next chunk.
 //
-// `offset` is a CHARACTER-position cursor, not a byte offset. The file is
-// decoded to a UTF-16 JS string and walked by character position, so for
-// non-ASCII job titles (CJK, accented Latin, emoji — routine in production)
-// byte and char positions diverge. The only caller (ArchiveViewer) treats
-// `nextOffset` as opaque (passes the previous return value straight back),
-// so the round-trip is consistent. Do not compute it from fs.statSync.
+// P2-D (360° Audit M-018): streaming read — only reads enough bytes
+// from disk to satisfy the `limit` lines, never the whole file.
+// P2-D (360° Audit M-019): max line length (64 KB) prevents a
+// single-line bomb from exhausting memory.
+//
+// `offset` is a BYTE-position cursor (fs.readSync start position).
+// The file is decoded line-by-line from the read buffer.
+const MAX_LINE_BYTES = 64 * 1024; // 64 KB per line cap
+const READ_CHUNK_SIZE = 256 * 1024; // read 256 KB at a time
+
 function readChunk(configDir, opts) {
   opts = opts || {};
   const offset = Math.max(0, parseInt(opts.offset, 10) || 0);
@@ -79,23 +100,53 @@ function readChunk(configDir, opts) {
   if (!fs.existsSync(p)) return { lines: [], nextOffset: 0, hasMore: false };
   const stat = fs.statSync(p);
   if (offset >= stat.size) return { lines: [], nextOffset: stat.size, hasMore: false };
-  const text = fs.readFileSync(p, 'utf8');
+
+  // Stream-read from the offset in chunks until we have `limit` lines.
   const lines = [];
-  let pos = 0;
-  while (pos < text.length) {
-    const nl = text.indexOf('\n', pos);
-    const end = nl === -1 ? text.length : nl;
-    if (pos >= offset) {
-      if (lines.length >= limit) break;
-      const line = text.slice(pos, end);
-      if (line) {
-        try { lines.push(JSON.parse(line)); } catch (_) { /* skip malformed */ }
+  let pos = offset;       // raw read cursor
+  let consumed = offset;  // byte position after the last fully-consumed line
+  let leftover = '';      // partial line carried between chunks
+  let hasMore = false;
+
+  const fd = fs.openSync(p, 'r');
+  try {
+    outer:
+    while (pos < stat.size && lines.length < limit) {
+      const toRead = Math.min(READ_CHUNK_SIZE, stat.size - pos);
+      const buf = Buffer.alloc(toRead);
+      const bytesRead = fs.readSync(fd, buf, 0, toRead, pos);
+      if (bytesRead === 0) break;
+      pos += bytesRead;
+
+      const text = leftover + buf.toString('utf8', 0, bytesRead);
+      const parts = text.split('\n');
+      // Last element is either '' (if text ended with \n) or a partial line
+      leftover = parts.pop() || '';
+
+      for (const part of parts) {
+        if (lines.length >= limit) {
+          // We have enough; nextOffset stays at the last consumed line so
+          // the next call resumes exactly where this one stopped.
+          hasMore = true;
+          break outer;
+        }
+        // Every full line (even skipped ones) advances the consumed cursor.
+        consumed += Buffer.byteLength(part, 'utf8') + 1; // +1 for '\n'
+        if (!part) continue;
+        // M-019: skip lines exceeding the max length (single-line bomb)
+        if (Buffer.byteLength(part, 'utf8') > MAX_LINE_BYTES) continue;
+        try { lines.push(JSON.parse(part)); } catch (_) { /* skip malformed */ }
       }
     }
-    pos = nl === -1 ? text.length : nl + 1;
+    // Anything left between `consumed` and EOF that we didn't turn into
+    // lines is either unread data (limit hit) or a trailing partial line
+    // from a crash — the former means hasMore.
+    if (!hasMore && lines.length >= limit && consumed < stat.size) hasMore = true;
+  } finally {
+    fs.closeSync(fd);
   }
-  const nextOffset = pos;
-  return { lines, nextOffset, hasMore: nextOffset < text.length };
+
+  return { lines, nextOffset: consumed, hasMore };
 }
 
 // Remove a single entry by id. Atomic rewrite (read all → write

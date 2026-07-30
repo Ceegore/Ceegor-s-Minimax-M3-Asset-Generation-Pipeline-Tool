@@ -41,6 +41,23 @@ const { authorizePath: _authorizePath } = require('./grantAuthorizer');
 const MMX_FILE_PATH_FLAGS = new Set(['--out', '--download', '-o']);
 const MMX_DIR_PATH_FLAGS = new Set(['--out-dir']);
 
+// P1-B (360° Audit C-005): input file flags that carry a path the
+// renderer wants mmx-cli to READ. These require a READ grant.
+// A compromised renderer could otherwise read arbitrary files by
+// passing them as --text-file / --first-frame etc.
+const MMX_INPUT_FILE_FLAGS = new Set([
+  '--text-file',       // image/speech: text prompt from file
+  '--lyrics-file',     // music: lyrics from file
+  '--audio-file',      // speech: reference audio
+  '--first-frame',     // video: first frame image
+  '--last-frame',      // video: last frame image
+  '--subject-image',   // image: subject reference
+  '--subject-ref',     // image: subject reference (alternate)
+  '--reference-image', // image: style reference
+  '--mask',            // image: inpainting mask
+  '--input',           // generic input file
+]);
+
 /**
  * Walk the args array and collect every path-taking flag + its
  * value. Returns `[{ flag, value, kind }]` where `kind` is 'file'
@@ -65,6 +82,7 @@ function collectMmxPathFlags(args) {
       if (!value) continue;
       const kind = MMX_FILE_PATH_FLAGS.has(flag) ? 'file'
                  : MMX_DIR_PATH_FLAGS.has(flag) ? 'dir'
+                 : MMX_INPUT_FILE_FLAGS.has(flag) ? 'input'
                  : null;
       if (kind) out.push({ flag, value, kind });
       continue;
@@ -74,15 +92,10 @@ function collectMmxPathFlags(args) {
     if (typeof value !== 'string' || !value) continue;
     const kind = MMX_FILE_PATH_FLAGS.has(a) ? 'file'
                : MMX_DIR_PATH_FLAGS.has(a) ? 'dir'
+               : MMX_INPUT_FILE_FLAGS.has(a) ? 'input'
                : null;
     if (!kind) continue;
     // A value starting with '-' is itself a flag, not a value.
-    // mmx-cli's convention: --flag --another means --flag has
-    // no value (the next token is a new flag). We skip the
-    // path-flag collection in that case (the renderer's mmx
-    // call will fail with mmx-cli's own "missing value" error,
-    // which is the correct user-facing message — not a
-    // "path outside allowed directories" error from us).
     if (value.startsWith('-')) continue;
     out.push({ flag: a, value, kind });
     i++; // consume the value
@@ -108,8 +121,11 @@ function authorizeMmxPaths(grantId, pathFlags, cwd) {
   if (!grantId || typeof grantId !== 'string') {
     return 'mmx: a grantId is required for the output path(s) (use a Main-minted grant from the picker or app-output)';
   }
-  for (const { flag, value } of pathFlags) {
-    const authz = _authorizePath(grantId, 'write', value);
+  for (const { flag, value, kind } of pathFlags) {
+    // P1-B (C-005): input file flags require READ authorisation.
+    // Output file/dir flags require WRITE authorisation.
+    const operation = (kind === 'input') ? 'read' : 'write';
+    const authz = _authorizePath(grantId, operation, value);
     if (!authz.ok) {
       return `mmx: "${flag}" path "${value}" is not authorised by the grant (${authz.error})`;
     }
@@ -126,6 +142,7 @@ function authorizeMmxPaths(grantId, pathFlags, cwd) {
 module.exports = {
   MMX_FILE_PATH_FLAGS,
   MMX_DIR_PATH_FLAGS,
+  MMX_INPUT_FILE_FLAGS,
   collectMmxPathFlags,
   authorizeMmxPaths,
 };

@@ -24,6 +24,8 @@ const { configDir } = require('../../src/config');
 const archive = require('../../src/services/ArchiveService');
 const pathUtils = require('../../src/pathUtils');
 const { defaultService: workspaceService } = require('../services/WorkspaceService');
+// P1-A (360° Audit H-001): secure IPC wrapper.
+const { secureHandle } = require('./secureHandle');
 
 /**
  * Return the list of Main-registered Config-Roots. A legacy workspace
@@ -48,8 +50,9 @@ function mainRegisteredConfigRoots() {
 /**
  * @param {{ appRoot: string }} deps
  */
-function register(_deps) {
-  ipcMain.handle('state:get', () => {
+function register(deps) {
+  const getMainWindow = (deps && typeof deps.getMainWindow === 'function') ? deps.getMainWindow : () => null;
+  secureHandle('state:get', { getMainWindow }, () => {
     // R1.4 Phasenpruefung-2: the catch is now NARROW. A read error
     // (corrupt state.json) still returns {} (the state is unrecoverable
     // and the renderer will re-initialise defaults). A MIGRATION error
@@ -151,7 +154,7 @@ function register(_deps) {
   // raw `workspace` path. Only `workspaceId` is accepted as the
   // pipeline-image workspace; a renderer cannot re-introduce a string
   // workspace path that would bypass the WorkspaceService gate.
-  ipcMain.handle('state:set', (_e, s) => {
+  secureHandle('state:set', { getMainWindow }, (_e, s) => {
     try {
       if (s != null && typeof s !== 'object') {
         return { ok: false, error: 'state payload must be a plain object.' };
@@ -181,21 +184,21 @@ function register(_deps) {
     } catch (e) { return { ok: false, error: String(e.message || e) }; }
   });
   // Archive IPCs. All four return { ok, ... } envelopes.
-  ipcMain.handle('state:archiveRead', (_e, opts) => {
+  secureHandle('state:archiveRead', { getMainWindow }, (_e, opts) => {
     try {
       const r = archive.readChunk(configDir(), opts || {});
       return { ok: true, ...r };
     } catch (e) { return { ok: false, error: String(e.message || e) }; }
   });
-  ipcMain.handle('state:archiveClear', () => {
+  secureHandle('state:archiveClear', { getMainWindow }, () => {
     try { const removed = archive.clear(configDir()); return { ok: true, removedBytes: removed }; }
     catch (e) { return { ok: false, error: String(e.message || e) }; }
   });
-  ipcMain.handle('state:archiveSize', () => {
+  secureHandle('state:archiveSize', { getMainWindow }, () => {
     try { return { ok: true, bytes: archive.size(configDir()) }; }
     catch (e) { return { ok: false, error: String(e.message || e) }; }
   });
-  ipcMain.handle('state:archiveDelete', (_e, payload) => {
+  secureHandle('state:archiveDelete', { getMainWindow }, (_e, payload) => {
     try {
       const id = payload && payload.id;
       if (!id || typeof id !== 'string') {

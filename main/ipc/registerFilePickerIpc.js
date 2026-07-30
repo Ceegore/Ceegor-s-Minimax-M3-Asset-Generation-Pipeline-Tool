@@ -16,6 +16,8 @@ const { ipcMain, dialog } = require('electron');
 const pathSecurity = require('../services/PathSecurityService');
 const { defaultService: pathGrantService } = require('../services/PathGrantService');
 const { wrapFilePickerHandler } = require('./legacyAdapter');
+// P1-A (360° Audit H-001): secure IPC wrapper.
+const { secureHandle } = require('./secureHandle');
 
 const TITLE_MAX = 200;
 const FILTER_NAME_MAX = 100;
@@ -33,7 +35,7 @@ function register({ getMainWindow }) {
   // R3.2: result passes through the FilePickerResult legacy adapter
   // (validates the 4 contract fields, preserves grantId/capabilities).
   // ---------------------------------------------------------------------
-  ipcMain.handle('file:pick', wrapFilePickerHandler(async (_e, opts) => {
+  secureHandle('file:pick', { getMainWindow }, wrapFilePickerHandler(async (_e, opts) => {
     opts = opts || {};
       const title = typeof opts.title === 'string' ? opts.title.slice(0, TITLE_MAX) : 'Select file';
       const filters = Array.isArray(opts.filters) && opts.filters.length
@@ -85,7 +87,7 @@ function register({ getMainWindow }) {
   // adapter (validates the 4 contract fields, preserves grantId/
   // capabilities, catches throws).
   // ---------------------------------------------------------------------
-  ipcMain.handle('file:saveAs', wrapFilePickerHandler(async (_e, srcPath) => {
+  secureHandle('file:saveAs', { getMainWindow }, wrapFilePickerHandler(async (_e, srcPath) => {
     if (!srcPath || typeof srcPath !== 'string') {
       return { ok: false, error: 'srcPath is required.' };
     }

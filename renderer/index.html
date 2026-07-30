@@ -252,11 +252,17 @@
   <script src="overlays/imageEditorCheatsheet.js"></script>
   <script src="overlays/imageEditorKeyboard.js"></script>
   <script src="overlays/imageEditorOverlay.js"></script>
+  <!-- P3.3 (DA-H-004): app-exit dirty guard — must load AFTER
+       imageEditorOverlay.js (uses ImageEditorOverlay._getPersistedCtrl). -->
+  <script src="overlays/imageEditorExitGuard.js"></script>
   <script src="services/fileBrowser1.js"></script>
   <script src="services/fileBrowser2a.js"></script>
   <script src="services/fileBrowser2b.js"></script>
   <!-- PRE-1: grantCache must load BEFORE batchPostprocess (which uses window.GrantCache). -->
   <script src="services/grantCache.js"></script>
+  <!-- P3-A (DA-H-001/DA-H-005): single image admission policy — must load
+       before the editor overlays / pipeline modules that consult it. -->
+  <script src="services/ImageAdmissionPolicy.js"></script>
   <!-- BGR-009: grantHelper must load AFTER grantCache (uses window.GrantCache). -->
   <script src="utils/grantHelper.js"></script>
   <!-- PE-018: central shortcut-scope stack (must load before app.js + editor). -->
@@ -284,6 +290,8 @@
        each depends on the prior. -->
   <link rel="stylesheet" href="pipeline/pipeline.css">
   <script src="pipeline/pipelineModelBridge.js"></script>
+  <!-- P3.5: file-placement helpers must load BEFORE pipelineOps.js (module-load destructure). -->
+  <script src="pipeline/pipelineFileOps.js"></script>
   <script src="pipeline/pipelineOps.js"></script>
   <script src="pipeline/pipelineImport.js"></script>
   <script src="pipeline/pipelineCardExtras.js"></script>
@@ -298,6 +306,8 @@
   <!-- H11-1: progress bar for running cards (+ determinate upscale wiring). -->
   <script src="widgets/spinner.js"></script>
   <script src="pipeline/pipelineCardProgress.js"></script>
+  <!-- P3.5 (DA-H-008/012): Back/Finalize mutations + operationId lock (size budget). -->
+  <script src="pipeline/pipelineCardMutations.js"></script>
   <script src="pipeline/pipelineCard.js"></script>
   <script src="pipeline/pipelineBoard.js"></script>
   <script src="pipeline/pipelineOverlay.js"></script>

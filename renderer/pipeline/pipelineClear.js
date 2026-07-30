@@ -65,6 +65,8 @@
       if (typeof window.PipelineBoard.render === 'function') window.PipelineBoard.render();
       if (typeof window.PipelineBoard.refreshBadge === 'function') window.PipelineBoard.refreshBadge();
     }
+    // DA-M-019: return actual counts so callers report truthfully.
+    return { removed: removedCount, failed: failedCount, failedItems: results.filter((r) => !r.ok).map((r) => r.item) };
   }
 
   // Export (copy) each final to destDir. Returns { saved, failed, exported: [items] }.
@@ -92,9 +94,10 @@
     if (!await asyncConfirm('Clear ' + finals.length + ' finalized image' + (finals.length === 1 ? '' : 's') + ' from the board?\n(The files are moved to the session trash; this removes them from the Final column.)')) {
       return { removed: 0, canceled: true };
     }
-    await removeItems(finals);
-    toast('Cleared ' + finals.length + ' finalized image' + (finals.length === 1 ? '' : 's') + '.', 'ok', 3000);
-    return { removed: finals.length };
+    // DA-M-019: report actual removed count, not requested count.
+    const res = await removeItems(finals);
+    toast('Cleared ' + res.removed + ' finalized image' + (res.removed === 1 ? '' : 's') + (res.failed ? ' (' + res.failed + ' failed)' : '') + '.', res.failed ? 'warn' : 'ok', 3000);
+    return { removed: res.removed, failed: res.failed };
   }
 
   // ---- 2. Clear with report ----
@@ -114,10 +117,11 @@
       if (r && r.ok) reportPath = r.path;
       else toast('Report could not be written: ' + ((r && r.error) || 'unknown') + '. Clearing anyway.', 'warn', 5000);
     }
-    await removeItems(finals);
-    const msg = 'Cleared ' + finals.length + ' image' + (finals.length === 1 ? '' : 's') + '.';
+    // DA-M-019: use actual removed count from removeItems.
+    const res = await removeItems(finals);
+    const msg = 'Cleared ' + res.removed + ' image' + (res.removed === 1 ? '' : 's') + (res.failed ? ' (' + res.failed + ' failed)' : '') + '.';
     toast(reportPath ? msg + ' Report → ' + reportPath : msg, reportPath ? 'ok' : 'warn', 5000);
-    return { removed: finals.length, reportPath };
+    return { removed: res.removed, failed: res.failed, reportPath };
   }
 
   // ---- 3. Export all finals (no report) — the existing behaviour ----

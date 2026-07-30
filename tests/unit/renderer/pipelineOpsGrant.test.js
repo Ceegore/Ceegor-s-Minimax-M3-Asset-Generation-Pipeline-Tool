@@ -28,6 +28,8 @@ const { PathGrantService } = require(path.join(ROOT, 'main', 'services', 'PathGr
 const grantCachePath = path.join(ROOT, 'renderer', 'services', 'grantCache.js');
 const grantHelperPath = path.join(ROOT, 'renderer', 'utils', 'grantHelper.js');
 const pipelineOpsPath = path.join(ROOT, 'renderer', 'pipeline', 'pipelineOps.js');
+// P3.5 (DA-H-010): pipelineOps destructures window.PipelineFileOps at module load.
+const pipelineFileOpsPath = path.join(ROOT, 'renderer', 'pipeline', 'pipelineFileOps.js');
 
 const VALID_OPS = new Set(['read', 'write', 'delete', 'mkdir', 'rename', 'copy', 'move']);
 
@@ -97,11 +99,12 @@ async function runOp(column, apiMethod, settingsStub) {
     safeBaseName: (n) => String(n || 'image'),
   };
 
-  for (const p of [grantCachePath, grantHelperPath, pipelineOpsPath]) {
+  for (const p of [grantCachePath, grantHelperPath, pipelineFileOpsPath, pipelineOpsPath]) {
     try { delete require.cache[require.resolve(p)]; } catch (_) {}
   }
   require(grantCachePath);   // sets window.GrantCache
   require(grantHelperPath);  // sets window.GrantHelper
+  require(pipelineFileOpsPath); // sets window.PipelineFileOps (must precede pipelineOps)
   require(pipelineOpsPath);  // sets window.PipelineOps
 
   const src = '/ws/prev/img.png'; // previous column's output (sibling folder)

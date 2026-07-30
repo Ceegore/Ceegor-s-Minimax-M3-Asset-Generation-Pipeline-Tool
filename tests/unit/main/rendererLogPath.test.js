@@ -21,21 +21,22 @@ function loadResolver() {
   const src = fs.readFileSync(path.join(__dirname, '..', '..', '..', 'main', 'index.js'), 'utf8');
   const m = src.match(/function _resolveRendererLogPath\(\)\s*\{[\s\S]*?\n\}/);
   assert.ok(m, 'main/index.js must export _resolveRendererLogPath');
-  // Build a sandbox that injects `app.getPath('logs')` as a stub
-  // and stub `fs.writeFileSync` so we don't actually write during
-  // tests. The sandbox returns the FIRST writable candidate.
+  // P5 (M-046): the probe now uses existsSync + accessSync (non-destructive)
+  // instead of writeFileSync (which truncated the previous session's log).
+  // Stub accordingly: __READONLY__ paths "exist" but fail accessSync.
   const calls = [];
   const sandbox = {
     fs: {
-      writeFileSync: (p) => {
-        calls.push(p);
+      existsSync: (p) => { calls.push(p); return true; },
+      accessSync: (p) => {
         if (p.includes('__READONLY__')) {
-          const err = new Error('EROFS: read-only filesystem');
-          err.code = 'EROFS';
+          const err = new Error('EACCES: permission denied');
+          err.code = 'EACCES';
           throw err;
         }
-        // success
+        // writable — no throw
       },
+      constants: { W_OK: 2 },
     },
     path: require('node:path'),
     app: { getPath: (k) => path.join(os.tmpdir(), 'mock-app-' + k) },
@@ -51,14 +52,12 @@ const vm = require('node:vm');
 test('_resolveRendererLogPath: skips readonly project-root, falls back to app.getPath("logs")', () => {
   const { calls } = loadResolver();
   // The first candidate is the readonly project-root — must be
-  // tried (and rejected). The second is app.getPath('logs')
+  // tried (and rejected via accessSync). The second is app.getPath('logs')
   // which the stub marks writable.
   assert.ok(calls.length >= 1, 'at least one candidate must be tried');
   assert.ok(calls[0].includes('project-root'), `first try should be PARENT_ROOT, got: ${calls[0]}`);
-  // The returned path is whatever the LAST successful write
-  // pointed to. We don't capture the return value because the
-  // function uses early-return-by-omission; verify the SEQUENCE
-  // of attempts instead.
+  // existsSync is called for each candidate until one passes accessSync.
+  // First call = project-root (fails accessSync), second = app.getPath('logs') (passes).
   assert.ok(calls.length === 2, `should fall back to app.getPath('logs') after project-root fails, got attempts: ${JSON.stringify(calls)}`);
 });
 
@@ -66,12 +65,13 @@ test('_resolveRendererLogPath: returns null if ALL candidates fail', () => {
   const calls = [];
   const sandbox = {
     fs: {
-      writeFileSync: (p) => {
-        calls.push(p);
-        const err = new Error('EROFS');
-        err.code = 'EROFS';
+      existsSync: (p) => { calls.push(p); return true; },
+      accessSync: (p) => {
+        const err = new Error('EACCES');
+        err.code = 'EACCES';
         throw err;
       },
+      constants: { W_OK: 2 },
     },
     path: require('node:path'),
     app: { getPath: (k) => '/__READONLY__/' + k },
@@ -82,12 +82,7 @@ test('_resolveRendererLogPath: returns null if ALL candidates fail', () => {
   const src = fs.readFileSync(path.join(__dirname, '..', '..', '..', 'main', 'index.js'), 'utf8');
   const m = src.match(/function _resolveRendererLogPath\(\)\s*\{[\s\S]*?\n\}/);
   vm.runInContext(`(${m[0]})()`, vm.createContext(sandbox));
-  // When every candidate fails, _resolveRendererLogPath should
-  // return null (not throw). We capture the result via the
-  // sandbox global.
-  // The function doesn't currently store its result on the
-  // global — but the test exercises the failure path: no
-  // uncaught throw is the success criterion.
-  // (We trust fs.writeFileSync throws are caught silently.)
+  // When every candidate fails accessSync, _resolveRendererLogPath
+  // returns null (not throw). All 3 candidates must be probed.
   assert.ok(calls.length >= 3, 'all 3 candidates should have been tried');
 });

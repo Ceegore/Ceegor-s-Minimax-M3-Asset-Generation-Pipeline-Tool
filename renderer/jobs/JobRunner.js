@@ -296,8 +296,8 @@
       // detail line so the user sees the final outcome in the
       // expanded view.
       window.LogService.updateLogStatus && window.LogService.updateLogStatus(job.logEventId, {
-        status,
-        result: status === 'ok' ? 'ok' : status === 'warn' ? null : status === 'cancel' ? 'warn' : 'err',
+        status: status === 'partial' ? 'cancel' : status, // no log-state-partial CSS — reuse the cancel colour
+        result: status === 'ok' ? 'ok' : status === 'warn' ? null : (status === 'cancel' || status === 'partial') ? 'warn' : 'err',
       });
     }
     if (details && details.length && typeof window.LogService !== 'undefined') {
@@ -410,8 +410,11 @@
           threw = e;
         }
         const outputPaths = (result && Array.isArray(result.outputPaths)) ? result.outputPaths : [];
+        // P4.7 (360° Audit DB-M-011): a cancel that already produced files is 'partial' — the outputs must not be hidden.
+        const cancelStatus = outputPaths.length ? 'partial' : 'cancel';
+        const cancelNote = outputPaths.length ? `Cancelled — ${outputPaths.length} file(s) were already produced.` : 'Cancelled by user.';
         if (ac.signal.aborted) {
-          _markJobDone(job, 'cancel', threw ? (threw.message || String(threw)) : null, ['Cancelled by user.'], outputPaths);
+          _markJobDone(job, cancelStatus, threw ? (threw.message || String(threw)) : null, [cancelNote], outputPaths);
         } else if (threw) {
           _markJobDone(job, 'err', threw.message || String(threw), ['Error: ' + (threw.message || String(threw))], outputPaths);
         } else if (result && result.status === 'warn') {
@@ -419,11 +422,8 @@
         } else if (result && result.status === 'err') {
           _markJobDone(job, 'err', result.error || null, result.details || [], outputPaths);
         } else if (result && result.status === 'cancel') {
-          // A runFn that returns {status: 'cancel'} without going through
-          // the abort signal (e.g. a programmatic cancel) is mapped to
-          // 'cancel' rather than falling through to 'ok'. The abort path
-          // above covers the common case; this branch covers the rest.
-          _markJobDone(job, 'cancel', null, ['Cancelled.'], outputPaths);
+          // Programmatic {status:'cancel'} without abort — same mapping as the abort path above.
+          _markJobDone(job, cancelStatus, null, [cancelNote], outputPaths);
         } else {
           _markJobDone(job, 'ok', null, result && result.details ? result.details : [], outputPaths);
         }

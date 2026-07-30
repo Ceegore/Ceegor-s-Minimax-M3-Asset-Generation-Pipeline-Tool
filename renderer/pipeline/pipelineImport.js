@@ -50,6 +50,8 @@
       e.preventDefault();
       // Clipboard images don't have a path — write them to a temp file first,
       // then enqueue. (Best-effort; requires fb:write under an allowed root.)
+      // DA-M-017: track temp paths so we can delete them in finally.
+      const tempPaths = [];
       Promise.all(imageItems.map(async (it) => {
         const blob = it.getAsFile();
         if (!blob) return null;
@@ -69,17 +71,37 @@
           // STRING, not a Uint8Array — so encode the blob bytes first.
           // BGR-009 fix: mint mkdir grant for fbEnsureDir (R1.3 gate).
           const dirGrant = (window.GrantHelper) ? await window.GrantHelper.ensureDir(out + sep + 'original') : undefined;
-          await window.api.fbEnsureDir(out + sep + 'original', dirGrant);
+          const dirR = await window.api.fbEnsureDir(out + sep + 'original', dirGrant);
+          // DA-M-017: check IPC results — fail early if dir creation failed.
+          if (dirR && dirR.ok === false) return null;
           const arr = new Uint8Array(await blob.arrayBuffer());
           const b64 = bytesToBase64(arr);
           // R1.5a.follow-up Phase 4: mint grant for tmp before write.
           // PRE-1: use window.GrantCache (no require in sandbox).
           const wg = window.api && window.api.mintGrant ? await window.GrantCache.ensurePathGrant(tmp, 'write') : undefined;
           if (wg && wg.ok === false) return null;
-          await window.api.fbWrite(tmp, b64, wg);
+          const wr = await window.api.fbWrite(tmp, b64, wg);
+          // DA-M-017: check write result.
+          if (wr && wr.ok === false) return null;
+          tempPaths.push(tmp);
           return tmp;
         } catch (_) { return null; }
-      })).then((paths) => window.Pipeline.enqueueFromPaths(paths.filter(Boolean)));
+      })).then(async (paths) => {
+        const valid = paths.filter(Boolean);
+        try {
+          if (valid.length) await window.Pipeline.enqueueFromPaths(valid);
+        } finally {
+          // DA-M-017: always delete the clipboard temp files, whether
+          // the import succeeded or failed. They are intermediate copies;
+          // enqueueFromPaths copies them into the canonical img_<id>_* name.
+          for (const tp of tempPaths) {
+            try {
+              const dg = (window.GrantHelper) ? await window.GrantHelper.ensureDelete(tp) : undefined;
+              await window.api.fbDelete(tp, dg);
+            } catch (_) { /* best-effort cleanup */ }
+          }
+        }
+      });
     });
     window._pipelinePasteWired = true;
   }
@@ -102,7 +124,15 @@
       const picked = r && r.ok && r.path ? r.path : null;
       if (!picked) return;
       const res = await window.Pipeline.enqueueFromPaths([picked]);
-      if (window.toast) window.toast(`Imported ${res.added || 0} image(s).`, 'ok');
+      // DA-M-022: same result handling as drag-drop — only ok && added>0
+      // is success; otherwise show the error.
+      if (res && res.ok && res.added > 0) {
+        if (window.toast) window.toast(`Imported ${res.added} image(s).`, 'ok');
+      } else if (res && !res.ok) {
+        if (window.toast) window.toast(res.error || 'Import failed.', 'err');
+      } else {
+        if (window.toast) window.toast('Imported 0 images (file may not be a supported image).', 'warn');
+      }
     } catch (e) { if (window.toast) window.toast('Load failed: ' + ((e && e.message) || e), 'err'); }
   }
 

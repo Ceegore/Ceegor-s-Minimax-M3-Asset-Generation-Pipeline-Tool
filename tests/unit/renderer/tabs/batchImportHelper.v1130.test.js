@@ -305,15 +305,26 @@ test('v1.1.30: createMainWindow close-dialog cancel does NOT cancel jobs (regres
   // Slice from "win.on('close'" to the next "};" line that ends the function.
   const closeBlock = code.match(/win\.on\('close'[\s\S]*?win\.destroy\(\);\s*\n\s*\}\s*\n\s*\}\);/);
   assert.ok(closeBlock, 'expected to find win.on(close) block ending with win.destroy()');
-  const cancelIdx = closeBlock[0].search(/cancelActiveJobs/);
+  // P3.3 (DA-H-004) added an unsaved-images guard branch with its OWN
+  // confirmed-close path (Save all / Discard / Cancel) ahead of the generic
+  // confirm dialog, so there are now TWO cancelActiveJobs call sites. The
+  // invariant is unchanged: every call site must sit AFTER the dialog that
+  // let the user cancel out (guard: `guard.response === 2` early-return;
+  // generic: the `result.response === 0` confirmation).
+  const cancelSites = [...closeBlock[0].matchAll(/cancelActiveJobs/g)].map((m) => m.index);
   const dialogIdx = closeBlock[0].search(/showMessageBox/);
   const confirmIdx = closeBlock[0].search(/result\.response\s*===\s*0/);
-  assert.ok(cancelIdx > 0, 'cancelActiveJobs must be referenced');
+  const guardCancelIdx = closeBlock[0].search(/guard\.response\s*===\s*2/);
+  assert.ok(cancelSites.length > 0, 'cancelActiveJobs must be referenced');
   assert.ok(dialogIdx > 0, 'showMessageBox must be referenced');
   assert.ok(confirmIdx > 0, 'result.response === 0 confirmation must exist');
-  assert.ok(cancelIdx > dialogIdx,
+  assert.ok(cancelSites[0] > dialogIdx,
     'cancelActiveJobs must be called AFTER showMessageBox, not before');
-  assert.ok(cancelIdx > confirmIdx,
+  if (cancelSites.length > 1) {
+    assert.ok(guardCancelIdx > 0 && cancelSites[0] > guardCancelIdx,
+      'guard-branch cancelActiveJobs must come after the guard dialog Cancel early-return');
+  }
+  assert.ok(cancelSites[cancelSites.length - 1] > confirmIdx,
     'cancelActiveJobs must be called AFTER the user confirms (response === 0)');
 });
 
@@ -341,8 +352,9 @@ test('v1.1.30: section03 buildSettingsStylesPane defines editStyle/deleteStyle/p
 
 test('v1.1.30: registerFileBrowserIpc fb:read enforces a size cap', () => {
   const code = fs.readFileSync(path.join(ROOT, 'main', 'ipc', 'registerFileBrowserIpc.js'), 'utf8');
-  // Find the fb:read handler.
-  const fbReadBlock = code.match(/ipcMain\.handle\('fb:read'[\s\S]*?\}\);/);
+  // Find the fb:read handler. P1-A (C-001): registrars now use the
+  // secureHandle wrapper instead of bare ipcMain.handle — accept either.
+  const fbReadBlock = code.match(/(?:ipcMain\.handle|secureHandle)\('fb:read'[\s\S]*?\}\);/);
   assert.ok(fbReadBlock, 'expected to find fb:read handler');
   // The pre-fix version read the whole file unconditionally. The fix
   // stats the file and rejects over MAX_READ_BYTES.

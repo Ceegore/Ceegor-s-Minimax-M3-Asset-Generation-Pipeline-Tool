@@ -73,26 +73,14 @@ function notifyAudioGenerated(p) {
 }
 window.notifyAudioGenerated = notifyAudioGenerated;
 
-// Polling timer for "live" updates to the folder explorer while
-// a generation is in flight. We poll every 1s instead of using
-// a more reactive mechanism (chokidar / fs.watch) because:
-//   - Polling is OS-agnostic and doesn't add a dependency.
-//   - 1s is fast enough for the user to feel "live" but slow
-//     enough to be invisible on the IPC channel.
-//   - It gracefully handles the --out-dir case where the
-//     renderer doesn't know the per-call output filenames and
-//     so can't be told by the gen handler.
-//
-// The poll only runs while state.generating is set; we start
-// it from startGenPolling() and stop it from stopGenPolling(),
-// both called from armGenBtnWithCancel (start) and its cleanup
-// (stop). The poller's main work is:
-//   1. List the current fbDir.
-//   2. Diff against the previous list (state._lastPolledItems).
-//   3. For each new file, call notifyImageGenerated(path) +
-//      add a ".fb-item-new" class to its row in the folder
-//      explorer so the CSS blink animation runs.
-//   4. Refresh the folder explorer's items snapshot.
+// Polling timer for "live" folder-explorer updates while a generation is
+// in flight. 1s polling (not fs.watch): OS-agnostic, invisible on the IPC
+// channel, and covers the --out-dir case where the renderer doesn't know
+// the per-call output filenames. Started by armGenBtnWithCancel
+// (startGenPolling), stopped by its cleanup (stopGenPolling). Each tick:
+// list the polled dir, diff against state._lastPolledItems, push new
+// files through notifyImageGenerated + blink their rows, refresh the
+// items snapshot.
 let _genPollTimer = null;
 let _genPollBusy = false;
 // A `_genPollActive` flag covers the await window inside the tick
@@ -101,24 +89,35 @@ let _genPollBusy = false;
 // schedule two tick chains). The flag is only cleared in
 // stopGenPolling.
 let _genPollActive = false;
+// P4.5 (DB-H-006): thumbnail pushes require an IMAGE job — a speech/
+// music/video run must not turn image files appearing in the folder
+// mid-run into "generated image" thumbnails.
+function _isImageJobActive() {
+  if (window.JobRunner && typeof window.JobRunner.activeJobs === 'function') {
+    return window.JobRunner.activeJobs().some((j) => j && (j.tab === 'image' || j.type === 'image'));
+  }
+  return !!(window.state && window.state.generating === 'image');
+}
 async function startGenPolling() {
   // Defensive: never start two pollers at once.
   if (_genPollActive) return;
   _genPollActive = true;
-  // Snapshot the current items so the first tick doesn't see
-  // "everything is new" (the generation might have started
-  // with files already in the folder).
+  // P4.5 (DB-H-006): bind the whole poll run to the dir current at
+  // start. Re-reading state.fbDir per tick let a mid-run folder
+  // navigation re-point the diff at the WRONG dir, flagging the user's
+  // browsed files as "new generations".
+  const pollDir = state.fbDir;
+  // Snapshot the current items so the first tick doesn't see "everything
+  // is new" (the folder may have had files before the run started).
   try {
-    const _g = (window.GrantHelper && window.GrantHelper.ensureDirList) ? await window.GrantHelper.ensureDirList(state.fbDir) : undefined;
-    const r = (_g && _g.ok === false) ? _g : await window.api.fbList(state.fbDir, _g);
+    const _g = (window.GrantHelper && window.GrantHelper.ensureDirList) ? await window.GrantHelper.ensureDirList(pollDir) : undefined;
+    const r = (_g && _g.ok === false) ? _g : await window.api.fbList(pollDir, _g);
     if (r && r.ok) state._lastPolledItems = (r.items || []).map((it) => it.path);
   } catch (_) {
     state._lastPolledItems = [];
   }
-  // Reset the dedup set so the polling starts fresh for this
-  // run (the gen handler may have already pushed some files
-  // before the poller started, which is fine — notifyImageGenerated
-  // is idempotent and the polling won't see them as new).
+  // Reset the dedup set so the polling starts fresh for this run
+  // (notifyImageGenerated is idempotent for already-pushed files).
   _resetPreviewedPaths();
   const tick = async () => {
     _genPollTimer = null;
@@ -130,54 +129,46 @@ async function startGenPolling() {
     if (_genPollBusy) return; // skip overlapping ticks
     _genPollBusy = true;
     try {
-      const _g2 = (window.GrantHelper && window.GrantHelper.ensureDirList) ? await window.GrantHelper.ensureDirList(state.fbDir) : undefined;
-      const r = (_g2 && _g2.ok === false) ? _g2 : await window.api.fbList(state.fbDir, _g2);
+      const _g2 = (window.GrantHelper && window.GrantHelper.ensureDirList) ? await window.GrantHelper.ensureDirList(pollDir) : undefined;
+      const r = (_g2 && _g2.ok === false) ? _g2 : await window.api.fbList(pollDir, _g2);
       if (!r || !r.ok) return;
       const newItems = r.items || [];
-      // Filter the polled list down to supported asset types (see
-      // isItemVisibleInList in fileBrowser1.js) so the per-tick
-      // re-render matches the user's "show all files" toggle. The
-      // fresh-detection below still walks the full newItems list (we
-      // want to highlight every newly-created file as a thumbnail,
-      // even if it's currently hidden by the type filter).
+      // Filter to supported asset types (isItemVisibleInList) so the
+      // re-render matches the "show all files" toggle; fresh-detection
+      // still walks the full list.
       const visibleItems = newItems.filter(isItemVisibleInList);
       const newPaths = newItems.map((it) => it.path);
       const prev = new Set((state._lastPolledItems || []).map((p) => p.toLowerCase()));
       const fresh = newPaths.filter((p) => !prev.has(p.toLowerCase()));
-      // 1. Re-render the file-browser list so the new file is
-      //    visible + get the new state._fbItems snapshot. Preserve
-      //    the user's scroll position: renderFbList does
-      //    ul.innerHTML='' + rebuild, which would snap the list
-      //    back to the top every second during long generations.
-      //    Capture scrollTop before the re-render and restore it
-      //    after so the user can scroll freely while polling runs.
+      state._lastPolledItems = newPaths;
+      // P4.5 (DB-H-006): the user navigated away from the polled dir —
+      // don't clobber the new folder's rendered list / preview with the
+      // polled dir's items; keep diffing silently until they return.
+      if (state.fbDir !== pollDir) return;
+      // 1. Re-render the list so the new file is visible. Preserve the
+      //    scroll position: renderFbList rebuilds the list, which would
+      //    snap it to the top every second otherwise.
       const ul = $('#fb-list');
       const savedScroll = ul ? ul.scrollTop : 0;
       const sorted = sortFbItems(visibleItems, state.fbSort);
       renderFbList(sorted);
       applyFileSearch();
       if (ul && savedScroll > 0) {
-        // Clamp to the new scrollHeight in case the list shrank
-        // (rare during generation, but possible if the user
-        // deleted files in another Explorer window).
+        // Clamp to the new scrollHeight in case the list shrank.
         ul.scrollTop = Math.min(savedScroll, ul.scrollHeight);
       }
-      state._lastPolledItems = newPaths;
-      // 2. For each newly-discovered file, run it through the
-      //    same live-update pipeline the gen handler uses. This
-      //    covers the --out-dir case (where the gen handler
-      //    doesn't know the per-call output filenames).
+      // 2. Run each newly-discovered file through the same live-update
+      //    pipeline the gen handler uses (covers the --out-dir case).
+      const imgActive = _isImageJobActive();
       for (const p of fresh) {
-        // Only push as a thumbnail if it's an image file —
-        // the gen pipeline produces .png / .jpg / .jpeg / .webp.
+        // Thumbnail push only for images AND only while an image job is
+        // actually running (P4.5).
         const ext = (p.split('.').pop() || '').toLowerCase();
-        if (['png', 'jpg', 'jpeg', 'webp'].includes(ext)) {
+        if (imgActive && ['png', 'jpg', 'jpeg', 'webp'].includes(ext)) {
           notifyImageGenerated(p);
         }
-        // Add the .fb-item-new class to the matching row so the
-        // CSS blink animation runs. We look it up by data-path
-        // because the re-render above just created fresh DOM
-        // nodes (so the old node references are stale).
+        // Blink the row (data-path lookup — the re-render just created
+        // fresh DOM nodes).
         const row = document.querySelector(`.fb-item[data-path="${CSS.escape(p)}"]`);
         if (row) row.classList.add('fb-item-new');
       }

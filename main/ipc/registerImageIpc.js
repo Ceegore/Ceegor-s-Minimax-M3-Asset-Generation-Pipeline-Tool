@@ -41,16 +41,19 @@ const imageOptimizer = require('../../src/imageOptimizer');
 const imageResizer = require('../../src/imageResize');
 const { authorizePath: _authorizePath } = require('./grantAuthorizer');
 const { wrapInpaintHandler } = require('./legacyAdapter');
+// P1-A (360° Audit H-001): secure IPC wrapper.
+const { secureHandle } = require('./secureHandle');
 
 /**
  * @param {{ appRoot: string }} deps
  */
-function register(_deps) {
+function register(deps) {
+  const getMainWindow = (deps && typeof deps.getMainWindow === 'function') ? deps.getMainWindow : () => null;
   // R3.2.5: result passes through `adaptInpaintResult` (validates
   // the 9 contract fields; the legacy envelope already has
   // `outputPath` and `error` so no path-Mapping or stderr-fallback
   // is needed). Backend is 'sharp'.
-  ipcMain.handle('image:optimize', wrapInpaintHandler(async (_e, srcPath, opts, grantId) => {
+  secureHandle('image:optimize', { getMainWindow }, wrapInpaintHandler(async (_e, srcPath, opts, grantId) => {
     const empty = {
       ok: false, error: '', outputPath: null,
       inputSize: 0, outputSize: 0, savedBytes: 0, savedPercent: 0,
@@ -98,7 +101,7 @@ function register(_deps) {
   // the final (width, height) pair — when the aspect-ratio link is on the
   // pair already preserves the source AR, so fit:'fill' never distorts; when
   // off, fill honours the exact (possibly mismatched) target.
-  ipcMain.handle('image:resize', async (_e, srcPath, opts, grantId) => {
+  secureHandle('image:resize', { getMainWindow }, async (_e, srcPath, opts, grantId) => {
     const empty = {
       ok: false, error: '', outputPath: null,
       inputSize: 0, outputSize: 0,
@@ -137,7 +140,7 @@ function register(_deps) {
     }
   });
 
-  ipcMain.handle('image:metadata', async (_e, srcPath, grantId) => {
+  secureHandle('image:metadata', { getMainWindow }, async (_e, srcPath, grantId) => {
     const empty = { ok: false, width: 0, height: 0, format: '' };
     if (!srcPath || typeof srcPath !== 'string') return { ...empty, error: 'Source path is required.' };
     const readAuthz = _authorizePath(grantId, 'read', srcPath);
@@ -164,7 +167,7 @@ function register(_deps) {
   // mmx hardcodes the image tab's output extension to .png, but the CDN bytes
   // it downloads are sometimes JPEG. Called right after a successful
   // generation so the on-disk name always matches the real content.
-  ipcMain.handle('image:fixExtension', async (_e, filePath, grantId) => {
+  secureHandle('image:fixExtension', { getMainWindow }, async (_e, filePath, grantId) => {
     const empty = { ok: false, path: filePath, renamed: false, error: '' };
     if (!filePath || typeof filePath !== 'string') {
       return { ...empty, error: 'Path is required.' };
@@ -219,7 +222,7 @@ function register(_deps) {
   // any realistic raster, small enough that a compromised renderer can't
   // trivially OOM the main process.
   const IMAGE_MAX_BASE64_CHARS = Math.ceil(256 * 1024 * 1024 * 4 / 3);
-  ipcMain.handle('image:writeBase64', async (_e, outPath, base64Data, grantId) => {
+  secureHandle('image:writeBase64', { getMainWindow, maxPayloadBytes: 64 * 1024 * 1024 }, async (_e, outPath, base64Data, grantId) => {
     try {
       if (!outPath || typeof outPath !== 'string') {
         return { ok: false, error: 'Output path is required.' };
@@ -254,7 +257,7 @@ function register(_deps) {
     }
   });
 
-  ipcMain.handle('image:refExists', async (_e, p) => {    if (!p || typeof p !== 'string') return { ok: true, exists: false };
+  secureHandle('image:refExists', { getMainWindow }, async (_e, p) => {    if (!p || typeof p !== 'string') return { ok: true, exists: false };
     const trimmed = p.trim();
     // http(s) references are validated by the API server, not the
     // filesystem — report them as "exists" so the renderer doesn't block

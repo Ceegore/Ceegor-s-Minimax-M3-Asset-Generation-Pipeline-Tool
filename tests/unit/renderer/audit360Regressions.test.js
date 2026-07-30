@@ -389,7 +389,9 @@ test('M2: _markJobDone emits job-updated but NOT job-removed (revert guard)', ()
 test('M3: registerBatchesIpc batches:get returns defaultBatches() on error, not [] (revert guard)', () => {
   const code = fs.readFileSync(path.join(ROOT, 'main', 'ipc', 'registerBatchesIpc.js'), 'utf8');
   // The bug: catch returned `[]`. The fix returns batchMod.defaultBatches().
-  const getMatch = code.match(/ipcMain\.handle\('batches:get'[\s\S]*?\}\s*\);/);
+  // P1-A (C-001): registrars now use the secureHandle wrapper instead of
+  // bare ipcMain.handle — accept either spelling so this guard keeps working.
+  const getMatch = code.match(/(?:ipcMain\.handle|secureHandle)\('batches:get'[\s\S]*?\}\s*\);/);
   assert.ok(getMatch, 'could not locate batches:get handler');
   assert.ok(/defaultBatches\(\)/.test(getMatch[0]),
     'batches:get must return defaultBatches() on error (M3 regression: it used to return [])');
@@ -438,9 +440,17 @@ test('LOW-2: ArchiveService.readChunk has no dead cur variable (revert guard)', 
   // lockstep) — removed in the fix. Assert it's gone.
   assert.ok(!/\bcur\b/.test(fn),
     'readChunk must not contain the dead `cur` variable (LOW-2 regression: it was always equal to `pos`)');
-  // The fix uses `pos >= offset` for the comparison (not `cur`).
-  assert.ok(/pos\s*>=\s*offset/.test(fn),
-    'readChunk must compare pos against offset directly (LOW-2)');
+  // P2-D (M-018): the scan-from-0 `pos >= offset` implementation was
+  // replaced by a true streaming read that seeks straight to the offset
+  // (fs.readSync with an explicit position) instead of decoding the whole
+  // file. Pin the streaming contract: the read cursor starts AT the offset
+  // and readSync is positional.
+  assert.ok(/let pos = offset/.test(fn),
+    'readChunk must start its read cursor at the byte offset (P2-D streaming, supersedes the LOW-2 pos>=offset scan)');
+  assert.ok(/fs\.readSync\(fd,\s*buf,\s*0,\s*toRead,\s*pos\)/.test(fn),
+    'readChunk must use positional fs.readSync so it never decodes bytes before the offset (P2-D / M-018)');
+  assert.ok(!/readFileSync/.test(fn),
+    'readChunk must NOT slurp the whole archive with readFileSync (M-018 regression)');
 });
 
 // =====================================================================
@@ -457,11 +467,295 @@ test('LOW-4: src/fileBrowser.js reveal() returns a boolean (revert guard)', () =
 
 test('LOW-4: registerFileBrowserIpc fb:reveal propagates the reveal() result (revert guard)', () => {
   const code = fs.readFileSync(path.join(ROOT, 'main', 'ipc', 'registerFileBrowserIpc.js'), 'utf8');
-  const handlerMatch = code.match(/ipcMain\.handle\('fb:reveal'[\s\S]*?\}\s*\);/);
+  // P1-A (C-001): accept the secureHandle wrapper spelling too.
+  const handlerMatch = code.match(/(?:ipcMain\.handle|secureHandle)\('fb:reveal'[\s\S]*?\}\s*\);/);
   assert.ok(handlerMatch, 'could not locate fb:reveal handler');
   const handler = handlerMatch[0];
   assert.ok(/fb\.reveal\(p\)/.test(handler) && /revealed/.test(handler),
     'fb:reveal handler must capture the reveal() return value and branch on it (LOW-4)');
   assert.ok(/ok:\s*false/.test(handler),
     'fb:reveal handler must return ok:false when reveal() fails (LOW-4 regression: it always returned ok:true)');
+});
+
+// =====================================================================
+// P4.5 (DB-H-005): preview commits are revision-guarded
+// =====================================================================
+test('P4.5: fileBrowser2a preview onload commits only if {revision, path} still current (revert guard)', () => {
+  const code = fs.readFileSync(path.join(ROOT, 'renderer', 'services', 'fileBrowser2a.js'), 'utf8');
+  assert.ok(/const rev = \(state\._previewRevision = \(state\._previewRevision \|\| 0\) \+ 1\)/.test(code),
+    'previewImageFromFile must capture a preview revision at click time (DB-H-005)');
+  assert.ok(/state\._previewRevision === rev && state\._lastPreviewPath === p/.test(code),
+    'the async onload commit must be gated on the revision AND path still being current (DB-H-005: a slow decode must not clobber a newer preview)');
+  // Every preview-mode change bumps the revision so pending commits void:
+  // the null-reset branch and the multi-image grid path each bump too.
+  const bumps = code.match(/state\._previewRevision = \(state\._previewRevision \|\| 0\) \+ 1/g) || [];
+  assert.ok(bumps.length >= 3,
+    `all three preview-mode changes (single, null reset, grid) must bump _previewRevision — found ${bumps.length} bump(s)`);
+});
+
+// =====================================================================
+// P4.5 (DB-H-006): gen poller binds to the start-of-run dir + image jobs
+// =====================================================================
+test('P4.5: fileBrowser2b poller binds to an immutable pollDir (revert guard)', () => {
+  const code = fs.readFileSync(path.join(ROOT, 'renderer', 'services', 'fileBrowser2b.js'), 'utf8');
+  assert.ok(/const pollDir = state\.fbDir/.test(code),
+    'startGenPolling must capture state.fbDir ONCE as an immutable pollDir (DB-H-006: per-tick re-reads re-pointed the diff at whatever folder the user browsed to)');
+  const fnMatch = code.match(/async function startGenPolling\(\) \{[\s\S]*?\n\}/);
+  assert.ok(fnMatch, 'could not locate startGenPolling in fileBrowser2b.js');
+  assert.ok(!/fbList\(state\.fbDir/.test(fnMatch[0]),
+    'the poller must never fbList(state.fbDir) directly — all listing goes through the captured pollDir (DB-H-006)');
+  assert.ok(/if \(state\.fbDir !== pollDir\) return;/.test(fnMatch[0]),
+    'the tick must skip render/notify when the user navigated away from the polled dir (DB-H-006)');
+});
+
+test('P4.5: fileBrowser2b thumbnail pushes require an active IMAGE job (revert guard)', () => {
+  const code = fs.readFileSync(path.join(ROOT, 'renderer', 'services', 'fileBrowser2b.js'), 'utf8');
+  assert.ok(/function _isImageJobActive\(\)/.test(code),
+    'fileBrowser2b must define _isImageJobActive (DB-H-006: a speech/music run must not thumbnail unrelated image files)');
+  assert.ok(/\.some\(\(j\) => j && \(j\.tab === 'image' \|\| j\.type === 'image'\)\)/.test(code),
+    '_isImageJobActive must check JobRunner.activeJobs() for an image-tab job');
+  assert.ok(/if \(imgActive && \[/.test(code),
+    'the notifyImageGenerated push must be gated on imgActive (P4.5)');
+});
+
+// =====================================================================
+// P4.4 (DB-H-004): audio cut writes atomically via a uuid temp file
+// =====================================================================
+test('P4.4: AudioTrimCut.cut ffmpeg writes to a uuid temp in the dest folder, probes it, then renames (revert guard)', () => {
+  const code = fs.readFileSync(path.join(ROOT, 'src', 'audio', 'AudioTrimCut.js'), 'utf8');
+  assert.ok(!/args\.push\('-y', dstPath\)/.test(code),
+    'ffmpeg must NEVER write straight to dstPath (DB-H-004: a killed encode left a truncated file over the original)');
+  assert.ok(/const tmpPath = path\.join\(path\.dirname\(dstPath\), `\.cut-\$\{crypto\.randomUUID\(\)\}\.tmp\.\$\{ext\}`\)/.test(code),
+    'the temp file must be uuid-named IN the destination folder (same volume ⇒ atomic rename)');
+  assert.ok(/args\.push\('-y', tmpPath\)/.test(code),
+    'ffmpeg must target the temp path');
+  assert.ok(/await probe\(tmpPath\)/.test(code),
+    'the finished temp must be probed for a real duration BEFORE it replaces anything (DB-H-004)');
+  assert.ok(/fs\.renameSync\(tmpPath, dstPath\)/.test(code),
+    'the temp must be moved into place with an atomic rename');
+  // Every failure path must clean the temp up and leave the original alone.
+  const cleanups = code.match(/cleanupTmp\(\);/g) || [];
+  assert.ok(cleanups.length >= 5,
+    `timeout, spawn error, non-zero exit, failed validation, and failed rename must all delete the temp — found ${cleanups.length} cleanupTmp() call(s)`);
+  assert.ok(/the original file was preserved/.test(code),
+    'the validation-failure error must state that the original was preserved');
+});
+
+// =====================================================================
+// P5 (DA-M-007 / DA-M-008): Telea heal writes atomically + PNG extension
+// =====================================================================
+test('P5 DA-M-007: Telea heal encodes to a uuid temp, validates dims, then renames (revert guard)', () => {
+  const code = fs.readFileSync(path.join(ROOT, 'main', 'ipc', 'registerInpaintIpc.js'), 'utf8');
+  assert.ok(!/\.toFile\(outPath\)/.test(code),
+    'Telea must NEVER sharp().toFile(outPath) directly (DA-M-007: a killed encode left a truncated file at the destination)');
+  assert.ok(/const tmpOut = path\.join\(path\.dirname\(outPath\), `\.telea-\$\{crypto\.randomUUID\(\)\}\.tmp\.png`\)/.test(code),
+    'the encode target must be a uuid temp in the SAME folder (same volume ⇒ atomic rename)');
+  assert.ok(/await sharp\(tmpOut\)\.metadata\(\)/.test(code),
+    'the encoded temp must be validated (metadata re-read) before it replaces anything');
+  assert.ok(/check\.width !== w \|\| check\.height !== h/.test(code),
+    'validation must assert the decoded dims match the source');
+  assert.ok(/await fs\.promises\.rename\(tmpOut, outPath\)/.test(code),
+    'the validated temp must be moved into place with an atomic rename');
+  assert.ok(/await fs\.promises\.unlink\(tmpOut\)/.test(code),
+    'the failure path must delete the temp so no partial .png is left behind');
+});
+
+test('P5 DA-M-008: Telea output extension is forced to .png to match the encoder (revert guard)', () => {
+  const code = fs.readFileSync(path.join(ROOT, 'main', 'ipc', 'registerInpaintIpc.js'), 'utf8');
+  assert.ok(/function forcePngExt\(p\)/.test(code),
+    'registerInpaintIpc must define forcePngExt (DA-M-008)');
+  assert.ok(/const outPath = forcePngExt\(args\.outPath \|\| deriveOutPath\(srcPath, '_healed'\)\)/.test(code),
+    'the resolved outPath must be routed through forcePngExt — a .jpg source must not yield PNG bytes mislabelled .jpg');
+  // Behavioural check of the helper itself.
+  const m = code.match(/function forcePngExt\(p\) \{[\s\S]*?\n\}/);
+  assert.ok(m, 'forcePngExt must be defined');
+  // eslint-disable-next-line no-new-func
+  const forcePngExt = new Function(m[0] + '; return forcePngExt;')();
+  assert.equal(forcePngExt('C:/x/y.jpg'), 'C:/x/y.png', '.jpg → .png');
+  assert.equal(forcePngExt('C:/x/y.png'), 'C:/x/y.png', '.png unchanged');
+  assert.equal(forcePngExt('C:/x/y'), 'C:/x/y.png', 'no extension → .png appended');
+  assert.equal(forcePngExt('C:/dir.png/y'), 'C:/dir.png/y.png', 'a dot in a dir name is not an extension');
+});
+
+// =====================================================================
+// P5 (M-038): grant errors must not echo the allowed root paths
+// =====================================================================
+test('P5 M-038: pathGrant:mint rejection does not leak the allowed roots to the renderer (revert guard)', () => {
+  const code = fs.readFileSync(path.join(ROOT, 'main', 'ipc', 'registerPathGrantIpc.js'), 'utf8');
+  // The returned bad() must not interpolate the roots list...
+  assert.ok(!/return bad\([^)]*roots\.join/.test(code),
+    'the mint rejection must NOT return the allowed roots to the renderer (M-038: that leaked the user\'s drive/folder layout)');
+  // ...but the main-side forensic log may still record them.
+  assert.ok(/console\.error\('\[pathGrant:mint\] REJECTED/.test(code),
+    'the root detail must stay main-side in the console.error forensic line');
+  assert.ok(/return bad\('Path is not in an allowed root\./.test(code),
+    'the renderer must get a generic, root-free rejection message');
+});
+
+// =====================================================================
+// P5 (M-039): job:list must not expose job meta (srcPath/dstPath)
+// =====================================================================
+test('P5 M-039: job:list projects only safe fields (no meta/paths) (revert guard)', () => {
+  const code = fs.readFileSync(path.join(ROOT, 'main', 'ipc', 'registerJobIpc.js'), 'utf8');
+  const handler = code.match(/secureHandle\('job:list'[\s\S]*?\}\);/);
+  assert.ok(handler, 'could not locate the job:list handler');
+  assert.ok(!/return \{ ok: true, jobs \};\s*\}\);/.test(handler[0]) || /\.map\(/.test(handler[0]),
+    'job:list must not return getActiveJobs() verbatim (M-039: meta carries srcPath/dstPath)');
+  assert.ok(/\.map\(\(j\) => \(\{/.test(handler[0]),
+    'job:list must project each job through an explicit allowlist');
+  assert.ok(!/meta:/.test(handler[0]),
+    'the job:list projection must NOT include meta');
+  for (const f of ['jobId', 'runId', 'backend', 'startedAt', 'alive']) {
+    assert.ok(handler[0].includes(f + ':'), `the job:list projection must keep ${f}`);
+  }
+});
+
+// =====================================================================
+// P5 (M-046): renderer log rotation preserves the previous session
+// =====================================================================
+test('P5 M-046: startup log handling preserves the previous session (revert guard)', () => {
+  const code = fs.readFileSync(path.join(ROOT, 'main', 'index.js'), 'utf8');
+  assert.ok(!/fs\.writeFileSync\(p, ''\)/.test(code),
+    'the writability probe must NOT truncate the existing log (M-046: it wiped the previous session on every start)');
+  assert.ok(/fs\.accessSync\(p, fs\.constants\.W_OK\)/.test(code),
+    'writability must be probed non-destructively via accessSync');
+  assert.ok(/fs\.renameSync\(RENDERER_LOG, RENDERER_LOG \+ '\.prev'\)/.test(code),
+    'the existing log must be rotated to .prev (preserved) before the new session header is written');
+});
+
+// =====================================================================
+// P5 batch: M-027, DA-M-002, DA-M-004, DA-M-014, DA-M-015, DA-M-017,
+// DA-M-019, DA-M-022, DB-M-006, DB-M-007, DB-M-008, DB-M-012
+// =====================================================================
+test('P5 M-027: archive redacts secrets and strips absolute paths (revert guard)', () => {
+  const code = fs.readFileSync(path.join(ROOT, 'src', 'services', 'ArchiveService.js'), 'utf8');
+  assert.ok(/deepRedact/.test(code), 'ArchiveService must import/use deepRedact');
+  assert.ok(/_sanitizeSummary/.test(code), 'append() must route through _sanitizeSummary');
+  assert.ok(/path\.basename\(p\)/.test(code), 'outputPaths must be reduced to basenames');
+});
+
+test('P5 DA-M-002: alpha probe is tri-state, JPEG blocked on unknown (revert guard)', () => {
+  const code = fs.readFileSync(path.join(ROOT, 'renderer', 'overlays', 'imageEditorActions.js'), 'utf8');
+  assert.ok(/function probeAlpha\(session\)/.test(code), 'probeAlpha must exist');
+  assert.ok(/ok: false, hasAlpha: false, error:/.test(code), 'probeAlpha must return {ok:false} on error');
+  assert.ok(/!alphaProbe\.ok/.test(code), 'onSave must block JPEG when alpha is unknown');
+  assert.ok(/!innerProbe\.ok \|\| innerProbe\.hasAlpha/.test(code), 'doSave must fail closed (use matte) on unknown alpha');
+});
+
+test('P5 DA-M-004: existence check fail-closed in save (revert guard)', () => {
+  const code = fs.readFileSync(path.join(ROOT, 'renderer', 'overlays', 'imageEditorActions.js'), 'utf8');
+  assert.ok(!/existence check failed .* proceed with original path/.test(code),
+    'the old fail-open comment must be gone');
+  assert.ok(/DA-M-004: fail CLOSED/.test(code), 'catch block must auto-version (fail closed)');
+});
+
+test('P5 DA-M-014: crop pass-through requires BOTH axes unset (revert guard)', () => {
+  const code = fs.readFileSync(path.join(ROOT, 'renderer', 'pipeline', 'pipelineOps.js'), 'utf8');
+  assert.ok(/column === 'crop' && !Number\(settings\.w\) && !Number\(settings\.h\)/.test(code),
+    'crop passedThrough must use AND (both axes), not OR');
+});
+
+test('P5 DA-M-015: skipIfTransparent actually checks alpha (revert guard)', () => {
+  const code = fs.readFileSync(path.join(ROOT, 'renderer', 'pipeline', 'pipelineOps.js'), 'utf8');
+  assert.ok(/settings\.skipIfTransparent/.test(code), 'doRemoveBg must read skipIfTransparent');
+  assert.ok(/hasTransparent/.test(code), 'must sample alpha before deciding to skip');
+});
+
+test('P5 DA-M-017: clipboard temp files cleaned in finally (revert guard)', () => {
+  const code = fs.readFileSync(path.join(ROOT, 'renderer', 'pipeline', 'pipelineImport.js'), 'utf8');
+  assert.ok(/tempPaths/.test(code), 'must track temp paths');
+  assert.ok(/finally/.test(code), 'cleanup must be in a finally block');
+  assert.ok(/fbDelete\(tp/.test(code), 'must delete each temp file');
+  assert.ok(/dirR && dirR\.ok === false/.test(code), 'must check fbEnsureDir result');
+});
+
+test('P5 DA-M-019: removeItems returns actual counts (revert guard)', () => {
+  const code = fs.readFileSync(path.join(ROOT, 'renderer', 'pipeline', 'pipelineClear.js'), 'utf8');
+  assert.ok(/return \{ removed: removedCount, failed: failedCount/.test(code),
+    'removeItems must return actual counts');
+  assert.ok(/res\.removed/.test(code), 'clearFinalColumn must use actual removed count');
+});
+
+test('P5 DA-M-022: loadFromDisc shows error on failure (revert guard)', () => {
+  const code = fs.readFileSync(path.join(ROOT, 'renderer', 'pipeline', 'pipelineImport.js'), 'utf8');
+  assert.ok(/res && res\.ok && res\.added > 0/.test(code),
+    'loadFromDisc must check res.ok && added>0 for success');
+  assert.ok(/Import failed/.test(code), 'must show error text on failure');
+});
+
+test('P5 DB-M-006: no hardcoded video quota numbers (revert guard)', () => {
+  const bm = fs.readFileSync(path.join(ROOT, 'renderer', 'tabs', 'batchManager.js'), 'utf8');
+  const help = fs.readFileSync(path.join(ROOT, 'renderer', 'sections', 'section23_Centralized_help_system.js'), 'utf8');
+  assert.ok(!/3 video generations per day/.test(bm), 'batchManager must not hardcode quota');
+  assert.ok(!/3 per week/.test(help), 'help system must not hardcode quota');
+});
+
+test('P5 DB-M-007/008: audio existence checks fail closed (revert guard)', () => {
+  const code = fs.readFileSync(path.join(ROOT, 'renderer', 'audioCutter.js'), 'utf8');
+  assert.ok(/catch\(\(\) => \(\{ ok: false, exists: true \}\)\)/.test(code),
+    'single export fbExists catch must return occupied (DB-M-007)');
+  assert.ok(/DB-M-008: fail CLOSED/.test(code), 'batch fsExists catch must return true (occupied)');
+});
+
+test('P5 DB-M-012: fmtTime rounds total ms before decomposing (revert guard)', () => {
+  const code = fs.readFileSync(path.join(ROOT, 'renderer', 'audioCutter.js'), 'utf8');
+  assert.ok(/Math\.round\(sec \* 1000\)/.test(code), 'must round total ms first');
+  assert.ok(/totalMs % 1000/.test(code), 'ms must come from the rounded total');
+  assert.ok(!/Math\.round\(\(sec - Math\.floor\(sec\)\) \* 1000\)/.test(code),
+    'the old per-component rounding (produces .1000) must be gone');
+});
+
+// =====================================================================
+// P5.6 Release Hardening (H-013, M-024, M-033, M-035, M-036)
+// =====================================================================
+
+test('P5.6 H-013: minisign signing script exists and signs the manifest (revert guard)', () => {
+  const scriptPath = path.join(ROOT, 'scripts', 'sign-release.js');
+  assert.ok(fs.existsSync(scriptPath), 'scripts/sign-release.js must exist');
+  const code = fs.readFileSync(scriptPath, 'utf8');
+  assert.ok(/minisign/.test(code), 'must use minisign');
+  assert.ok(/\.minisig/.test(code), 'must produce a .minisig detached signature');
+  assert.ok(/--verify/.test(code), 'must support verification mode');
+});
+
+test('P5.6 M-024: build produces per-file FILES.sha256 manifest (revert guard)', () => {
+  const code = fs.readFileSync(path.join(ROOT, 'scripts', 'zip-portable.js'), 'utf8');
+  assert.ok(/FILES\.sha256/.test(code), 'build must write FILES.sha256 per-file manifest');
+  const installer = fs.readFileSync(path.join(ROOT, 'Install MiniMax Asset Tool.cmd'), 'utf8');
+  assert.ok(/FILES\.sha256/.test(installer), 'installer must verify against FILES.sha256');
+  assert.ok(/integrity check/i.test(installer), 'installer must report integrity failures');
+});
+
+test('P5.6 M-033: Electron fuse configuration script exists (revert guard)', () => {
+  const scriptPath = path.join(ROOT, 'scripts', 'set-fuses.js');
+  assert.ok(fs.existsSync(scriptPath), 'scripts/set-fuses.js must exist');
+  const code = fs.readFileSync(scriptPath, 'utf8');
+  assert.ok(/RunAsNode.*false/.test(code), 'RunAsNode fuse must be disabled');
+  assert.ok(/OnlyLoadAppFromAsar.*true/.test(code), 'OnlyLoadAppFromAsar must be enabled');
+  assert.ok(/EnableNodeCliInspectArguments.*false/.test(code), 'CLI inspect must be disabled');
+});
+
+test('P5.6 M-035: CycloneDX SBOM generation script exists (revert guard)', () => {
+  const scriptPath = path.join(ROOT, 'scripts', 'generate-sbom.js');
+  assert.ok(fs.existsSync(scriptPath), 'scripts/generate-sbom.js must exist');
+  const code = fs.readFileSync(scriptPath, 'utf8');
+  assert.ok(/CycloneDX/.test(code), 'must produce CycloneDX format');
+  assert.ok(/specVersion.*1\.5/.test(code), 'must target spec 1.5');
+  assert.ok(/purl/.test(code), 'must include package URLs');
+});
+
+test('P5.6 M-036: SECURITY.md and dependabot.yml exist (revert guard)', () => {
+  assert.ok(fs.existsSync(path.join(ROOT, 'SECURITY.md')), 'SECURITY.md must exist');
+  assert.ok(fs.existsSync(path.join(ROOT, '.github', 'dependabot.yml')), '.github/dependabot.yml must exist');
+  const sec = fs.readFileSync(path.join(ROOT, 'SECURITY.md'), 'utf8');
+  assert.ok(/Reporting a Vulnerability/.test(sec), 'must have reporting instructions');
+  const dep = fs.readFileSync(path.join(ROOT, '.github', 'dependabot.yml'), 'utf8');
+  assert.ok(/package-ecosystem.*npm/.test(dep), 'must monitor npm');
+  assert.ok(/github-actions/.test(dep), 'must monitor GitHub Actions');
+});
+
+test('P5.6 M-034: CI uses npm ci (lockfile-verified install) (revert guard)', () => {
+  const ci = fs.readFileSync(path.join(ROOT, '.github', 'workflows', 'ci.yml'), 'utf8');
+  assert.ok(/npm ci/.test(ci), 'CI must use npm ci (not npm install)');
+  assert.ok(!/npm install/.test(ci), 'CI must NOT use npm install');
 });

@@ -7,12 +7,14 @@ const reEsrgan = require('../../src/realesrgan');
 const isNetBg = require('../../src/isnetbg');
 const { sanitize: sanitizeUrl } = require('../utils/UrlSanitizer');
 const { pickAndCopy } = require('../services/InstallPickCopyService');
+// P1-A (360° Audit H-001): secure IPC wrapper.
+const { secureHandle } = require('./secureHandle');
 
 /**
  * @param {{ getMainWindow: () => (Electron.BrowserWindow|null), appRoot: string }} deps
  */
 function register({ getMainWindow, appRoot }) {
-  ipcMain.handle('install:openUrl', async (_e, url) => {
+  secureHandle('install:openUrl', { getMainWindow }, async (_e, url) => {
     // Defense-in-depth: the sanitizer is the authoritative gate —
     // anything not passing it is dropped before we hand it to the OS.
     // One authoritative call suffices (sanitizeUrl is pure, and the
@@ -28,7 +30,7 @@ function register({ getMainWindow, appRoot }) {
     }
   });
 
-  ipcMain.handle('install:pickAndCopy', async (event, kind) => {
+  secureHandle('install:pickAndCopy', { getMainWindow }, async (event, kind) => {
     try {
       const win = event.sender;
       const showOpenDialog = (opts) => dialog.showOpenDialog(win, opts);
@@ -44,7 +46,7 @@ function register({ getMainWindow, appRoot }) {
     }
   });
 
-  ipcMain.handle('assets:reset', async () => {
+  secureHandle('assets:reset', { getMainWindow }, async () => {
     try {
       const fs = require('fs');
       const assetPaths = require('../../src/assetPaths');

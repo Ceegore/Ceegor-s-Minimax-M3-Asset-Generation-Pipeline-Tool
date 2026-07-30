@@ -77,10 +77,12 @@ test('R6.5 expectedCalls reads the tab variants selector BEFORE the reduce (not 
     'R6.5: must read .variants-select before expectedCalls');
   assert.match(SRC, /const _dv = _vr \? Math\.max\(1,\s*Math\.min\(5/,
     'R6.5: must compute _dv (default variants) from the selector');
-  assert.match(SRC, /: _dv\);/,
+  assert.match(SRC, /: _dv;/,
     'R6.5: expectedCalls reduce must use _dv (not the runFn-scoped variantsCount)');
   // Ensure the OLD bug pattern is NOT present (variantsCount in expectedCalls).
-  const expectedCallsBlock = SRC.slice(SRC.indexOf('const expectedCalls'), SRC.indexOf('if (expectedCalls > 1'));
+  // P4.3 moved the reduce into computeExpectedCalls, so the guarded block runs
+  // from the function to the skipConfirm gate in startBatchGen.
+  const expectedCallsBlock = SRC.slice(SRC.indexOf('function computeExpectedCalls'), SRC.indexOf('if (!opts.skipConfirm && expectedCalls > 1'));
   assert.ok(!expectedCallsBlock.includes(': variantsCount'),
     'R6.5: expectedCalls must NOT reference the runFn-scoped variantsCount');
 });

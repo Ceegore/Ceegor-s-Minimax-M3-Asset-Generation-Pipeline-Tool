@@ -33,7 +33,7 @@ function openBatchManager(tabKey) {
   showModal((m, close) => {
     m.appendChild(el('h2', {}, `BatchGen — ${tabName} Tab`));
     m.appendChild(el('p', { style: 'color: var(--fg-2); font-size: 12px; margin-top: 0;' },
-      `Enter up to 100 prompts/texts. They will be generated one after another with the tab's current options + the selected style preset. "Start Batch" runs them sequentially in the tab.${tabName === 'Video' ? ' Note: the quota is 3 video generations per day and 21 per week.' : ''}`));
+      `Enter up to 100 prompts/texts. They will be generated one after another with the tab's current options + the selected style preset. "Start Batch" runs them sequentially in the tab.${tabName === 'Video' ? ' Note: video generations are subject to plan quota limits — check the quota indicator in the top bar for your current allowance.' : ''}`));
 
     // List of textareas
     const list = el('div', { class: 'batch-list' });
@@ -158,16 +158,21 @@ function openBatchManager(tabKey) {
   });
 }
 
-// R6.5 / T6: expected paid API calls for a queue (each variant = 1 call;
-// defective entries are skipped). Shared by startBatchGen's own confirm
-// below and the combined all-types confirmation in batchImportHelper.js.
-function computeExpectedCalls(tabKey, items) {
+// R6.5 / T6: expected paid units for a queue (each variant = 1 API call;
+// defective entries are skipped). P4.3 (DB-H-003): for image, --n multiplies
+// the billable images per call — pass { callsOnly: true } for the raw call
+// count. Shared by startBatchGen's own confirm below and the combined
+// all-types confirmation in batchImportHelper.js.
+function computeExpectedCalls(tabKey, items, opts) {
   const _vr = $(`#tab-${tabKey}`) && $(`#tab-${tabKey}`).querySelector('.variants-select');
   const _dv = _vr ? Math.max(1, Math.min(5, parseInt(_vr.value, 10) || 1)) : 1;
   return (items || []).reduce((s, it) => {
     if (it && typeof it === 'object' && Array.isArray(it._defective) && it._defective.length) return s;
     const v = (it && typeof it === 'object') ? (it.variants || it['--variants']) : undefined;
-    return s + (v !== undefined ? Math.max(1, Math.min(5, parseInt(v, 10) || 1)) : _dv);
+    const calls = v !== undefined ? Math.max(1, Math.min(5, parseInt(v, 10) || 1)) : _dv;
+    const nRaw = (it && typeof it === 'object') ? (it.n || it['--n'] || (it.params && it.params.n)) : undefined;
+    const n = (tabKey === 'image' && !(opts && opts.callsOnly) && nRaw !== undefined) ? Math.max(1, Math.min(9, parseInt(nRaw, 10) || 1)) : 1;
+    return s + calls * n;
   }, 0);
 }
 
@@ -196,34 +201,29 @@ async function startBatchGen(tabKey, opts) {
   if (!opts.skipConfirm && tabKey === 'video' && items.length > 3) {
     if (!await asyncConfirm(`This batch has ${items.length} videos. Your Token Plan includes only 3 free video generations per week — the rest will fail with a quota error. Continue?`)) return;
   }
-  // R6.5: show expected paid API calls (each variant = 1 call; defective skipped).
-  const expectedCalls = computeExpectedCalls(tabKey, items);
-  if (!opts.skipConfirm && expectedCalls > 1 && !await asyncConfirm(`Batch: ${items.length} item(s) → ${expectedCalls} paid API call(s). Continue?`)) return;
+  // R6.5/P4.3 (DB-H-003): expected cost — units = calls × image --n; the hard max-units gate applies even with skipConfirm (config.txt batch_max_units).
+  const expectedCalls = computeExpectedCalls(tabKey, items, { callsOnly: true });
+  const expectedUnits = computeExpectedCalls(tabKey, items);
+  const maxUnits = Math.max(1, parseInt(state.config && state.config.batch_max_units, 10) || 200);
+  if (expectedUnits > maxUnits) { toast(`Batch would generate ${expectedUnits} unit(s) — over the ${maxUnits}-unit limit (batch_max_units in config.txt). Trim the queue or raise the limit.`, 'err', 8000); return; }
+  const costMsg = expectedUnits > expectedCalls ? `Batch: ${items.length} item(s) → this will generate up to ${expectedUnits} images (${expectedCalls} paid API call(s)). Continue?` : `Batch: ${items.length} item(s) → ${expectedCalls} paid API call(s). Continue?`;
+  if (!opts.skipConfirm && expectedCalls > 1 && !await asyncConfirm(costMsg)) return;
 
   window._batchAbortByTab[tabKey] = false;
   window._batchRunningByTab[tabKey] = true;
-  // Default behaviour removes a successful item from
-  // state.batches[tabKey] immediately after it finishes, so the list
-  // always reflects only upcoming work. This can be disabled in
-  // ⚙ Settings → BatchGen ("Keep completed items in list"). Failed
-  // items are NEVER removed — retrying or skipping them is a manual
-  // decision.
+  // Successful items are removed from state.batches[tabKey] as they finish
+  // unless ⚙ Settings → BatchGen "Keep completed items in list" disables it;
+  // failed items are NEVER auto-removed — retry/skip is a manual decision.
   const autoRemove = state.batchesAutoRemove !== false;
   const tabName = tabKey.charAt(0).toUpperCase() + tabKey.slice(1);
-  // Represent the WHOLE batch as one parent JobRunner job (so
-  // ActiveJobsWidget shows a single "Batch: Music (12/20)" row instead
-  // of N individual jobs flickering by) and feed JobSummary.emit() at
-  // the end.
-  //
-  // tabKey: null is deliberate: JobRunner.run()'s per-tab gate
-  // (isTabRunning(tabKey)) checks ANY job on that tab, regardless of
-  // parent/child relationship. Each ITEM's own genBtn.click() ALSO
-  // calls JobRunner.run({tabKey}) for the SAME tab (via the migrated
-  // tab handlers) — if the parent occupied that tab's "wip" slot,
-  // every child item would immediately self-reject. The parent is
-  // tracked (shows in ActiveJobsWidget, gets a progress bar, is
-  // cancellable) without participating in the per-tab mutual exclusion
-  // that only makes sense between actual generation attempts.
+  // Represent the WHOLE batch as one parent JobRunner job (single
+  // ActiveJobsWidget row + progress bar) and feed JobSummary.emit() at the
+  // end. tabKey: null is deliberate: each ITEM's own genBtn.click() calls
+  // JobRunner.run({tabKey}) for the SAME tab (via the migrated tab
+  // handlers) — if the parent occupied that tab's "wip" slot every child
+  // item would immediately self-reject. The parent is tracked (visible,
+  // progress bar, cancellable) without joining the per-tab mutual
+  // exclusion that only makes sense between actual generation attempts.
   const batchResults = [];
   let batchCtrl;
   batchCtrl = window.JobRunner.run({

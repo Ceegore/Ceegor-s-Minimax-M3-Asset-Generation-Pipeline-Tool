@@ -318,45 +318,11 @@
   }
 
   // ---- Action handlers ----
-  function moveBack(item) {
-    const prev = PipelineModel.prevColumn(item.column);
-    if (!prev) return;
-    if (item.column === 'final') {
-      // Keep Back reversible without leaving copies accumulated in final/.
-      const finalFile = item.files.final;
-      if (finalFile) {
-        // KGO-003 fix: check the result and log failed moves instead of silently discarding.
-        window.api.pipelineTrash({ imageId: item.id, files: [finalFile], workspaceId: window.state.pipeline.image.workspaceId })
-          .then((res) => {
-            if (res && Array.isArray(res.failed) && res.failed.length) {
-              if (typeof window.logAction === 'function') window.logAction('pipeline-trash', 'partial-fail', { failed: res.failed });
-              if (typeof toast === 'function') toast('Some files could not be moved to trash (locked?).', 'warn', 5000);
-            }
-          })
-          .catch((err) => {
-            if (typeof window.logAction === 'function') window.logAction('pipeline-trash', 'error', { error: String(err && err.message || err) });
-          });
-      }
-      delete item.files.final;
-
-      if (Array.isArray(item.history)) {
-        for (let i = item.history.length - 1; i >= 0; i--) {
-          const h = item.history[i];
-          if (h.column === 'optimize' && h.next === 'final' && h.nameBefore) {
-            if (!h.consumed) {
-              item.name = h.nameBefore;
-              h.consumed = true;
-            }
-            break;
-          }
-        }
-      }
-    }
-    item.column = prev;
-    item.history.push({ action: 'back', column: prev, ts: Date.now() });
-    PipelineBoard.save();
-    PipelineBoard.render();
-  }
+  // P3.5 (DA-H-008/012): the structural mutations (Back, Finalize) and their
+  // per-item operationId lock live in pipelineCardMutations.js so this file
+  // stays inside its frozen size budget.
+  const moveBack = (item) => window.PipelineCardMutations.moveBack(item);
+  const finalize = (item) => window.PipelineCardMutations.finalize(item);
   // Before running the Resize column, check whether the target is a large
   // enlargement (>120% on either axis). If so, offer the dedicated Upscale
   // instead via the warning popup. For non-resize columns or small
@@ -389,18 +355,6 @@
     item.history.push({ action: 'advance', column: 'upscale', ts: Date.now() });
     PipelineBoard.save();
     PipelineBoard.render();
-  }
-  function finalize(item) {
-    // Copy/move the current file into the final column folder.
-    const board = window.state.pipeline.image;
-    const src = item.files[item.column];
-    if (!src) { PipelineBoard.toast('No file to finalize.', 'warn'); return; }
-    PipelineOps.copyToFinal(item).then(() => {
-      item.column = 'final';
-      item.history.push({ action: 'finalize', column: 'final', ts: Date.now() });
-      PipelineBoard.save();
-      PipelineBoard.render();
-    }).catch((e) => PipelineBoard.toast('Finalize failed: ' + ((e && e.message) || e), 'err'));
   }
   async function replaceFromDisc(item) {
     try {

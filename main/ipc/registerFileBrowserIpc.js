@@ -34,6 +34,8 @@ const { randomUUID } = require('crypto');
 const fb = require('../../src/fileBrowser');
 const pathUtils = require('../../src/pathUtils');
 const { authorizePath: _authorizePath } = require('./grantAuthorizer');
+// P1-A (360° Audit H-001): secure IPC wrapper.
+const { secureHandle } = require('./secureHandle');
 
 const MAX_WRITE_BYTES = 25 * 1024 * 1024;
 
@@ -65,13 +67,14 @@ async function listDrives() {
 /**
  * @param {{ appRoot: string }} deps
  */
-function register(_deps) {
+function register(deps) {
+  const getMainWindow = (deps && typeof deps.getMainWindow === 'function') ? deps.getMainWindow : () => null;
   // ---- Read side: grant-gated (KGO4-009). -------------------------
   // fb:list now requires a grantId so the renderer cannot enumerate
   // arbitrary directories outside the allowed roots. The grant model
   // is consistent with fb:read / fb:write / fb:rename etc.
 
-  ipcMain.handle('fb:list', async (_e, dir, grantId) => {
+  secureHandle('fb:list', { getMainWindow }, async (_e, dir, grantId) => {
     if (!dir || typeof dir !== 'string') return { ok: false, error: 'Path is required.' };
     if (!grantId) return { ok: false, error: 'grantId is required for directory listing.' };
     const authz = _authorizePath(grantId, 'read', dir);
@@ -80,7 +83,7 @@ function register(_deps) {
     catch (e) { return { ok: false, error: String(e.message || e) }; }
   });
 
-  ipcMain.handle('fb:listDrives', async () => {
+  secureHandle('fb:listDrives', { getMainWindow }, async () => {
     try {
       const drives = await listDrives();
       return { ok: true, drives };
@@ -96,7 +99,7 @@ function register(_deps) {
   // used for authorization). A subsequent mutating call requires the
   // renderer to present a grantId — the path that the renderer is
   // showing in the UI is no longer sufficient to authorize a write.
-  ipcMain.handle('fb:set-active-dir', (_e, _dir) => {
+  secureHandle('fb:set-active-dir', { getMainWindow }, (_e, _dir) => {
     return { ok: true, activeDir: null, note: 'R1.3: navigation-only; mutations require a grantId' };
   });
 
@@ -105,7 +108,7 @@ function register(_deps) {
   // fb:mkdir creates a named child of `dir` (fb.mkdir validates
   // `name` is non-empty). Authorize a `mkdir` operation on the
   // parent directory.
-  ipcMain.handle('fb:mkdir', async (_e, dir, name, grantId) => {
+  secureHandle('fb:mkdir', { getMainWindow }, async (_e, dir, name, grantId) => {
     if (typeof dir !== 'string' || typeof name !== 'string' || !dir || !name) {
       return { ok: false, error: 'dir and name are required.' };
     }
@@ -121,7 +124,7 @@ function register(_deps) {
   // `mkdir` on the exact path. A `directory-root` grant covers
   // the path; a plain `directory` grant does NOT (the root itself
   // is never covered per S1 §2.5).
-  ipcMain.handle('fb:ensureDir', async (_e, dir, grantId) => {
+  secureHandle('fb:ensureDir', { getMainWindow }, async (_e, dir, grantId) => {
     if (!dir || typeof dir !== 'string') return { ok: false, error: 'dir is required.' };
     const authz = _authorizePath(grantId, 'mkdir', dir);
     if (!authz.ok) return authz;
@@ -138,7 +141,7 @@ function register(_deps) {
   // grant covers; the new name is a string, not a path. The new
   // path is computed (dir of p + newName) and must still be inside
   // the grant scope.
-  ipcMain.handle('fb:rename', async (_e, p, newName, grantId) => {
+  secureHandle('fb:rename', { getMainWindow }, async (_e, p, newName, grantId) => {
     if (typeof p !== 'string' || typeof newName !== 'string' || !p || !newName) {
       return { ok: false, error: 'p and newName are required.' };
     }
@@ -161,7 +164,7 @@ function register(_deps) {
   // a strict descendant (the grant root itself is never covered per
   // S1 §2.5). A `directory-root` grant (coversRoot:true) covers
   // the root itself.
-  ipcMain.handle('fb:delete', async (_e, p, grantId) => {
+  secureHandle('fb:delete', { getMainWindow }, async (_e, p, grantId) => {
     if (typeof p !== 'string' || !p) return { ok: false, error: 'p is required.' };
     const authz = _authorizePath(grantId, 'delete', p);
     if (!authz.ok) return authz;
@@ -172,7 +175,7 @@ function register(_deps) {
   // fb:move moves `src` into `destDir`. The source needs a `read`
   // capability (or `move` — see PathGrantService). The destination
   // needs a `write` capability. Authorize both.
-  ipcMain.handle('fb:move', async (_e, src, destDir, grantId, destGrantId) => {
+  secureHandle('fb:move', { getMainWindow }, async (_e, src, destDir, grantId, destGrantId) => {
     if (typeof src !== 'string' || typeof destDir !== 'string' || !src || !destDir) {
       return { ok: false, error: 'src and destDir are required.' };
     }
@@ -203,7 +206,7 @@ function register(_deps) {
 
   // fb:copy copies `src` into `destDir`. The source needs `read`
   // (or `copy`); the destination needs `write`. Authorize both.
-  ipcMain.handle('fb:copy', async (_e, src, destDir, grantId, destGrantId) => {
+  secureHandle('fb:copy', { getMainWindow }, async (_e, src, destDir, grantId, destGrantId) => {
     if (typeof src !== 'string' || typeof destDir !== 'string' || !src || !destDir) {
       return { ok: false, error: 'src and destDir are required.' };
     }
@@ -228,7 +231,7 @@ function register(_deps) {
   // is a READ-side operation (no file mutation), so per S1 §3
   // it does NOT need a grant. We keep it ungated for backward
   // compat with the existing file-browser UX.
-  ipcMain.handle('fb:reveal', (_e, p) => {
+  secureHandle('fb:reveal', { getMainWindow }, (_e, p) => {
     if (!p || typeof p !== 'string') return { ok: false, error: 'p is required.' };
     const revealed = fb.reveal(p);
     if (!revealed) return { ok: false, error: 'Could not reveal the file (it may have been moved or deleted).' };
@@ -237,7 +240,7 @@ function register(_deps) {
 
   // fb:openInExplorer opens a NEW Explorer window at the file's
   // parent folder. Read-side; ungated (same as reveal).
-  ipcMain.handle('fb:openInExplorer', async (_e, p) => {
+  secureHandle('fb:openInExplorer', { getMainWindow }, async (_e, p) => {
     if (!p || typeof p !== 'string') return { ok: false, error: 'p is required.' };
     try {
       await fb.openInExplorer(p);
@@ -253,7 +256,7 @@ function register(_deps) {
   // mit einer Datei benötigen dagegen einen Read-Grant oder einen
   // privaten App-Root." So this handler IS gated, but with a
   // `read` grant rather than a `write` one.
-  ipcMain.handle('fb:read', async (_e, p, grantId) => {
+  secureHandle('fb:read', { getMainWindow }, async (_e, p, grantId) => {
     if (!p || typeof p !== 'string') return { ok: false, error: 'p is required.' };
     const authz = _authorizePath(grantId, 'read', p);
     if (!authz.ok) return authz;
@@ -273,7 +276,7 @@ function register(_deps) {
 
   // fb:exists probes whether a path exists. Per S1 §3, "Existenz-
   // Probes" require a Read-Grant. So fb:exists IS gated.
-  ipcMain.handle('fb:exists', async (_e, p, grantId) => {
+  secureHandle('fb:exists', { getMainWindow }, async (_e, p, grantId) => {
     if (!p || typeof p !== 'string') return { ok: false, exists: false, error: 'p is required.' };
     const authz = _authorizePath(grantId, 'read', p);
     if (!authz.ok) return { ok: false, exists: false, error: authz.error };
@@ -288,7 +291,7 @@ function register(_deps) {
   // fb:write writes base64 bytes to a file. The grant must authorise
   // the write operation on the target path. The size cap is the
   // same as the previous implementation.
-  ipcMain.handle('fb:write', async (_e, outPath, base64Data, grantId) => {
+  secureHandle('fb:write', { getMainWindow, maxPayloadBytes: 64 * 1024 * 1024 }, async (_e, outPath, base64Data, grantId) => {
     try {
       if (!outPath || typeof outPath !== 'string') return { ok: false, error: 'Output path is required.' };
       if (!base64Data || typeof base64Data !== 'string') return { ok: false, error: 'Base64 data is required.' };

@@ -1193,12 +1193,12 @@ async function startAllBatchGen() {
   const perType = tabsToRun.map((t) => ({
     type: t,
     items: (state.batches[t] || []).length,
-    calls: computeCalls(t, state.batches[t] || []),
+    // P4.3 (DB-H-003): calls = API requests; units = billable outputs (image --n multiplies)
+    calls: computeCalls(t, state.batches[t] || [], { callsOnly: true }), units: computeCalls(t, state.batches[t] || []),
   }));
   const totalItems = perType.reduce((s, x) => s + x.items, 0);
-  const totalCalls = perType.reduce((s, x) => s + x.calls, 0);
+  const totalCalls = perType.reduce((s, x) => s + x.calls, 0); const totalUnits = perType.reduce((s, x) => s + x.units, 0);
   const videoCount = (state.batches.video || []).length;
-
   const choice = await new Promise((resolve) => {
     let settled = false;
     const done = (v) => { if (!settled) { settled = true; resolve(v); } };
@@ -1206,11 +1206,11 @@ async function startAllBatchGen() {
       m.appendChild(el('h2', {}, 'Start BatchGen — all types'));
       const list = el('ul', { style: 'margin: 6px 0 10px; padding-left: 18px;' });
       for (const x of perType) {
-        list.appendChild(el('li', {}, `${x.type.toUpperCase()}: ${x.items} item${x.items === 1 ? '' : 's'} → ${x.calls} paid API call${x.calls === 1 ? '' : 's'}`));
+        list.appendChild(el('li', {}, `${x.type.toUpperCase()}: ${x.items} item${x.items === 1 ? '' : 's'} → ${x.calls} paid API call${x.calls === 1 ? '' : 's'}${x.units > x.calls ? ` (up to ${x.units} images)` : ''}`));
       }
       m.appendChild(list);
       m.appendChild(el('p', { style: 'font-weight: 600; margin: 0 0 8px;' },
-        `Total: ${totalItems} item${totalItems === 1 ? '' : 's'} → ${totalCalls} paid API call${totalCalls === 1 ? '' : 's'}. All types run in one go — no further confirmations.`));
+        `Total: ${totalItems} item${totalItems === 1 ? '' : 's'} → ${totalCalls} paid API call${totalCalls === 1 ? '' : 's'}${totalUnits > totalCalls ? ` (up to ${totalUnits} images)` : ''}. All types run in one go — no further confirmations.`));
       if (videoCount > 3) {
         m.appendChild(el('p', { style: 'color: var(--warn, #cc9900); font-size: 12px; margin: 0 0 8px;' },
           `⚠ ${videoCount} videos are queued but the Token Plan includes only 3 free video generations per week — the rest will fail with a quota error.`));

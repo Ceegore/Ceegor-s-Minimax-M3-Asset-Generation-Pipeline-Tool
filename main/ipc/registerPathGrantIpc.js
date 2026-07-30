@@ -78,6 +78,8 @@ const pathSecurity = require('../services/PathSecurityService');
 // config-root fast-path and the rejection diagnostics below.
 const cfgMod = require('../../src/config');
 const pathUtils = require('../../src/pathUtils');
+// P1-A (360° Audit H-001): secure IPC wrapper.
+const { secureHandle } = require('./secureHandle');
 
 const VALID_OPERATIONS = new Set([
   'read', 'write', 'delete', 'mkdir', 'rename', 'copy', 'move',
@@ -88,8 +90,9 @@ function bad(msg) { return { ok: false, error: msg }; }
 /**
  * @param {{ appRoot: string }} _deps
  */
-function register(_deps) {
-  ipcMain.handle('pathGrant:mint', (_e, p, operation, opts) => {
+function register(deps) {
+  const getMainWindow = (deps && typeof deps.getMainWindow === 'function') ? deps.getMainWindow : () => null;
+  secureHandle('pathGrant:mint', { getMainWindow }, (_e, p, operation, opts) => {
     if (typeof p !== 'string' || !p.trim()) {
       return bad('Path is required.');
     }
@@ -192,7 +195,11 @@ function register(_deps) {
       try {
         console.error('[pathGrant:mint] REJECTED path="' + p + '" op=' + operation + ' — allowed roots: [' + roots.join(', ') + ']');
       } catch (_) { /* logging must never break the handler */ }
-      return bad('Path "' + p + '" is not in an allowed root (allowed: ' + (roots.join(' | ') || 'none') + '). Folder authorizations reset when the app restarts — re-select the folder via the file browser\'s \uD83D\uDCC2 button, or check Settings → Output directory.');
+      // P5 (M-038): the returned error must NOT echo the allowed roots —
+      // that handed a compromised renderer the user's full drive/folder
+      // layout. The detail stays main-side (console.error above) for
+      // forensics; the renderer gets a generic, actionable message.
+      return bad('Path is not in an allowed root. Folder authorizations reset when the app restarts — re-select the folder via the file browser\'s \uD83D\uDCC2 button, or check Settings → Output directory.');
     }
     // R1.5a.follow-up: explicit capability allowlist (defence-in-depth
     // — PathGrantService.mintFileGrant does NOT validate capability
@@ -233,7 +240,7 @@ function register(_deps) {
     return { ok: true, grantId: result.grantId };
   });
 
-  ipcMain.handle('pathGrant:revoke', (_e, grantId) => {
+  secureHandle('pathGrant:revoke', { getMainWindow }, (_e, grantId) => {
     if (typeof grantId !== 'string' || !grantId.trim()) {
       return bad('GrantId is required.');
     }

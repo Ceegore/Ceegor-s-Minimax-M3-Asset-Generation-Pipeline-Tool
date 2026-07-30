@@ -47,13 +47,16 @@ const { wrapInpaintHandler } = require('./legacyAdapter');
 // the source of truth for "is the renderer allowed to invoke
 // inpainting on this file?".
 const { authorizePath: _authorizePath } = require('./grantAuthorizer');
+// P1-A (360° Audit H-001): secure IPC wrapper.
+const { secureHandle } = require('./secureHandle');
 
 function bad(msg) { return { ok: false, error: msg }; }
 
 /**
  * @param {{ appRoot: string }} deps
  */
-function register(_deps) {
+function register(deps) {
+  const getMainWindow = (deps && typeof deps.getMainWindow === 'function') ? deps.getMainWindow : () => null;
   // inpaint:runOnnx — run LaMa / MI-GAN on the source + mask.
   // R1.5b.3: requires a grantId (passed as args.grantId). The
   // grant must authorise 'read' on srcPath AND 'write' on outPath
@@ -63,7 +66,7 @@ function register(_deps) {
   // R3.2.2: result passes through the ImageOperationResult legacy
   // adapter (validates the 9 contract fields, maps `path` →
   // `outputPath`, preserves `path` as legacy alias).
-  ipcMain.handle('inpaint:runOnnx', wrapInpaintHandler(async (_e, args) => {
+  secureHandle('inpaint:runOnnx', { getMainWindow }, wrapInpaintHandler(async (_e, args) => {
     if (!args || typeof args !== 'object') return bad('Arguments required.');
     // R1.5b.3: pre-validate the arg shape BEFORE the grant
     // check, so a missing srcPath yields the legacy "Source
@@ -133,16 +136,20 @@ function register(_deps) {
     // this file to exist (inpaint_node.js checks fs.existsSync(mask)).
     await fsp.writeFile(maskPath, maskBuf);
 
-    const r = await inpaint.runOnnx(srcPath, maskPath, outPath, {
-      model: args.model || 'migan',
-      useGpu: args.useGpu !== false,
-      areaShare: args.areaShare,
-      jobId: args.jobId,
-    });
-    // tidy the temp mask
-    try { await fsp.unlink(maskPath); } catch (_) {}
-    if (!r || !r.ok) return bad((r && r.stderr) || 'inpaint failed');
-    return { ok: true, path: outPath };
+    // P5 (M-020): cleanup in finally block so the temp mask is removed
+    // even if runOnnx throws (previously leaked on error).
+    try {
+      const r = await inpaint.runOnnx(srcPath, maskPath, outPath, {
+        model: args.model || 'migan',
+        useGpu: args.useGpu !== false,
+        areaShare: args.areaShare,
+        jobId: args.jobId,
+      });
+      if (!r || !r.ok) return bad((r && r.stderr) || 'inpaint failed');
+      return { ok: true, path: outPath };
+    } finally {
+      try { await fsp.unlink(maskPath); } catch (_) {}
+    }
     // R3.2.2: result passes through `adaptInpaintResult` (validates
     // the 9 contract fields, maps `path` → `outputPath`, preserves
     // `path` as legacy alias). Backend defaults to 'inpaint'
@@ -160,7 +167,7 @@ function register(_deps) {
   // R1.5b.3: no grant required. The model paths are Main-derived
   // (from a fixed MODELS list + assetPaths.writableAssetsDir()).
   // The renderer can't influence which files are touched.
-  ipcMain.handle('inpaint:modelsAvailable', async () => {
+  secureHandle('inpaint:modelsAvailable', { getMainWindow }, async () => {
     try {
       const out = {};
       // Per-model try: a single broken path must not kill the whole list.
@@ -198,7 +205,7 @@ function register(_deps) {
   // dialog-EXPLICIT user gesture overrides the renderer-
   // supplied path contract). The dest is fully Main-derived
   // (assetPaths.writableAssetsDir() + MODELS[m.file]).
-  ipcMain.handle('inpaint:replaceModel', async (event, modelKey) => {
+  secureHandle('inpaint:replaceModel', { getMainWindow }, async (event, modelKey) => {
     try {
       if (!modelKey || !MODELS[modelKey]) return bad('Unknown model.');
       const m = getModel(modelKey);
@@ -239,7 +246,7 @@ function register(_deps) {
   // The modelKey is just an opaque identifier from a fixed
   // MODELS list — the renderer can't influence which file is
   // deleted.
-  ipcMain.handle('inpaint:restoreModel', async (_e, modelKey) => {
+  secureHandle('inpaint:restoreModel', { getMainWindow }, async (_e, modelKey) => {
     try {
       if (!modelKey || !MODELS[modelKey]) return bad('Unknown model.');
       const m = getModel(modelKey);

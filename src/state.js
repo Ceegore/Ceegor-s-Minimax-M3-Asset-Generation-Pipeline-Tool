@@ -90,8 +90,7 @@ function read() {
         image: sanitisePipelineBoard(raw.pipeline.image),
       };
     }
-    // Sanitise the scalar model-key + settings fields on read too (see
-    // sanitiseScalarStateFields in ./stateSanitizers.js).
+    // Sanitise the scalar model-key + settings fields on read too (see ./stateSanitizers.js).
     sanitiseScalarStateFields(raw);
     // Apply the popupPolicy migration on read as well, so a legacy
     // 'once-fresh' from an earlier install is downgraded to 'never'
@@ -99,8 +98,9 @@ function read() {
     // takes effect after the first save).
     _migrateLegacyPopupPolicy(raw);
     return raw;
-  } catch {
-    return { tabs: {} };
+  } catch (e) {
+    require('./stateCorruptBackup').backupCorruptState(p, e); // P5 (M-044): keep the corrupt file for recovery; renderer toasts on next state:get
+    return { tabs: {}, _corruptRecovered: true };
   }
 }
 

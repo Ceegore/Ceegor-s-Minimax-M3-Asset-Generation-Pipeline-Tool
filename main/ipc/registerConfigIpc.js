@@ -1,6 +1,6 @@
 // main/ipc/registerConfigIpc.js
 // IPC handlers: `config:get` / `config:set` / `config:path` /
-// `config:pickFolder` / `config:defaultOutputDir`.
+// `config:pickFolder` / `config:defaultOutputDir`. (`config:getPublic` lives in registerConfigPublicIpc.js — P0-B/C-001.)
 // R1.2a: `config:pickFolder` und `config:set` arbeiten mit
 // PathGrantService (S1 §4).
 //
@@ -42,6 +42,7 @@ const pathSecurity = require('../services/PathSecurityService');
 const { clearApiKeyFromMmxCliConfig } = require('../../src/mmxApiKeySync');
 const voicesCache = require('../services/VoicesCacheService');
 const { updateSessionCredential } = require('../services/updateSessionCredential');
+const { secureHandle } = require('./secureHandle'); // P1-A (360° Audit H-001): sender/frame/origin-validated IPC wrapper
 
 const PURPOSE_TO_ORIGIN = Object.freeze({
   'config-output': 'config-output',
@@ -52,7 +53,7 @@ const PURPOSE_TO_ORIGIN = Object.freeze({
  * @param {{ getMainWindow: () => (Electron.BrowserWindow|null) }} deps
  */
 function register({ getMainWindow }) {
-  ipcMain.handle('config:get', () => {
+  secureHandle('config:get', { getMainWindow }, () => {
     // SYS-006: defensive envelope — never return null. The renderer
     // dereferences .styles immediately; a null would crash the boot.
     try {
@@ -61,8 +62,7 @@ function register({ getMainWindow }) {
     } catch (_) { /* fall through to default */ }
     return { api_key: '', output_dir: '', region: 'global', theme: 'dark', styles: [] };
   });
-
-  ipcMain.handle('config:set', (_e, payload) => {
+  secureHandle('config:set', { getMainWindow }, (_e, payload) => {
     try {
       // R1.2a: accept the {cfg, grants} form. For backward
       // compatibility with the pre-R1.2a renderer (which sends just
@@ -235,11 +235,11 @@ function register({ getMainWindow }) {
     }
   });
 
-  ipcMain.handle('config:path', () => {
+  secureHandle('config:path', { getMainWindow }, () => {
     try { return cfgMod.configPath(); } catch (e) { return null; }
   });
 
-  ipcMain.handle('config:defaultOutputDir', () => {
+  secureHandle('config:defaultOutputDir', { getMainWindow }, () => {
     try { return cfgMod.defaultOutputDir(); } catch (e) { return null; }
   });
 
@@ -250,7 +250,7 @@ function register({ getMainWindow }) {
   // and vice versa. The grant's canonical path is the picked folder;
   // subsequent config:set calls must present this grantId when
   // setting the corresponding field.
-  ipcMain.handle('config:pickFolder', async (_e, opts) => {
+  secureHandle('config:pickFolder', { getMainWindow }, async (_e, opts) => {
     try {
       const purpose = (opts && opts.purpose === 'config-report') ? 'config-report' : 'config-output';
       const origin = PURPOSE_TO_ORIGIN[purpose];
@@ -295,7 +295,7 @@ function register({ getMainWindow }) {
     }
   });
 
-  ipcMain.handle('config:getPremadeStyles', async () => {
+  secureHandle('config:getPremadeStyles', { getMainWindow }, async () => {
     try {
       const styles = loadPremadeStylesFromDisk();
       return { ok: true, styles };

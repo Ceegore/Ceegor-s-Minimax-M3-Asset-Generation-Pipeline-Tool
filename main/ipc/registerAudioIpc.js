@@ -14,12 +14,15 @@ const { ipcMain } = require('electron');
 const audioCutter = require('../../src/audioCutter');
 const pathUtils = require('../../src/pathUtils');
 const { authorizePath: _authorizePath } = require('./grantAuthorizer');
+// P1-A (360° Audit H-001): secure IPC wrapper.
+const { secureHandle } = require('./secureHandle');
 
 /**
  * @param {{ appRoot: string }} deps
  */
-function register(_deps) {
-  ipcMain.handle('audio:available', () => {
+function register(deps) {
+  const getMainWindow = (deps && typeof deps.getMainWindow === 'function') ? deps.getMainWindow : () => null;
+  secureHandle('audio:available', { getMainWindow }, () => {
     // R4 fix: wrap in try/catch so a throw from the binary probe (e.g. an fs
     // access error) returns a clean envelope instead of rejecting the invoke.
     try {
@@ -29,7 +32,7 @@ function register(_deps) {
     }
   });
 
-  ipcMain.handle('audio:probe', async (_e, srcPath, grantId) => {
+  secureHandle('audio:probe', { getMainWindow }, async (_e, srcPath, grantId) => {
     if (!srcPath || typeof srcPath !== 'string') {
       return { ok: false, error: 'Source path is required.' };
     }
@@ -41,7 +44,7 @@ function register(_deps) {
     catch (e) { return { ok: false, error: String((e && e.message) || e) }; }
   });
 
-  ipcMain.handle('audio:decodePeaks', async (_e, srcPath, opts, grantId) => {
+  secureHandle('audio:decodePeaks', { getMainWindow }, async (_e, srcPath, opts, grantId) => {
     if (!srcPath || typeof srcPath !== 'string') {
       return { ok: false, error: 'Source path is required.' };
     }
@@ -63,7 +66,7 @@ function register(_deps) {
     } catch (e) { return { ok: false, error: String((e && e.message) || e) }; }
   });
 
-  ipcMain.handle('audio:findZeroCrossing', async (_e, pcm, targetSample, window) => {
+  secureHandle('audio:findZeroCrossing', { getMainWindow }, async (_e, pcm, targetSample, window) => {
     // The PCM comes back from the renderer as a plain array (the IPC
     // marshal round-trip strips typed-array-ness). We restore it here.
     // R1.5a.2: no path → no grant required (ungated).
@@ -79,7 +82,7 @@ function register(_deps) {
     } catch (e) { return { ok: false, error: String((e && e.message) || e) }; }
   });
 
-  ipcMain.handle('audio:trimSilence', async (_e, srcPath, opts, grantId) => {
+  secureHandle('audio:trimSilence', { getMainWindow }, async (_e, srcPath, opts, grantId) => {
     if (!srcPath || typeof srcPath !== 'string') {
       return { ok: false, error: 'Source path is required.' };
     }
@@ -91,7 +94,7 @@ function register(_deps) {
     catch (e) { return { ok: false, error: String((e && e.message) || e) }; }
   });
 
-  ipcMain.handle('audio:cut', async (_e, srcPath, dstPath, opts, grantId) => {
+  secureHandle('audio:cut', { getMainWindow }, async (_e, srcPath, dstPath, opts, grantId) => {
     if (!srcPath || typeof srcPath !== 'string') {
       return { ok: false, error: 'Source path is required.' };
     }
@@ -116,7 +119,7 @@ function register(_deps) {
     catch (e) { return { ok: false, error: String((e && e.message) || e) }; }
   });
 
-  ipcMain.handle('audio:autocutDetect', async (_e, srcPath, opts, grantId) => {
+  secureHandle('audio:autocutDetect', { getMainWindow }, async (_e, srcPath, opts, grantId) => {
     if (!srcPath || typeof srcPath !== 'string') {
       return { ok: false, error: 'Source path is required.' };
     }

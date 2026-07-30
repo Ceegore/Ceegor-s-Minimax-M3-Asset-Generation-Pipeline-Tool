@@ -940,3 +940,105 @@ test('BUG-9-07: attachSecondaryToJob falls back to addLogEvent when the job has 
   assert.equal(calls.addLogEvent.length, 2,
     `addLogEvent must be called as a fallback for the suppressLogRow case (got ${calls.addLogEvent.length})`);
 });
+
+// ============================================================================
+// P4.7 (360° Audit DB-M-011) — a cancel that already produced files must be
+// reported as 'partial', not a plain 'cancel' that hides the outputs.
+// ============================================================================
+
+function loadJobSummary() {
+  const file = path.join(ROOT, 'renderer', 'jobs', 'JobSummary.js');
+  delete require.cache[require.resolve(file)];
+  require(file);
+  return global.window.JobSummary;
+}
+
+test('P4.7: cancel with outputPaths → status \'partial\' + a "file(s) were already produced" detail', async () => {
+  setupMock();
+  const JobRunner = loadJobRunner();
+  const appended = [];
+  global.window.LogService.appendLogDetails = (id, lines) => { appended.push(...(lines || [])); };
+  let signalRef = null;
+  const ctrl = JobRunner.run({
+    tabKey: 'image',
+    type: 'image',
+    title: 'partial-cancel',
+    runFn: async (ctx) => {
+      signalRef = ctx.signal;
+      await new Promise((resolve) => {
+        if (ctx.signal.aborted) return resolve();
+        ctx.signal.addEventListener('abort', resolve, { once: true });
+      });
+      // The tab already wrote 2 files before honouring the abort.
+      return { status: 'ok', outputPaths: ['C:/out/a.png', 'C:/out/b.png'] };
+    },
+  });
+  // The runFn fires in a microtask — wait for it before cancelling.
+  await new Promise((r) => setImmediate(r));
+  ctrl.cancel();
+  assert.equal(signalRef.aborted, true);
+  const res = await ctrl.done;
+  assert.equal(res.status, 'partial',
+    'a cancelled job that produced outputs must resolve done with status \'partial\'');
+  const job = global.window.state.jobs.get(ctrl.jobId);
+  assert.equal(job.status, 'partial');
+  assert.deepEqual(job.outputPaths, ['C:/out/a.png', 'C:/out/b.png'],
+    'the partial outputs must be preserved on the job');
+  assert.ok(appended.some((l) => /2 file\(s\) were already produced/.test(l)),
+    'the detail line must state how many files were already produced: ' + JSON.stringify(appended));
+  assert.equal(JobRunner.isTabRunning('image'), false, 'partial is a finished status');
+});
+
+test('P4.7: cancel with NO outputs stays a plain \'cancel\'', async () => {
+  setupMock();
+  const JobRunner = loadJobRunner();
+  const ctrl = JobRunner.run({
+    tabKey: 'image',
+    type: 'image',
+    runFn: async (ctx) => {
+      await new Promise((resolve) => {
+        if (ctx.signal.aborted) return resolve();
+        ctx.signal.addEventListener('abort', resolve, { once: true });
+      });
+      return { status: 'cancel' };
+    },
+  });
+  await new Promise((r) => setImmediate(r));
+  ctrl.cancel();
+  await ctrl.done;
+  assert.equal(global.window.state.jobs.get(ctrl.jobId).status, 'cancel');
+});
+
+test('P4.7: programmatic {status:\'cancel\'} with outputPaths (no abort) also maps to \'partial\'', async () => {
+  setupMock();
+  const JobRunner = loadJobRunner();
+  const ctrl = JobRunner.run({
+    tabKey: 'music',
+    type: 'music',
+    runFn: async () => ({ status: 'cancel', outputPaths: ['C:/out/track1.mp3'] }),
+  });
+  const res = await ctrl.done;
+  assert.equal(res.status, 'partial');
+  assert.deepEqual(global.window.state.jobs.get(ctrl.jobId).outputPaths, ['C:/out/track1.mp3']);
+});
+
+test('P4.7: JobSummary counts \'partial\' children in their own bucket (not err/unknown)', () => {
+  setupMock();
+  const JobSummary = loadJobSummary();
+  const s = JobSummary._buildSummary([
+    { status: 'ok' },
+    { status: 'partial' },
+    { status: 'partial' },
+    { status: 'cancel' },
+    { status: 'err', error: 'boom' },
+  ]);
+  assert.equal(s.total, 5);
+  assert.equal(s.ok, 1);
+  assert.equal(s.partial, 2);
+  assert.equal(s.cancel, 1);
+  assert.equal(s.err, 1, 'partial children must NOT be counted as err/unknown');
+  assert.match(s.headline, /2 cancelled with partial output/);
+  assert.match(s.headline, /1 cancelled(?!\swith)/);
+  // partial is not a failure — only the real err lands in the breakdown.
+  assert.deepEqual(s.lines, ['Failures:', '  1\u00d7 boom']);
+});

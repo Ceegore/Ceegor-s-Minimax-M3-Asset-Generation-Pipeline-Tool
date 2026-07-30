@@ -884,15 +884,16 @@
     let handle = null; // PE-039: hoisted so the catch can dispose it
     return loadImageFromFile(slot.path).then((img) => {
       if (ctrl.closed) return;
-      // PE-043: pixel/memory guard. Fabric + Canvas + DataURL + Base64
-      // materialise the image multiple times (RGBA buffer × ~4). Reject
-      // images above 80 MP so the renderer shows a controlled error
-      // instead of an OOM crash.
-      const mp = (img.naturalWidth || 1) * (img.naturalHeight || 1);
-      if (mp > 80e6) {
-        throw new Error('Image too large (' + Math.round(mp / 1e6) + ' MP). The editor supports up to ~80 MP (e.g. 8944×8944). Resize the image first.');
+      // PE-043 / P3-A (DA-H-001): pixel/memory guard — Fabric/Canvas/DataURL/Base64 materialise
+      // the image ~4×; admission via the single ImageAdmissionPolicy (32 MP default / 64 MP ceiling).
+      const imgW = img.naturalWidth || 1, imgH = img.naturalHeight || 1;
+      if (window.ImageAdmissionPolicy) {
+        const adm = window.ImageAdmissionPolicy.checkAdmission({ width: imgW, height: imgH, source: 'main-canvas' });
+        if (!adm.ok) throw new Error(adm.error);
+      } else if (imgW * imgH > 32e6) { // defensive fallback if the policy script failed to load
+        throw new Error('Image too large (' + Math.round((imgW * imgH) / 1e6) + ' MP). The editor supports up to 32 MP. Resize the image first.');
       }
-      handle = window.ImageEditorCanvas.createEditorSession(canvasEl, img.naturalWidth || 1, img.naturalHeight || 1);
+      handle = window.ImageEditorCanvas.createEditorSession(canvasEl, imgW, imgH);
       // PE-039: configure the session but do NOT commit the handle to
       // the slot yet. If setBaseImage fails, the handle is disposed
       // without ever being visible to the rest of the editor.
@@ -1132,7 +1133,6 @@
   window.ImageOverlays = window.ImageOverlays || {};
   window.ImageOverlays.showImageEditOverlay = showImageEditOverlay;
   window.showImageEditOverlay = showImageEditOverlay;
-  // Exposed so the resize module can refresh the header meta after a canvas
-  // resize (imgW/imgH changed).
-  window.ImageEditorOverlay = { refreshMeta };
+  // refreshMeta: resize module. _getPersistedCtrl: P3.3 exit guard (imageEditorExitGuard.js; _persisted is module-private).
+  window.ImageEditorOverlay = { refreshMeta, _getPersistedCtrl: () => (_persisted && _persisted.ctrl) || null };
 })();

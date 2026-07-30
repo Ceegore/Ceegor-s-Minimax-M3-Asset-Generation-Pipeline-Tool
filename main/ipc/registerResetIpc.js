@@ -1,12 +1,19 @@
 // main/ipc/registerResetIpc.js
 // "Delete all local data" — deletes ONLY the tool's own settings/state files
 // (+ the mmx CLI api_key). NEVER the user's generated assets.
+//
+// P1-G (360° Audit H-016): destructive operations require a single-use
+// confirmation token minted via native dialog. A compromised renderer
+// cannot bypass the native dialog to mint tokens.
 'use strict';
 const { ipcMain, app } = require('electron');
 const fs = require('fs');
 const path = require('path');
 const { configDir } = require('../../src/config');
 const { clearApiKeyFromMmxCliConfig } = require('../../src/mmxApiKeySync');
+const { mintToken, validateToken } = require('../services/ConfirmationTokenService');
+// P1-A (360° Audit H-001): secure IPC wrapper with sender/frame/origin validation.
+const { secureHandle } = require('./secureHandle');
 
 // Deletes ONLY the tool's own settings/state files (+ the mmx CLI api_key).
 // NEVER the user's generated assets. Returns a per-file result so the UI
@@ -34,26 +41,38 @@ function deleteLocalDataFiles() {
   return { ok: results.every((r) => r.ok), results };
 }
 
-function register() {
-  ipcMain.handle('app:resetAllData', () => deleteLocalDataFiles());
+function register(deps) {
+  const getMainWindow = (deps && typeof deps.getMainWindow === 'function') ? deps.getMainWindow : () => null;
+
+  // P1-G (H-016): mint a confirmation token via native dialog.
+  secureHandle('confirm:request', { getMainWindow }, async (_e, opts) => {
+    return mintToken(getMainWindow(), opts);
+  });
+
+  // P1-G (H-016): destructive — requires confirmation token.
+  secureHandle('app:resetAllData', { getMainWindow }, (_e, payload) => {
+    const token = payload && payload.confirmationToken;
+    const auth = validateToken(token, 'app:resetAllData');
+    if (!auth.ok) return auth;
+    return deleteLocalDataFiles();
+  });
 
   // Plain relaunch must never delete user data.
-  ipcMain.handle('app:relaunch', () => {
+  secureHandle('app:relaunch', { getMainWindow }, () => {
     app.relaunch();
     app.exit(0);
   });
 
-  // Separate destructive handler so the renderer can show the result BEFORE relaunching.
-  // Re-run deletion immediately before the relaunch in case a debounced state
-  // save fires after the initial reset.
-  // Between `app:resetAllData` and `app:relaunch` the renderer is still alive
-  // and its 500 ms-debounced state save can fire (it writes state.json back
-  // from the in-memory snapshot), which is why settings appeared to "survive"
-  // a reset. Re-deleting at the very last moment — right before app.exit(0)
-  // tears the process down — guarantees the on-disk data is gone no matter
-  // what the renderer flushed in that window.
-  ipcMain.handle('app:resetAndRelaunch', () => {
-    try { deleteLocalDataFiles(); } catch (_) { /* best-effort final guard */ }
+  // P1-G (H-016): destructive — requires confirmation token.
+  // P5 (M-045): only relaunch on full success.
+  secureHandle('app:resetAndRelaunch', { getMainWindow }, (_e, payload) => {
+    const token = payload && payload.confirmationToken;
+    const auth = validateToken(token, 'app:resetAndRelaunch');
+    if (!auth.ok) return auth;
+    const result = deleteLocalDataFiles();
+    if (!result.ok) {
+      return { ok: false, error: 'Reset partially failed. Some files could not be deleted.', results: result.results };
+    }
     app.relaunch();
     app.exit(0);
   });

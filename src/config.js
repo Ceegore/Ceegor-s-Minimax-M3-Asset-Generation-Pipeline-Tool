@@ -32,6 +32,7 @@ function defaultConfig() {
     report_dir: '',      // optional folder for Pipeline clear/export reports ('' = use the asset destination folder)
     region: 'global',
     theme: 'dark',
+    batch_max_units: 200,  // P4.3 (DB-H-003): hard cap on billable outputs (items × variants × --n) per batch run
     styles: [],          // [{ name, value }]
     external_tools: [],  // [{ name, exe, args }] — 3rd-party tools reachable from the file-browser context menu
     raw: '',
@@ -84,6 +85,11 @@ function parse(text) {
     // value is silently dropped on the next write.
     else if (k === 'region') out.region = v || 'global';
     else if (k === 'theme') out.theme = (v === 'light' ? 'light' : 'dark');
+    else if (k === 'batch_max_units') {
+      // P4.3: clamp to a sane range; garbage falls back to the default.
+      const n = parseInt(v, 10);
+      out.batch_max_units = Number.isFinite(n) && n >= 1 ? Math.min(n, 10000) : 200;
+    }
   }
   return out;
 }
@@ -111,6 +117,9 @@ function serialize(cfg) {
     '',
     '# Theme: dark (default) or light',
     `theme=${cfg.theme === 'light' ? 'light' : 'dark'}`,
+    '',
+    '# Max billable outputs (items × variants × --n) a single batch run may generate.',
+    `batch_max_units=${Number.isFinite(parseInt(cfg.batch_max_units, 10)) && parseInt(cfg.batch_max_units, 10) >= 1 ? Math.min(parseInt(cfg.batch_max_units, 10), 10000) : 200}`,
     '',
     '# ---------- Style presets ----------',
     '# Each line: <name> = <prompt prefix to prepend>',

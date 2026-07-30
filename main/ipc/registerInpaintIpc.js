@@ -15,10 +15,13 @@ const { ipcMain } = require('electron');
 const sharp = require('sharp');
 require('../../src/cpuGuard').applySharpThreadCap(sharp);
 const path = require('path');
+const crypto = require('crypto');
 const { Worker } = require('worker_threads');
 const { inpaint, maskFromAlpha, maskFromAlphaHoles } = require('../../src/inpaint');
 const { authorizePath: _authorizePath } = require('./grantAuthorizer');
 const { wrapInpaintHandler } = require('./legacyAdapter');
+// P1-A (360° Audit H-001): secure IPC wrapper.
+const { secureHandle } = require('./secureHandle');
 
 // PE-022: pixel ceiling — images above this are rejected (the AI tier
 // handles large regions; Telea at >16 Mpx is >30 s even off-main-thread).
@@ -29,7 +32,8 @@ function bad(msg) { return { ok: false, error: msg }; }
 /**
  * @param {{ appRoot: string }} deps
  */
-function register(_deps) {
+function register(deps) {
+  const getMainWindow = (deps && typeof deps.getMainWindow === 'function') ? deps.getMainWindow : () => null;
   // inpaint:runTelea
   // args: { srcPath, outPath?, maskB64?, mode?, radius?, grantId?,
   //         alphaThreshold?, maxHolePx?, growPx? }
@@ -49,11 +53,15 @@ function register(_deps) {
   // `try { ... } catch (e) { ... }` is removed; `wrapInpaintHandler`
   // provides equivalent throw-catching. Backend is 'telea' (not
   // 'inpaint' — the operation is Telea-style, not ONNX model-based).
-  ipcMain.handle('inpaint:runTelea', wrapInpaintHandler(async (_e, args) => {
+  secureHandle('inpaint:runTelea', { getMainWindow }, wrapInpaintHandler(async (_e, args) => {
     if (!args || typeof args !== 'object') return bad('Arguments required.');
     const srcPath = args.srcPath;
     if (!srcPath || typeof srcPath !== 'string') return bad('Source path required.');
-    const outPath = args.outPath || deriveOutPath(srcPath, '_healed');
+    // P5 (DA-M-008): Telea ALWAYS encodes PNG (alpha-preserving), so the
+    // output extension must be .png regardless of the source container —
+    // a .jpg source previously produced PNG bytes mislabelled .jpg, which
+    // downstream tools (and this app's own magic-byte checks) reject.
+    const outPath = forcePngExt(args.outPath || deriveOutPath(srcPath, '_healed'));
     // R1.5a.5: read on srcPath + write on outPath (replaces the
     // legacy isPathUnderAny + isParentUnderAny gates).
     const readAuthz = _authorizePath(args.grantId, 'read', srcPath);
@@ -127,10 +135,25 @@ function register(_deps) {
     // process event loop stays responsive (7.4 s at 1024² pre-fix).
     await runTeleaInWorker(rgba, mask, w, h, radius);
 
-    // Encode PNG and write atomically.
-    await sharp(Buffer.from(rgba), { raw: { width: w, height: h, channels: 4 } })
-      .png()
-      .toFile(outPath);
+    // P5 (DA-M-007): encode to a uuid temp in the SAME folder (same volume
+    // ⇒ the rename is atomic), validate the bytes decode with the expected
+    // dims, then rename onto outPath. A crash/OOM/kill mid-encode can never
+    // leave a truncated file at the destination, and a corrupt encode is
+    // caught before it replaces anything.
+    const tmpOut = path.join(path.dirname(outPath), `.telea-${crypto.randomUUID()}.tmp.png`);
+    try {
+      await sharp(Buffer.from(rgba), { raw: { width: w, height: h, channels: 4 } })
+        .png()
+        .toFile(tmpOut);
+      const check = await sharp(tmpOut).metadata();
+      if (!check || check.width !== w || check.height !== h) {
+        throw new Error('encoded output failed validation (' + (check ? check.width + '×' + check.height : 'unreadable') + ', expected ' + w + '×' + h + ')');
+      }
+      await fs.promises.rename(tmpOut, outPath);
+    } catch (e) {
+      try { await fs.promises.unlink(tmpOut); } catch (_) { /* best-effort temp cleanup */ }
+      return bad('Heal failed: ' + ((e && e.message) || e));
+    }
 
     // PE-009: hole stats pass through the legacy adapter (it preserves
     // extra fields) so the renderer can detect a no-op heal
@@ -142,6 +165,14 @@ function register(_deps) {
         maskShare: holeStats.maskShare,
       } : {});
   }, 'telea'));
+}
+
+// P5 (DA-M-008): force the .png extension — the encoder is always PNG.
+function forcePngExt(p) {
+  const dot = p.lastIndexOf('.');
+  const slash = Math.max(p.lastIndexOf('/'), p.lastIndexOf('\\'));
+  const ext = dot > slash ? p.slice(dot).toLowerCase() : '';
+  return ext === '.png' ? p : (dot > slash ? p.slice(0, dot) : p) + '.png';
 }
 
 // Derive a sibling output path: C:/x/y.png → C:/x/y_healed.png

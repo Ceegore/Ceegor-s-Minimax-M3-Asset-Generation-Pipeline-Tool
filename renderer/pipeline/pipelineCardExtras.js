@@ -56,7 +56,14 @@
           const w = img.naturalWidth || 0, h = img.naturalHeight || 0;
           item._dims = { w, h }; // transient; not persisted (no sanitiser field)
           dimsRow.textContent = w && h ? (w + ' × ' + h) : '—';
-          const warning = computeWarning(item, column, { w, h });
+          let warning = computeWarning(item, column, { w, h });
+          // P3-A (DA-H-001): flag oversized images via the single admission
+          // policy — the editor/asset-panel will refuse them, so warn the
+          // user here in the pipeline preview already.
+          if (!warning && window.ImageAdmissionPolicy) {
+            const adm = window.ImageAdmissionPolicy.checkAdmission({ width: w, height: h, source: 'pipeline-preview' });
+            if (!adm.ok) warning = '⚠ too large for the editor (' + adm.megapixels.toFixed(1) + ' MP > ' + window.ImageAdmissionPolicy.DEFAULT_MAX_MP + ' MP limit)';
+          }
           if (warning) { warnRow.textContent = warning; warnRow.classList.add('has-warn'); }
         }).catch(() => { dimsRow.textContent = 'dims unavailable'; });
       }

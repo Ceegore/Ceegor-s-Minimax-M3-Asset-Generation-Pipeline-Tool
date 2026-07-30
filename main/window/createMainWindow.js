@@ -98,6 +98,68 @@ function createMainWindow(appRoot, hooks = {}) {
     e.preventDefault();
     closeHandshakeActive = true;
     try { win.show(); win.focus(); } catch (_) {}
+    // P3.3 (DA-H-004): app-exit dirty guard. Ask the renderer for its list
+    // of unsaved edited images BEFORE the generic confirm dialog. The probe
+    // runs in the page's main world (renderer scripts are plain <script>
+    // tags), is read-only, and is bounded by a 500ms race so a hung
+    // renderer can't stall the close path.
+    let unsavedImages = [];
+    try {
+      unsavedImages = await Promise.race([
+        win.webContents.executeJavaScript('window.__getUnsavedEditorInfo ? window.__getUnsavedEditorInfo() : []', true),
+        new Promise((resolve) => setTimeout(() => resolve([]), 500)),
+      ]);
+      if (!Array.isArray(unsavedImages)) unsavedImages = [];
+    } catch (_) { unsavedImages = []; }
+    if (unsavedImages.length > 0) {
+      const guard = await dialog.showMessageBox(win, {
+        type: 'warning',
+        title: 'Unsaved edited images',
+        message: 'You have ' + unsavedImages.length + ' unsaved edited image(s).',
+        detail: unsavedImages.slice(0, 15).join('\n')
+          + (unsavedImages.length > 15 ? '\n…and ' + (unsavedImages.length - 15) + ' more' : '')
+          + '\n\nSave them all before closing, or discard the edits?',
+        buttons: ['Save all & close', 'Discard & close', 'Cancel'],
+        defaultId: 2,
+        cancelId: 2,
+        noLink: true,
+      });
+      if (guard.response === 2) {
+        closeHandshakeActive = false;
+        return;
+      }
+      if (guard.response === 0) {
+        // "Save all & close": run the renderer's headless save-all (never
+        // prompts — alpha forces PNG, collisions auto-version). A failed
+        // save CANCELS the close so no edit is silently lost.
+        let saveRes = null;
+        try {
+          saveRes = await win.webContents.executeJavaScript(
+            'window.__saveAllEditorSessions ? window.__saveAllEditorSessions() : Promise.resolve({ ok: false, error: "save-all unavailable" })', true);
+        } catch (err) { saveRes = { ok: false, error: (err && err.message) || 'save-all failed' }; }
+        if (!saveRes || saveRes.ok !== true) {
+          await dialog.showMessageBox(win, {
+            type: 'error',
+            title: 'Save failed',
+            message: 'Some images could not be saved — close cancelled.',
+            detail: (saveRes && saveRes.error) || 'Unknown error',
+            buttons: ['OK'],
+            noLink: true,
+          });
+          closeHandshakeActive = false;
+          return;
+        }
+      }
+      // Saved (or explicitly discarded): close without the generic
+      // confirm dialog — the user already made an explicit choice.
+      await runCloseHandshake(win);
+      if (hooks.cancelActiveJobs) {
+        try { hooks.cancelActiveJobs(); } catch (_) { /* best-effort */ }
+      }
+      confirmingClose = true;
+      win.destroy();
+      return;
+    }
     const result = await dialog.showMessageBox(win, {
       type: 'question',
       title: 'Close MiniMax Asset Tool?',

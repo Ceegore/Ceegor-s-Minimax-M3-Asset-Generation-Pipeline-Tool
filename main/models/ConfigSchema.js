@@ -60,6 +60,7 @@ function sanitizeExternalTools(value) {
  *   report_dir: string,
  *   region: 'global' | 'cn',
  *   theme: 'light' | 'dark',
+ *   batch_max_units: number,
  *   styles: Array<{name: string, value: string}>,
  *   external_tools: Array<{name: string, exe: string, args: string}>,
  * }}
@@ -83,6 +84,12 @@ function sanitize(cfg) {
     report_dir: cleanScalar(cfg.report_dir),
     region: cfg.region === 'cn' ? 'cn' : 'global',
     theme: cfg.theme === 'light' ? 'light' : 'dark',
+    // P4.3 (DB-H-003): batch cost cap. Whitelisted so config:set keeps it —
+    // clamp mirrors src/config.js parse() (1..10000, garbage → 200).
+    batch_max_units: (() => {
+      const n = parseInt(cfg.batch_max_units, 10);
+      return Number.isFinite(n) && n >= 1 ? Math.min(n, 10000) : 200;
+    })(),
     styles: Array.isArray(cfg.styles)
       ? cfg.styles
           .filter((s) => s && typeof s === 'object' && typeof s.name === 'string' && typeof s.value === 'string')

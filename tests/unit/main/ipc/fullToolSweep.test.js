@@ -167,6 +167,7 @@ test('preload bridge exposes every tool function and maps to the expected channe
     'batchesGet',
     'batchesSet',
     'configPath',
+    'confirmRequest',
     'defaultOutputDir',
     'diagnose',
     'externalToolsProbe',
@@ -190,6 +191,7 @@ test('preload bridge exposes every tool function and maps to the expected channe
     'fixImageExtension',
     'getAppVersion',
     'getConfig',
+    'getConfigPublic',
     'getPremadeStyles',
     'imageMetadata',
     'inpaintModelsAvailable',
@@ -237,6 +239,7 @@ test('preload bridge exposes every tool function and maps to the expected channe
     'providersCancel',
     'providersGenerate',
     'providersGet',
+    'providersGetPublic',
     'providersListModels',
     'providersSet',
     'quota',
@@ -833,6 +836,9 @@ test('image, upscale, and background-removal handlers keep returning envelopes w
 
     // R1.5a.3: upscale:realesrgan:run now requires a grantId.
     // The grant covers BOTH srcPath and dstPath (directory grant for outputDir).
+    // P4.1 (DB-H-002/008): the handler now validates the output artifact; the
+    // mocked run() writes nothing, so pre-create a valid PNG at dstPath.
+    fs.writeFileSync(dstPath, Buffer.concat([Buffer.from([0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A]), Buffer.alloc(120, 0)]));
     const upscaleOk = await electron.handlers['upscale:realesrgan:run'](null, srcPath, dstPath, { model: 'realesrgan-x4plus' }, imgGrant.grantId);
     assert.equal(upscaleOk.ok, true);
 
@@ -1229,6 +1235,12 @@ test('mmx:run / mmx:run:job reject --out / --out-dir / --download paths outside 
     load('main/ipc/registerMmxIpc.js').register({ appRoot: ROOT, getMainWindow: () => null });
     const run = electron.handlers['mmx:run'];
     const runJob = electron.handlers['mmx:run:job'];
+
+    // P4.1 (DB-H-002/008): the IPC now validates every --out artifact after
+    // the (mocked) runMmx resolves; pre-create valid PNGs for the ok-paths.
+    const _png = Buffer.concat([Buffer.from([0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A]), Buffer.alloc(1200, 0)]);
+    fs.writeFileSync(path.join(outputDir, 'a.png'), _png);
+    fs.writeFileSync(path.join(outputDir, 'b.png'), _png);
 
     // --- mmx:run -------------------------------------------------------
     const okOut = await run(null, ['image', '--prompt', 'x', '--out', path.join(outputDir, 'a.png')], 's1-grant');

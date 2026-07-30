@@ -28,7 +28,11 @@ function _resolveRendererLogPath() {
   ].filter(Boolean);
   for (const p of candidates) {
     try {
-      fs.writeFileSync(p, ''); // verify writability (truncate on app start)
+      // P5 (M-046): probe writability WITHOUT truncating. The old
+      // `writeFileSync(p, '')` wiped the previous session's crash traces
+      // on every start. accessSync checks the permission non-destructively;
+      // a not-yet-created file is fine (appendFile creates it on first use).
+      if (fs.existsSync(p)) fs.accessSync(p, fs.constants.W_OK);
       return p;
     } catch (_) { /* read-only / no permission — try next */ }
   }
@@ -72,26 +76,71 @@ function _queueLog(line) {
 }
 ipcMain.on('renderer:log', (event, line) => { _queueLog(line); });
 if (RENDERER_LOG) {
+  // P5 (M-046): preserve the previous session. Rotate the existing log to
+  // .prev (overwriting the older .prev) instead of truncating it, so the
+  // last run's crash traces survive the restart for forensics.
+  try { if (fs.existsSync(RENDERER_LOG)) fs.renameSync(RENDERER_LOG, RENDERER_LOG + '.prev'); } catch (_) { /* best-effort rotation */ }
   try { fs.writeFileSync(RENDERER_LOG, '=== renderer-error.log @ ' + new Date().toISOString() + ' ===\n'); }
   catch (_) {}
 }
 
-process.on('uncaughtException', (err) => {
+// P2-E (360° Audit M-025): single instance lock. Prevents multiple
+// app instances from corrupting shared state (config.txt, providers.json,
+// job archives). The second instance focuses the first window and quits.
+const _gotSingleInstanceLock = app.requestSingleInstanceLock();
+if (!_gotSingleInstanceLock) {
+  app.quit();
+} else {
+  app.on('second-instance', () => {
+    // Focus the existing window when a second instance is launched.
+    if (mainWindow) {
+      if (mainWindow.isMinimized()) mainWindow.restore();
+      mainWindow.focus();
+    }
+  });
+}
+
+// P1-H (360° Audit H-017): crash safety. On uncaughtException or
+// unhandledRejection, perform emergency cleanup (cancel jobs, clear
+// secrets from memory, write crash report) then exit. The previous
+// handler only logged and continued, leaving the app in an undefined
+// state with potentially corrupted in-memory data.
+let _crashCleanupDone = false;
+function _emergencyCrashCleanup(kind, err) {
+  if (_crashCleanupDone) return;
+  _crashCleanupDone = true;
   try {
-    const ts = new Date().toISOString().slice(11, 23);
-    const msg = `[main] uncaughtException: ${err && err.stack ? err.stack : err}`;
+    const ts = new Date().toISOString();
+    const msg = `[main] ${kind}: ${err && err.stack ? err.stack : err}`;
+    // 1. Log to file
     if (RENDERER_LOG) fs.appendFileSync(RENDERER_LOG, ts + ' ' + msg + '\n');
     console.error(msg);
-  } catch (_) {}
+    // 2. Write crash report
+    try {
+      const crashDir = path.join(app.getPath('userData'), 'crashes');
+      fs.mkdirSync(crashDir, { recursive: true });
+      const crashFile = path.join(crashDir, `crash-${Date.now()}.txt`);
+      fs.writeFileSync(crashFile, `MiniMax Asset Tool Crash Report\nTime: ${ts}\nKind: ${kind}\n\n${msg}\n`);
+    } catch (_) { /* best-effort */ }
+    // 3. Cancel all active jobs
+    try { require('../src/mmx').cancelAll(); } catch (_) {}
+    try { require('../src/jobRegistry').cancelAll(); } catch (_) {}
+    // 4. Clear secrets from memory
+    try { require('./services/SessionCredentialStore').clearSessionCredential(); } catch (_) {}
+  } catch (_) { /* last-resort: nothing more we can do */ }
+}
+
+process.on('uncaughtException', (err) => {
+  _emergencyCrashCleanup('uncaughtException', err);
+  // Exit after cleanup — continuing with corrupted state is unsafe.
+  process.exit(1);
 });
 
 process.on('unhandledRejection', (reason) => {
-  try {
-    const ts = new Date().toISOString().slice(11, 23);
-    const msg = `[main] unhandledRejection: ${reason && reason.stack ? reason.stack : reason}`;
-    if (RENDERER_LOG) fs.appendFileSync(RENDERER_LOG, ts + ' ' + msg + '\n');
-    console.error(msg);
-  } catch (_) {}
+  _emergencyCrashCleanup('unhandledRejection', reason);
+  // Exit after cleanup — an unhandled rejection means a critical
+  // async path failed without recovery.
+  process.exit(1);
 });
 
 // Global Electron switches (DPI, occlusion).

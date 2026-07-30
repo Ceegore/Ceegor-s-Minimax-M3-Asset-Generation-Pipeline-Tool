@@ -65,6 +65,22 @@ if not exist "%INSTALL_DIR%\resources\bin\models\birefnet-general.onnx" goto :co
 if not exist "%INSTALL_DIR%\resources\bin\models\lama-big.onnx" goto :copy_incomplete
 if not exist "%INSTALL_DIR%\resources\bin\realesrgan-ncnn-vulkan.exe" goto :copy_incomplete
 
+rem M-024 (360 Audit): per-file hash verification against FILES.sha256.
+if not exist "%INSTALL_DIR%\FILES.sha256" goto :skip_hash_check
+set "MINIMAX_INSTALL_DIR_FOR_HASH=%INSTALL_DIR%"
+powershell.exe -NoProfile -NonInteractive -Command "$ErrorActionPreference='Stop'; $root=$env:MINIMAX_INSTALL_DIR_FOR_HASH; $manifest=Join-Path $root 'FILES.sha256'; $bad=0; foreach($line in [IO.File]::ReadAllLines($manifest)){if($line -match '^([0-9a-fA-F]{64})\s+(.+)$'){$rel=$matches[2].Trim(); $fp=Join-Path $root $rel; if(-not [IO.File]::Exists($fp)){Write-Host ('  MISSING: '+$rel); $bad++; continue}; $actual=(Get-FileHash -Algorithm SHA256 -LiteralPath $fp).Hash.ToLowerInvariant(); if($actual -ne $matches[1].ToLowerInvariant()){Write-Host ('  TAMPERED: '+$rel); $bad++}}}; if($bad -gt 0){throw ($bad.ToString()+' file(s) failed integrity check.')}"
+if errorlevel 1 (
+  echo.
+  echo [ERROR] One or more installed files failed the integrity check.
+  echo The installation may be corrupted or tampered with.
+  echo Delete the installation folder and try again:
+  echo   %INSTALL_DIR%
+  pause
+  exit /b 1
+)
+echo Integrity check passed.
+:skip_hash_check
+
 echo Creating Desktop and Start menu shortcuts...
 set "MINIMAX_INSTALL_TARGET=%INSTALL_DIR%"
 powershell.exe -NoProfile -NonInteractive -Command "$ErrorActionPreference='Stop'; $target=Join-Path $env:MINIMAX_INSTALL_TARGET 'MiniMaxAssetTool.exe'; $desktop=if($env:MINIMAX_INSTALL_DESKTOP){$env:MINIMAX_INSTALL_DESKTOP}else{[Environment]::GetFolderPath('Desktop')}; $programs=if($env:MINIMAX_INSTALL_START_MENU){$env:MINIMAX_INSTALL_START_MENU}else{[Environment]::GetFolderPath('Programs')}; $shell=New-Object -ComObject WScript.Shell; foreach($folder in @($desktop,$programs)){$null=[IO.Directory]::CreateDirectory($folder); $shortcut=$shell.CreateShortcut((Join-Path $folder 'MiniMax Asset Tool.lnk')); $shortcut.TargetPath=$target; $shortcut.WorkingDirectory=$env:MINIMAX_INSTALL_TARGET; $shortcut.IconLocation=$target; $shortcut.Save()}"

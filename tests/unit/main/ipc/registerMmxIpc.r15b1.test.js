@@ -50,6 +50,17 @@ const MMX_CAPABILITY = path.join(ROOT, 'src', 'mmxCapability.js');
 const TMP = fs.mkdtempSync(path.join(os.tmpdir(), 'mmx-r15b1-'));
 process.env.MINIMAX_CONFIG_DIR = ROOT;
 
+// P4.1 (DB-H-002/008): the IPC now validates every --out/--download/-o
+// artifact after runMmx resolves (existence + size + magic bytes). The
+// runMmx mock doesn't write files, so pre-create plausible JPEG artifacts
+// for the success-path tests (>= 1 KB, JPEG magic).
+function writeFakeJpeg(p) {
+  const buf = Buffer.alloc(2048, 0);
+  buf[0] = 0xFF; buf[1] = 0xD8; buf[2] = 0xFF;
+  fs.writeFileSync(p, buf);
+}
+for (const n of ['cat.jpg', 'a.jpg', 'b.jpg']) writeFakeJpeg(path.join(TMP, n));
+
 test.after(() => {
   try { fs.rmSync(TMP, { recursive: true, force: true }); } catch (_) {}
 });
@@ -366,4 +377,36 @@ test('R1.5b.1: mmx:run:job succeeds without a grantId when args have no path fla
   assert.equal(r.code, 0, `expected code 0, got ${r.code} (stderr: ${r.stderr})`);
   assert.equal(calls.runMmx.length, 1);
   assert.equal(calls.grantAuthorize.length, 0);
+});
+
+// ===========================================================================
+// P4.1 (DB-H-002/008): output validation — verification gate "CLI ok:true
+// with missing file reports error".
+// ===========================================================================
+
+test('P4.1: mmx:run:job flips ok:true to code -1 when the --out artifact was never written', async () => {
+  const { handlers, calls } = loadIpc();
+  const missing = path.join(TMP, 'never-written.jpg');
+  const r = await handlers.get('mmx:run:job')(null, {
+    args: ['image', 'generate', '--prompt', 'a cat', '--out', missing],
+    jobId: 'j7',
+  }, 'mock-file-grant-' + missing.replace(/[^a-zA-Z0-9]/g, '_'));
+  assert.equal(calls.runMmx.length, 1, 'runMmx ran (grant was fine)');
+  assert.equal(r.ok, false, 'ok:true with a missing artifact must be rejected');
+  assert.equal(r.code, -1);
+  assert.match(r.stderr, /output failed validation/i);
+  assert.match(r.stderr, /not created/i);
+});
+
+test('P4.1: mmx:run flips ok:true to code -1 when the --out artifact is truncated (< 1 KB)', async () => {
+  const { handlers } = loadIpc();
+  const tiny = path.join(TMP, 'tiny.jpg');
+  fs.writeFileSync(tiny, Buffer.from([0xFF, 0xD8, 0xFF, 0x00]));
+  const r = await handlers.get('mmx:run')(null,
+    ['image', 'generate', '--prompt', 'a cat', '--out', tiny],
+    'mock-file-grant-' + tiny.replace(/[^a-zA-Z0-9]/g, '_'));
+  assert.equal(r.ok, false);
+  assert.equal(r.code, -1);
+  assert.match(r.stderr, /output failed validation/i);
+  assert.ok(!fs.existsSync(tiny), 'the truncated artifact must be deleted');
 });

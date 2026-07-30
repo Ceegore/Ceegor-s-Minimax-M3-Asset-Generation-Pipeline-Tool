@@ -26,6 +26,7 @@
     let err = 0;
     let warn = 0;
     let cancel = 0;
+    let partial = 0; // P4.7: cancelled-with-outputs children get their own bucket
     const failureReasons = new Map(); // reason → count
     let unknown = 0;
     for (const r of results) {
@@ -33,6 +34,7 @@
       if (r.status === 'ok') ok++;
       else if (r.status === 'warn') { warn++; }
       else if (r.status === 'cancel') { cancel++; }
+      else if (r.status === 'partial') { partial++; }
       else if (r.status === 'err') { err++; }
       else {
         // Treat unknown / undefined status as err and count it in the
@@ -40,7 +42,7 @@
         err++;
         unknown++;
       }
-      if (r.status === 'err' || r.status === 'warn' || (r.status !== 'ok' && r.status !== 'cancel' && r.status !== undefined && r.status !== null)) {
+      if (r.status === 'err' || r.status === 'warn' || (r.status !== 'ok' && r.status !== 'cancel' && r.status !== 'partial' && r.status !== undefined && r.status !== null)) {
         // Guard against a non-string r.error (e.g. an object) — would
         // otherwise throw TypeError and lose the whole summary. Record
         // a row for every non-ok entry, including unknown-status ones,
@@ -53,11 +55,12 @@
       }
     }
     void unknown; // tracked in failureReasons under '(unknown status)'
-    const total = ok + err + warn + cancel;
+    const total = ok + err + warn + cancel + partial;
     const headline =
       `Batch finished: ${ok}/${total} ok` +
       (err ? `, ${err} failed` : '') +
       (warn ? `, ${warn} partial` : '') +
+      (partial ? `, ${partial} cancelled with partial output` : '') +
       (cancel ? `, ${cancel} cancelled` : '');
     // Build the failure breakdown lines. Sort by count desc.
     const lines = [];
@@ -68,7 +71,7 @@
         lines.push(`  ${count}× ${reason}`);
       }
     }
-    return { headline, lines, ok, err, warn, cancel, total };
+    return { headline, lines, ok, err, warn, cancel, partial, total };
   }
 
   function emit(parentJobId, results) {
@@ -80,7 +83,7 @@
     let state = 'ok';
     if (summary.err) state = 'err';
     else if (summary.warn) state = 'warn';
-    else if (summary.cancel) state = 'warn'; // cancel is also a "warn" colour
+    else if (summary.cancel || summary.partial) state = 'warn'; // cancel/partial are also a "warn" colour
 
     return window.LogService.addLogEvent({
       category: 'gen',

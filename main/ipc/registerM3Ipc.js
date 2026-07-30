@@ -5,14 +5,17 @@
 const { ipcMain } = require('electron');
 const cfg = require('../../src/config');
 const { chat } = require('../../src/minimaxText');
+// P1-A (360° Audit H-001): secure IPC wrapper.
+const { secureHandle } = require('./secureHandle');
 
-function register() {
+function register(deps) {
+  const getMainWindow = (deps && typeof deps.getMainWindow === 'function') ? deps.getMainWindow : () => null;
   // m3:chat — send a chat completion request to MiniMax M3.
   // Payload: { messages, jsonMode?, temperature?, maxTokens?, model? }
   // The API key and region are read from config (never from the renderer).
   // Redaction: never log the payload with the key; the service takes the key
   // from config, not the renderer, so the renderer never sees it.
-  ipcMain.handle('m3:chat', async (_e, payload) => {
+  secureHandle('m3:chat', { getMainWindow }, async (_e, payload) => {
     try {
       const c = cfg.read();
       if (!c.api_key) return { ok: false, error: 'No API key configured.' };

@@ -407,6 +407,11 @@ function buildSandbox() {
       cancel: () => {},
     },
     notifyImageGenerated: () => {},
+    // P4.2 mock: the image tab's --n>1 path mints a private run subdir.
+    BatchDirectRunner: {
+      mintRunSubdir: (base) => ({ ok: true, runSubdir: base + '\\run_test123' }),
+      ensureRunSubdir: (dir) => Promise.resolve({ ok: true, path: dir }),
+    },
     applyFileSearch: () => {},
     formatMmxError: () => '',
     classifyMmxError: () => 'unknown',

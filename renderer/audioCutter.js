@@ -29,16 +29,15 @@
   // ---- small helpers ----------------------------------------------------
   function fmtTime(sec) {
     if (!isFinite(sec) || sec < 0) sec = 0;
-    const m = Math.floor(sec / 60);
-    const s = Math.floor(sec % 60);
-    const ms = Math.round((sec - Math.floor(sec)) * 1000);
+    // DB-M-012: round total ms first, then decompose (avoids ".1000").
+    const totalMs = Math.round(sec * 1000);
+    const m = Math.floor(totalMs / 60000);
+    const s = Math.floor((totalMs % 60000) / 1000);
+    const ms = totalMs % 1000;
     return `${m}:${String(s).padStart(2, '0')}.${String(ms).padStart(3, '0')}`;
   }
-  // Parse "m:ss.mmm", "ss.mmm", or a bare seconds number. Accept at
-  // most ONE colon: an input like "1:2:3" is rejected with NaN so the
-  // input field's onChange handler can surface an "invalid format"
-  // error (splitting on every ':' and taking parts[0]/parts[1] would
-  // silently swallow the extra segment).
+  // Parse "m:ss.mmm", "ss.mmm", or bare seconds. At most ONE colon;
+  // "1:2:3" is rejected with NaN (surface "invalid format" in the UI).
   function parseTime(str) {
     if (str == null) return NaN;
     str = String(str).trim();
@@ -499,9 +498,9 @@
         const outName = (nameInp.value || '').trim();
         if (!outName) { _logWarn('export-blocked', 'no-name'); showErr('Enter an output file name.'); return; }
         const dstPath = joinPath(dirName(srcPath), baseName(outName));
-        // R7: audioCut runs ffmpeg with -y (force overwrite) — refuse to clobber an existing file.
-        const _ex = await window.api.fbExists(dstPath, audioGrant).catch(() => null);
-        if (_ex && (_ex.ok === false || _ex.exists)) { _logWarn('export-blocked', 'dst-exists'); showErr('"' + baseName(outName) + '" already exists — pick a different name.'); return; } // R10: a {ok:false} fbExists (stale/revoked grant) must fail SAFE (treat as occupied), not pass the guard and let ffmpeg -y clobber
+        // R7/DB-M-007: ffmpeg uses -y; fail CLOSED on existence-check errors.
+        const _ex = await window.api.fbExists(dstPath, audioGrant).catch(() => ({ ok: false, exists: true }));
+        if (_ex && (_ex.ok === false || _ex.exists)) { _logWarn('export-blocked', 'dst-exists'); showErr('"' + baseName(outName) + '" already exists or could not be checked — pick a different name.'); return; }
         _logAct('export-start', { src: srcPath, dst: dstPath });
         exportBtn.disabled = true; exportBtn.textContent = 'Exporting…';
         stopPlay();
@@ -694,11 +693,12 @@
           try {
             // BGR-009 fix: mint read grant for fbExists (R1.3 gate).
             const existsGrant = (window.GrantHelper) ? await window.GrantHelper.ensureRead(p) : undefined;
-            // R6: a failed grant envelope must not be forwarded — fb:exists would resolve {ok:false,exists:false} and the collision loop would accept an occupied name (silent overwrite). Treat as occupied; the capped loop falls back to a fresh _collisionN name.
+            // R6: failed grant → treat as occupied (fail closed).
             const res = (existsGrant && existsGrant.ok === false) ? { exists: true } : await window.api.fbExists(p, existsGrant);
             return !!(res && res.exists);
           } catch (_) {
-            return false;
+            // DB-M-008: fail CLOSED — treat errors as occupied.
+            return true;
           }
         };
 
@@ -706,8 +706,7 @@
           const baseNameCandidate = `${stem}_sfx${String(index + 1).padStart(2, '0')}`;
           let candidate = joinPath(dir, `${baseNameCandidate}.${ext}`);
           let attempt = 0;
-          // R6: cap the probe loop — a consistently-true fsExists (e.g. an
-          // always-failing grant treated as occupied) must not hang the export.
+          // R6: cap probe loop (fail-closed fsExists must not hang).
           while (attempt < 1000 && await fsExists(candidate)) {
             attempt++;
             candidate = joinPath(dir, `${baseNameCandidate}_collision${attempt}.${ext}`);

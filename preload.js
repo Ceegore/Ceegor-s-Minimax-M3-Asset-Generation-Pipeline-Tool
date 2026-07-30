@@ -465,6 +465,9 @@ contextBridge.exposeInMainWorld('api', {
 
   // ---- config ----
   getConfig: () => ipcRenderer.invoke('config:get'),
+  // P0-B (360° Audit C-001): secret-free config DTO. Returns hasApiKey,
+  // apiKeyLast4, output_dir, region, theme, styles — NEVER the raw api_key.
+  getConfigPublic: () => ipcRenderer.invoke('config:getPublic'),
   setConfig: (cfg) => ipcRenderer.invoke('config:set', cfg),
   getPremadeStyles: () => ipcRenderer.invoke('config:getPremadeStyles'),
   // pickFolder opens the native Browse-for-folder dialog and returns
@@ -865,12 +868,16 @@ contextBridge.exposeInMainWorld('api', {
   },
 
   // ---- Reset / Danger zone (F7) ----
+  // P1-G (360° Audit H-016): destructive operations require a confirmation
+  // token minted via native dialog. Call confirmRequest() first, then pass
+  // the returned token to the destructive call.
+  confirmRequest: (opts) => ipcRenderer.invoke('confirm:request', opts),
   // Deletes ONLY the tool's own settings/state files (+ mmx CLI key).
   // NEVER the user's generated assets. Returns per-file results for
   // honest partial-failure reporting.
-    resetAllData: () => ipcRenderer.invoke('app:resetAllData'),
+    resetAllData: (payload) => ipcRenderer.invoke('app:resetAllData', payload),
     relaunchApp: () => ipcRenderer.invoke('app:relaunch'),
-    resetAndRelaunch: () => ipcRenderer.invoke('app:resetAndRelaunch'),
+    resetAndRelaunch: (payload) => ipcRenderer.invoke('app:resetAndRelaunch', payload),
 
   // ---- M3 in-tool document generation (F3) ----
   // Sends a chat-completion request to MiniMax M3 via the main process.
@@ -881,6 +888,9 @@ contextBridge.exposeInMainWorld('api', {
   // ---- Other APIs tab (non-MiniMax providers) ----
   // Config persistence for providers.json (separate from config.txt).
   providersGet: () => ipcRenderer.invoke('providers:get'),
+  // P0-B (360° Audit C-002): secret-free provider DTO. Returns providers
+  // with hasKey boolean + apiKeyLast4 instead of raw apiKey values.
+  providersGetPublic: () => ipcRenderer.invoke('providers:getPublic'),
   providersSet: (d) => ipcRenderer.invoke('providers:set', d),
   // Model discovery (GET /models for OpenAI-compatible providers).
   providersListModels: (payload) => ipcRenderer.invoke('providers:listModels', payload),

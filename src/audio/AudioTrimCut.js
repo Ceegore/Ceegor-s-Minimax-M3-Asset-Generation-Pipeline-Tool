@@ -4,6 +4,7 @@
 
 const path = require('path');
 const fs = require('fs');
+const crypto = require('crypto');
 const { spawn } = require('child_process');
 const { findBinary } = require('./AudioBinary');
 const { probe } = require('./AudioMetadata');
@@ -252,7 +253,14 @@ async function cut(srcPath, dstPath, opts = {}) {
       );
     }
   }
-  args.push('-y', dstPath);
+  // P4.4 (DB-H-004): ffmpeg writes to a uuid-named temp file in the
+  // DESTINATION folder (same volume → the final rename is atomic), never
+  // straight to dstPath. A crash / kill / timeout mid-encode therefore can
+  // never leave a truncated file at the destination — which matters most
+  // when the caller is overwriting an existing asset. The real container
+  // extension stays LAST so ffmpeg's muxer autodetection still works.
+  const tmpPath = path.join(path.dirname(dstPath), `.cut-${crypto.randomUUID()}.tmp.${ext}`);
+  args.push('-y', tmpPath);
 
   const bin = findBinary();
   if (!bin) return { ok: false, error: 'ffmpeg binary not found.' };
@@ -261,6 +269,9 @@ async function cut(srcPath, dstPath, opts = {}) {
     let proc;
     let timeoutTimer = null;
     let settled = false;
+    // P4.4: every failure path deletes the temp — the destination (and any
+    // pre-existing file there) is never touched until the rename.
+    const cleanupTmp = () => { try { fs.unlinkSync(tmpPath); } catch (_) {} };
     // Single settle point: the timeout-kill also fires 'close', so this
     // guards against resolving twice (and reporting a partial file as success).
     const done = (r) => {
@@ -276,24 +287,49 @@ async function cut(srcPath, dstPath, opts = {}) {
       return;
     }
     // Kill a hung ffmpeg instead of blocking audio:cut forever. On timeout
-    // also remove the partial output so the caller never picks up a truncated
-    // file (mirrors the AudioSilenceDetect timeout pattern).
+    // remove the partial TEMP file (mirrors the AudioSilenceDetect timeout
+    // pattern) — the destination is untouched by design.
     timeoutTimer = setTimeout(() => {
       try { proc.kill('SIGKILL'); } catch (_) {}
-      try { fs.unlinkSync(dstPath); } catch (_) {}
+      cleanupTmp();
       done({ ok: false, error: 'Audio cut timed out.' });
     }, 10 * 60 * 1000);
     let stderr = '';
     proc.stderr.on('data', (b) => { stderr += b.toString('utf8'); });
-    proc.on('error', (e) => done({ ok: false, error: String((e && e.message) || e) }));
+    proc.on('error', (e) => { cleanupTmp(); done({ ok: false, error: String((e && e.message) || e) }); });
     proc.on('close', (code) => {
-      if (code !== 0) {
-        done({ ok: false, code, error: `ffmpeg exited with code ${code}`, stderr });
-        return;
-      }
-      // KGO8-007: startSec/endSec/duration are the CLAMPED values actually
-      // produced, and `warnings` says so when they differ from the request.
-      done({ ok: true, outputPath: dstPath, startSec, endSec, duration, warnings });
+      (async () => {
+        if (code !== 0) {
+          cleanupTmp();
+          done({ ok: false, code, error: `ffmpeg exited with code ${code}`, stderr });
+          return;
+        }
+        // P4.4: validate the temp BEFORE it replaces anything. ffmpeg can
+        // exit 0 yet leave an unreadable stub (disk full mid-flush, broken
+        // muxer); the probe must read a real duration or the original file
+        // at dstPath is preserved untouched.
+        const check = await probe(tmpPath);
+        if (!check || !check.ok || !Number.isFinite(check.duration) || check.duration <= 0) {
+          cleanupTmp();
+          done({
+            ok: false,
+            error: `Cut output failed validation (${(check && check.error) || 'no readable duration'}); the original file was preserved.`,
+            stderr,
+          });
+          return;
+        }
+        try {
+          // Atomic swap: same folder ⇒ same volume ⇒ rename, never a copy.
+          fs.renameSync(tmpPath, dstPath);
+        } catch (e) {
+          cleanupTmp();
+          done({ ok: false, error: `Could not move the finished cut into place: ${String((e && e.message) || e)}`, stderr });
+          return;
+        }
+        // KGO8-007: startSec/endSec/duration are the CLAMPED values actually
+        // produced, and `warnings` says so when they differ from the request.
+        done({ ok: true, outputPath: dstPath, startSec, endSec, duration, warnings });
+      })().catch((e) => { cleanupTmp(); done({ ok: false, error: String((e && e.message) || e), stderr }); });
     });
   });
 }

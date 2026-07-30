@@ -493,13 +493,16 @@ test('v1.5b.2: runExternalTool rejects file paths outside the grant (replaces le
 test('v1.1.31: runExternalTool spawns a real .exe on a valid file path (win32 happy path)', async () => {
   const ipc = loadIPC();
   const cfgMod = require('../../../../src/config');
-  // Use cmd.exe /c exit 0 — it's always present on Windows and
-  // exits cleanly so spawn() doesn't hang. We give it the
-  // FILE PATH as the first arg, just to verify the argv shape.
-  const cmdExe = process.env.ComSpec || 'C:\\Windows\\System32\\cmd.exe';
+  // P1-C (360° Audit C-003): cmd.exe is now a BLOCKED interpreter binary.
+  // Use attrib.exe instead — always present on Windows, not a shell/script
+  // host, and exits immediately when given a file path argument.
+  const attribExe = path.join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'attrib.exe');
   const origRead = cfgMod.read;
   cfgMod.read = () => Object.assign(cfgMod.defaultConfig(), {
-    external_tools: [{ name: 'cmd', exe: cmdExe, args: '/c exit 0' }],
+    external_tools: [
+      { name: 'attrib', exe: attribExe, args: '' },
+      { name: 'cmd', exe: process.env.ComSpec || 'C:\\Windows\\System32\\cmd.exe', args: '/c exit 0' },
+    ],
   });
   // The IPC path check uses isPathUnderAny + the same allowed
   // roots. Stub it to allow any path under tmpDir.
@@ -534,11 +537,11 @@ test('v1.1.31: runExternalTool spawns a real .exe on a valid file path (win32 ha
   delete require.cache[require.resolve('../../../../main/ipc/registerExternalToolsIpc')];
   const ipc2 = require('../../../../main/ipc/registerExternalToolsIpc');
   try {
-    const r = await ipc2._internal.runExternalTool({ name: 'cmd', paths: [fakeFile] }, 'mock-grant-id');
+    const r = await ipc2._internal.runExternalTool({ name: 'attrib', paths: [fakeFile] }, 'mock-grant-id');
     if (process.platform !== 'win32') {
-      // We can only run the cmd.exe happy path on Windows. On
+      // We can only run the attrib.exe happy path on Windows. On
       // Linux/macOS the validator will reject the absolute
-      // /Windows/System32/cmd.exe path; the test still passes
+      // /Windows/System32/attrib.exe path; the test still passes
       // because we only check r.ok, not the precise error.
       return;
     }
@@ -546,6 +549,11 @@ test('v1.1.31: runExternalTool spawns a real .exe on a valid file path (win32 ha
     assert.ok(typeof r.pid === 'number' && r.pid > 0, 'pid should be a positive number');
     assert.ok(Array.isArray(r.argv) && r.argv.includes(fakeFile),
       `argv should include the file path. got: ${JSON.stringify(r.argv)}`);
+    // P1-C (C-003): interpreter binaries must be REFUSED.
+    const blocked = await ipc2._internal.runExternalTool({ name: 'cmd', paths: [fakeFile] }, 'mock-grant-id');
+    assert.equal(blocked.ok, false, 'cmd.exe must be refused as an external tool');
+    assert.ok(/interpreter|shell/i.test(blocked.error || ''),
+      `expected interpreter-blocklist error, got: ${blocked.error}`);
   } finally {
     cfgMod.read = origRead;
     delete require.cache[pathGrantPath];

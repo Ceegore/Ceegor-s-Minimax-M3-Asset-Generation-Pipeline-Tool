@@ -313,7 +313,8 @@
             toast('Asset generated.', 'ok', 2500);
             close();
           }
-        } else if (res && res.status === 'cancel') {
+        } else if (res && (res.status === 'cancel' || res.status === 'partial')) {
+          // P4.7: 'partial' = cancelled after some outputs landed — still "Cancelled." for this popover.
           status.textContent = 'Cancelled.';
           genBtn.disabled = false;
         } else {

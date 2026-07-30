@@ -1440,14 +1440,16 @@ test('HARNESS 13: ensureSubDir writes to the root instead of a per-tab subfolder
   assert.ok(/fbEnsureDir:\s*\(dir,\s*grantId\)\s*=>\s*ipcRenderer\.invoke\('fb:ensureDir',\s*dir,\s*grantId\)/.test(preloadSrc),
     'preload.js must expose window.api.fbEnsureDir bridging to the fb:ensureDir channel AND pass grantId through');
   const fbIpcSrc = src('main/ipc/registerFileBrowserIpc.js');
-  assert.ok(/ipcMain\.handle\('fb:ensureDir'/.test(fbIpcSrc),
+  // P1-A (C-001): registrars now use the secureHandle wrapper instead of
+  // bare ipcMain.handle — accept either spelling in these guards.
+  assert.ok(/(?:ipcMain\.handle|secureHandle)\('fb:ensureDir'/.test(fbIpcSrc),
     'main/ipc/registerFileBrowserIpc.js must register the fb:ensureDir handler');
   assert.ok(/fb:ensureDir'[\s\S]{0,400}pathGrantService\.authorize\(grantId,/.test(fbIpcSrc) || /fb:ensureDir'[\s\S]{0,400}_authorizePath\(grantId,/.test(fbIpcSrc),
     'fb:ensureDir must authorize the path through PathGrantService.authorize(grantId, ...) — directly or via the _authorizePath helper — before any mkdir (R1.3)');
   // The R1.3 contract: the grantId parameter must be the LAST argument
   // of the handler, and the handler must reject a missing/empty grantId
   // BEFORE the mkdir call.
-  assert.ok(/ipcMain\.handle\('fb:ensureDir',\s*async\s*\([^)]*grantId\)/.test(fbIpcSrc),
+  assert.ok(/(?:ipcMain\.handle|secureHandle)\('fb:ensureDir',\s*(?:\{[^}]*\},\s*)?async\s*\([^)]*grantId\)/.test(fbIpcSrc),
     "fb:ensureDir handler must take a grantId parameter (R1.3: 'grantId is required for mkdir on <path>')");
 });
 

@@ -32,6 +32,11 @@ const { ipcMain, shell } = require('electron');
 const fsp = require('fs').promises;
 const path = require('path');
 const cfgMod = require('../../src/config');
+// P0-A (360° Audit C-003): feature-flag gate disables External Tools
+// execution in production builds until the permanent security fix lands.
+const { externalToolsEnabled } = require('../services/FeatureFlags');
+// P1-A (360° Audit H-001): secure IPC wrapper with sender/frame/origin validation.
+const { secureHandle } = require('./secureHandle');
 // R1.5b.2: shared grant authoriser (R1.5a.6) replaces the legacy
 // path-under-any gate for the renderer's file paths. The grant is
 // the source of truth for "is the renderer allowed to hand this
@@ -94,7 +99,30 @@ function buildArgvForTool(tool, filePaths, platform) {
  *     something they didn't mean
  *   - has a Windows-style device-name collision (`C:\foo\CON.exe`)
  *   - does not exist OR is not a regular file
+ *   - P1-C (C-003): is a known interpreter/shell binary
  */
+// P1-C (360° Audit C-003): interpreter binaries that must NEVER be
+// spawned as external tools. These are shell/script hosts that would
+// give a compromised renderer arbitrary code execution.
+const BLOCKED_INTERPRETERS = new Set([
+  'cmd.exe', 'cmd',
+  'powershell.exe', 'powershell',
+  'pwsh.exe', 'pwsh',
+  'wscript.exe', 'wscript',
+  'cscript.exe', 'cscript',
+  'mshta.exe', 'mshta',
+  'rundll32.exe', 'rundll32',
+  'regsvr32.exe', 'regsvr32',
+  'certutil.exe', 'certutil',
+  'bitsadmin.exe', 'bitsadmin',
+  'bash.exe', 'bash',
+  'sh.exe', 'sh',
+  'python.exe', 'python',
+  'python3.exe', 'python3',
+  'node.exe', 'node',
+  'wmic.exe', 'wmic',
+]);
+
 async function validateExePath(exe) {
   if (!exe || typeof exe !== 'string') throw new Error('Exe path is required.');
   const trimmed = exe.trim();
@@ -117,6 +145,11 @@ async function validateExePath(exe) {
     throw new Error(`Exe path does not exist: ${trimmed}`);
   }
   if (!st.isFile()) throw new Error(`Exe path is not a regular file: ${trimmed}`);
+  // P1-C (C-003): block interpreter/shell binaries.
+  const exeBasename = path.basename(trimmed).toLowerCase();
+  if (BLOCKED_INTERPRETERS.has(exeBasename)) {
+    throw new Error(`Refusing to register interpreter/shell binary "${exeBasename}" as an external tool. Only GUI applications are allowed.`);
+  }
   return trimmed;
 }
 
@@ -297,17 +330,26 @@ async function probeExternalTool(payload) {
  * Register the IPC handlers. Kept tiny so a unit test can call
  * `register({ appRoot, getMainWindow })` directly without booting
  * Electron.
+ * @param {{ getMainWindow?: () => (Electron.BrowserWindow|null), appRoot?: string }} deps
  */
-function register() {
+function register(deps) {
+  const getMainWindow = (deps && typeof deps.getMainWindow === 'function') ? deps.getMainWindow : () => null;
   // R1.5b.2: externalTools:run takes a trailing grantId (the
   // renderer's Main-minted grant that authorises the file paths
   // in `payload.paths`). The grant is the source of truth for
   // "is the renderer allowed to hand this file to the spawned
   // tool?".
-  ipcMain.handle('externalTools:run', async (_e, payload, grantId) => runExternalTool(payload, grantId));
+  // P0-A (C-003): gate behind feature flag — disabled in production.
+  // P1-A (H-001): wrapped with secureHandle for sender/frame/origin validation.
+  secureHandle('externalTools:run', { getMainWindow }, async (_e, payload, grantId) => {
+    if (!externalToolsEnabled()) {
+      return { ok: false, error: 'External Tools execution is disabled in production builds for security (audit C-003). Use a development build to enable.' };
+    }
+    return runExternalTool(payload, grantId);
+  });
   // externalTools:probe is unchanged (no file paths in the
   // payload — just exe metadata).
-  ipcMain.handle('externalTools:probe', async (_e, payload) => probeExternalTool(payload));
+  secureHandle('externalTools:probe', { getMainWindow }, async (_e, payload) => probeExternalTool(payload));
 }
 
 module.exports = {

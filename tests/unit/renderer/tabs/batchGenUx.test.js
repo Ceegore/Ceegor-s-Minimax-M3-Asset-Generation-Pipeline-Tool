@@ -135,3 +135,25 @@ test('computeExpectedCalls counts variants per item and skips defective entries'
   assert.equal(fn('image', [{ prompt: 'bad', _defective: ['missing prompt'] }, 'ok']), 1,
     'defective entries are skipped exactly like the run loop skips them');
 });
+
+// P4.3 (DB-H-003): image --n multiplies billable outputs (units) but not API
+// calls; { callsOnly: true } must return the raw call count, and non-image
+// tabs must ignore n entirely.
+test('computeExpectedCalls multiplies image --n into units and honours callsOnly', () => {
+  const vm = require('vm');
+  const start = MANAGER.indexOf('function computeExpectedCalls');
+  const end = MANAGER.indexOf('\n}', start);
+  const src = MANAGER.slice(start, end + 2);
+  const sandbox = vm.createContext({ $: () => null });
+  vm.runInContext(`${src}; globalThis.__cec = computeExpectedCalls;`, sandbox, { filename: 'batchManager.js#computeExpectedCalls', timeout: 3000 });
+  const fn = sandbox.__cec;
+  assert.equal(fn('image', [{ prompt: 'x', n: 4 }]), 4, 'n multiplies units');
+  assert.equal(fn('image', [{ prompt: 'x', variants: 2, n: 3 }]), 6, 'variants × n');
+  assert.equal(fn('image', [{ prompt: 'x', '--n': '2' }]), 2, '--n alias works');
+  assert.equal(fn('image', [{ prompt: 'x', params: { n: 3 } }]), 3, 'params.n works');
+  assert.equal(fn('image', [{ prompt: 'x', n: 99 }]), 9, 'n clamps to 9');
+  assert.equal(fn('image', [{ prompt: 'x', n: 4 }], { callsOnly: true }), 1,
+    'callsOnly must return raw API calls (n ignored)');
+  assert.equal(fn('music', [{ prompt: 'x', n: 4 }]), 1, 'non-image tabs ignore n');
+  assert.equal(fn('image', [{ prompt: 'x' }]), 1, 'absent n → ×1 (legacy behaviour)');
+});

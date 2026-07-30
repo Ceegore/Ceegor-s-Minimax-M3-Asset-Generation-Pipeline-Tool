@@ -23,12 +23,17 @@ const reEsrgan = require('../../src/realesrgan');
 const { downloadRealesrgan } = require('../services/InstallDownloadService');
 const { authorizePath: _authorizePath } = require('./grantAuthorizer');
 const { wrapInpaintHandler } = require('./legacyAdapter');
+// P4.1 (360° Audit DB-H-002/008): validate the upscale artifact before
+// reporting success.
+const { validateAndFinalize } = require('../services/ArtifactFinalizer');
+// P1-A (360° Audit H-001): secure IPC wrapper.
+const { secureHandle } = require('./secureHandle');
 
 /**
  * @param {{ getMainWindow: () => (Electron.BrowserWindow|null), appRoot: string }} deps
  */
 function register({ getMainWindow, appRoot }) {
-  ipcMain.handle('upscale:realesrgan:available', () => {
+  secureHandle('upscale:realesrgan:available', { getMainWindow }, () => {
     const available = reEsrgan.isAvailable();
     return {
       ok: true,
@@ -42,7 +47,7 @@ function register({ getMainWindow, appRoot }) {
   // the 9 contract fields; the legacy envelope already has
   // `outputPath` so no path-Mapping is needed). Backend is
   // 'realesrgan'.
-  ipcMain.handle('upscale:realesrgan:run', wrapInpaintHandler(async (event, srcPath, dstPath, opts, grantId) => {
+  secureHandle('upscale:realesrgan:run', { getMainWindow }, wrapInpaintHandler(async (event, srcPath, dstPath, opts, grantId) => {
     // R1.5a.3: read on srcPath + write on dstPath (replaces the
     // legacy isPathUnderAny + isParentUnderAny gates).
     const readAuthz = _authorizePath(grantId, 'read', srcPath);
@@ -60,10 +65,29 @@ function register({ getMainWindow, appRoot }) {
         try { win.send('upscale:realesrgan:progress', { key: progressKey, pct, runGen: runOpts.runGen }); } catch (_) {}
       };
     }
-    return await reEsrgan.run(srcPath, dstPath, runOpts);
+    return await _validatedRun(srcPath, dstPath, runOpts);
   }, 'realesrgan'));
 
-  ipcMain.handle('upscale:realesrgan:download', async (event) => {
+  // P4.1 (360° Audit DB-H-002/008): both realesrgan code paths (the binary
+  // spawn and the sharp ≤8px small-image fallback) always emit PNG. Wrap the
+  // handler so every success result is validated before it reaches the
+  // renderer — "exit 0 + existsSync" alone does not prove a usable file (a
+  // 0-byte or truncated PNG would otherwise flow through as a successful
+  // upscale). minSize is 64 (not the 1 KB default) because the small-image
+  // path legitimately produces sub-KB PNGs for tiny sources.
+  async function _validatedRun(srcPath, dstPath, runOpts) {
+    const r = await reEsrgan.run(srcPath, dstPath, runOpts);
+    if (r && r.ok) {
+      const outPath = r.outputPath || dstPath;
+      const v = await validateAndFinalize({ path: outPath, expectedType: 'png', minSize: 64 });
+      if (!v.ok) {
+        return { ok: false, code: -1, stderr: `Upscale reported success but the output failed validation: ${v.error}`, outputPath: null };
+      }
+    }
+    return r;
+  }
+
+  secureHandle('upscale:realesrgan:download', { getMainWindow }, async (event) => {
     try {
       const win = event.sender;
       const send = (data) => { try { win.send('upscale:realesrgan:download:progress', data); } catch (_) {} };

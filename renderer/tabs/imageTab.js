@@ -467,13 +467,26 @@ window.TABS.image = {
       // the classified type and a copy-paste blob for support.
       let lastFailedR = null;
       let threw = null;
-      // The mmx CLI rejects `--out` when `--n > 1` ("--out cannot be used with
-      // --n > 1. Use --out-dir instead."). When the user requested multiple
-      // images via the --n (count) dropdown, we omit --out and let mmx write
-      // numbered files into outDir.
+      // The mmx CLI rejects `--out` when `--n > 1` — for multi-image runs we
+      // omit --out and let mmx write numbered files into the run dir.
       const nRaw = n.input.getValue();
       const nCount = nRaw === '' || nRaw == null ? 1 : Math.max(1, parseInt(String(nRaw), 10) || 1);
       const useOutDir = nCount > 1;
+      // P4.2 (DB-H-001): --n>1 writes into a private Main-created run_<id>
+      // subdir; results are read ONLY from it (no mtime discovery). A failed
+      // mint ABORTS — the shared folder would race concurrent runs' files.
+      let runDir = outDir;
+      if (useOutDir) {
+        const BDR = window.BatchDirectRunner || {};
+        const minted = BDR.mintRunSubdir ? BDR.mintRunSubdir(outDir) : { ok: false, error: 'BatchDirectRunner not loaded' };
+        const ensured = (minted.ok && BDR.ensureRunSubdir) ? await BDR.ensureRunSubdir(minted.runSubdir, mmxGrant) : minted;
+        if (!ensured.ok) {
+          toast('Cannot create the private run folder: ' + (ensured.error || 'unknown'), 'err', 6000);
+          cancel.cleanup();
+          return { status: 'err', error: 'run-dir creation failed', outputPaths: [] };
+        }
+        runDir = ensured.path;
+      }
       // Total images this run will produce. The per-tab ETA timer reads
       // this from state.genQueueSize[tabKey] to compute a "remaining
       // time for the whole batch" estimate that ticks down as each
@@ -511,7 +524,7 @@ window.TABS.image = {
         }
         appendFlag(args, respFmt.input);
         if (useOutDir) {
-          args.push('--out-dir', outDir);
+          args.push('--out-dir', runDir);
         }
         return args;
       }
@@ -524,7 +537,7 @@ window.TABS.image = {
       // `<prefix>000002.<ext>`, and so on.
       const forceCounter = { n: 0 };
       async function makeOutPath(v) {
-        if (useOutDir) return outDir;
+        if (useOutDir) return runDir;
         const ts = timestamp();
         const variantTag = variantsCount > 1 ? `_v${v}` : '';
         const prefix = (state.filePrefix || '').trim();
@@ -542,26 +555,17 @@ window.TABS.image = {
         }
         return uniquePath(outDir, `${prefix}${ts}_${slug}${variantTag}.png`);
       }
-      // Discover the files an --out-dir (--n > 1) run produced by
-      // scanning outDir for entries written during this run (mmx picks
-      // its own filenames, so the renderer can't know them up front).
-      // Extracted from the success block so the CANCEL path can also
-      // populate the output list — a cancelled multi-image run that
-      // had already written files should still record them as
-      // outputPaths, not orphan them from the job history.
+      // P4.2 (DB-H-001): list the PRIVATE run dir an --out-dir (--n > 1) run
+      // wrote into — mmx picks its own filenames, and the dir by construction
+      // only holds THIS run's files, so no mtime windowing is needed. Shared
+      // by the success block and the cancel path (partial outputs).
       async function resolveOutDirFiles() {
         try {
-          const _g = (window.GrantHelper && window.GrantHelper.ensureDirList) ? await window.GrantHelper.ensureDirList(outDir) : undefined;
-          const dirList = (_g && _g.ok === false) ? _g : await window.api.fbList(outDir, _g);
+          const _g = (window.GrantHelper && window.GrantHelper.ensureDirList) ? await window.GrantHelper.ensureDirList(runDir) : undefined;
+          const dirList = (_g && _g.ok === false) ? _g : await window.api.fbList(runDir, _g);
           if (dirList && dirList.ok && Array.isArray(dirList.items)) {
-            const startMs = (state.genStartMs && state.genStartMs.image) || (Date.now() - 600000);
-            const nowMs = Date.now();
             const matches = dirList.items
               .filter((it) => !it.isDir && ['.png', '.jpg', '.jpeg', '.webp'].includes(it.ext))
-              .filter((it) => {
-                const m = it.mtimeMs || 0;
-                return m >= startMs - 1500 && m <= nowMs + 5000;
-              })
               .sort((a, b) => (a.mtimeMs || 0) - (b.mtimeMs || 0));
             if (matches.length) return matches.map((m) => m.path);
           }
@@ -593,7 +597,7 @@ window.TABS.image = {
           const itemStart = Date.now();
           const statusMsg = variantsCount > 1
             ? `Generating image… variant ${v}/${variantsCount}`
-            : (useOutDir ? `Generating image… (${nCount} images to ${outDir})` : 'Generating image…');
+            : (useOutDir ? `Generating image… (${nCount} images to ${runDir})` : 'Generating image…');
           setStatus(statusMsg, true);
           // F4: progress now routes to status bar only (no preview element).
 
@@ -752,14 +756,8 @@ window.TABS.image = {
         // longer the structural gate.
         if (outFiles.length > 0) finalOutputPaths = outFiles.slice();
         if (succeededCount > 0 && !cancel.wasCancelled()) {
-        // Resolve the full list of output files. For --out-dir runs
-        // (--n > 1), the per-call filenames are not known to the
-        // renderer (mmx writes them with its own naming scheme), so
-        // we scan outDir for files that were created during this
-        // run. We use the run start time + a small 1.5s pre-roll as
-        // the lower bound, and "now" as the upper bound. For single-
-        // file runs (useOutDir=false), the file list is already known
-        // from the variant loop in `outFiles`.
+        // Resolve the output list: --out-dir runs list the private run dir
+        // (mmx names the files); single-file runs already have `outFiles`.
         let sourceFiles = outFiles.slice();
         if (useOutDir) {
           // The discovery scan lives in resolveOutDirFiles() so the
@@ -1029,7 +1027,7 @@ window.TABS.image = {
         setStatus('Generation cancelled.', false);
         toast('Cancelled.', 'warn');
         // A cancelled --n > 1 run may have already written files to
-        // outDir before the cancel landed. The out-dir discovery scan
+        // the run dir before the cancel landed. The run-dir discovery scan
         // normally runs inside the success branch (skipped on cancel),
         // so finalOutputPaths would be [] and the job history /
         // ActiveJobsWidget / Archive would orphan the produced files.

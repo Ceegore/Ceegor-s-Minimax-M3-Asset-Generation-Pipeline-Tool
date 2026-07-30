@@ -14,7 +14,8 @@
 // shared with concurrent runs or with the user's pre-existing files).
 //
 // The batch runner calls runVariantDirect(tabKey, item, ctxOverrides) per
-// variant. Returns { ok, outFile, error }.
+// variant. Returns { ok, outFile, error } (a cancel additionally carries
+// status: 'partial'|'cancel' + outputPaths — see P4.6 below).
 
 (function () {
   'use strict';
@@ -89,6 +90,27 @@
     return { ok: true, path: runSubdir, note: 'fbEnsureDir unavailable — subdir not actually created' };
   }
 
+  // P4.6 (DB-H-007): inventory the deliverable files inside a private run
+  // dir. Shared by the success-path discovery and the cancel-path partial-
+  // output inventory. The dir only ever holds THIS run's files (P4.2: a
+  // failed mint aborts before mmx spawns), so no mtime filtering; the
+  // extension filter drops the .meta.json / .tmp / .part files mmx-cli
+  // sometimes leaves behind.
+  async function listRunDirFiles(dir) {
+    if (!dir || !window.api || typeof window.api.fbList !== 'function') return [];
+    try {
+      const _g = (window.GrantHelper && window.GrantHelper.ensureDirList) ? await window.GrantHelper.ensureDirList(dir) : undefined;
+      const list = (_g && _g.ok === false) ? _g : await window.api.fbList(dir, _g);
+      if (list && list.ok && Array.isArray(list.items)) {
+        return list.items
+          .filter((it) => !it.isDir && ['.png', '.jpg', '.jpeg', '.webp'].includes(it.ext))
+          .sort((a, b) => (a.name || a.path || '').localeCompare(b.name || b.path || ''))
+          .map((it) => it.path);
+      }
+    } catch (_) { /* best-effort */ }
+    return [];
+  }
+
   // Run ONE generation directly (no DOM mutation). Handles postprocess + enqueue.
   // Returns { ok, outFile, error }.
   async function runVariantDirect(tabKey, item, ctxOverrides) {
@@ -115,26 +137,26 @@
 
     // R6.2: mint a per-run subdir BEFORE building the ctx. The ctx then
     // scopes every write (--out, --out-dir, uniquePath) to the runSubdir.
-    // A failed mint (e.g. the user-facing outputDir is not yet set) still
-    // lets the call proceed with the user-facing outputDir as a fallback
-    // — single-image runs work the same as before R6.2.
+    // P4.2 (DB-H-001): the n>1 case MUST run in its private subdir — a
+    // failed mint/mkdir ABORTS the item. Falling back to the shared
+    // outputDir would revive the racy mtime discovery the subdir exists to
+    // prevent (concurrent runs claiming each other's files).
     const _seedCtx = makeCtx(ctxOverrides || {});
     let runSubdir = null;
-    if (_seedCtx.outputDir && (normalizedItem && (normalizedItem.n || (normalizedItem.params && normalizedItem.params.n)))) {
+    {
       // R6.2 only mints a runSubdir for the n>1 (out-dir) case. Single-file
       // runs (n=1) keep writing directly to the user-facing outputDir —
       // a per-run subdir per single image would multiply the user's folder
       // count by the batch size, which is exactly the noise R6.1 fought.
-      const nRaw = normalizedItem.n || (normalizedItem.params && normalizedItem.params.n) || '1';
+      const nRaw = (normalizedItem && (normalizedItem.n || (normalizedItem.params && normalizedItem.params.n))) || '1';
       const nCount = (nRaw === '' || nRaw == null) ? 1 : Math.max(1, parseInt(nRaw, 10) || 1);
       if (nCount > 1) {
         const minted = mintRunSubdir(_seedCtx.outputDir);
-        if (minted.ok) {
-          const ensured = await ensureRunSubdir(minted.runSubdir, _seedCtx.grantId);
-          if (ensured.ok) {
-            runSubdir = ensured.path;
-          }
+        const ensured = minted.ok ? await ensureRunSubdir(minted.runSubdir, _seedCtx.grantId) : minted;
+        if (!ensured.ok) {
+          return { ok: false, outFile: null, error: 'Private run directory could not be created: ' + (ensured.error || 'unknown') + ' — aborted (would fall back to the shared output folder).' };
         }
+        runSubdir = ensured.path;
       }
     }
 
@@ -165,10 +187,6 @@
     // subprocess. suppressLogRow:true avoids a duplicate primary log row
     // (the batch overlay already logs its own line per item/variant).
     const st = window.state || (window.state = {});
-    // R10: timestamp for the fallback recency filter below — only used when
-    // runSubdir is null (the n>1 mint failed and we fell back to the shared
-    // outputDir), so the out-dir scan can skip the user's pre-existing files.
-    const runStart = Date.now();
     let r;
     if (window.JobRunner && typeof window.JobRunner.run === 'function') {
       let ctrl;
@@ -226,7 +244,28 @@
       // whatever the killed proc resolved to (often null), which the `!r`
       // guard below would misreport as "mmxRunJob returned null" and log as
       // ✗ FAILED. Report the cancel accurately instead.
-      if (doneRes && doneRes.status === 'cancel') return { ok: false, outFile, error: 'cancelled' };
+      // P4.6 (DB-H-007): before returning, inventory the private runSubdir —
+      // a killed n>1 run may already have written deliverables. Policy:
+      // keepPartialOutputs (default true) keeps them on disk and reports
+      // status 'partial' with the discovered paths; false deletes the whole
+      // runSubdir (best-effort, mirrors the mmx-failure cleanup below).
+      if (doneRes && (doneRes.status === 'cancel' || doneRes.status === 'partial')) {
+        const keep = !(ctxOverrides && ctxOverrides.keepPartialOutputs === false);
+        let partialPaths = runSubdir ? await listRunDirFiles(runSubdir) : [];
+        if (runSubdir && !keep) {
+          if (window.api && typeof window.api.fbDelete === 'function') {
+            try { const dg = (window.GrantHelper) ? await window.GrantHelper.ensureDelete(runSubdir) : undefined; await window.api.fbDelete(runSubdir, dg); } catch (_) { /* best-effort */ }
+          }
+          partialPaths = [];
+        }
+        return {
+          ok: false,
+          outFile: partialPaths[0] || null,
+          outputPaths: partialPaths,
+          status: partialPaths.length ? 'partial' : 'cancel',
+          error: partialPaths.length ? `cancelled — ${partialPaths.length} partial output(s) kept in ${runSubdir}` : 'cancelled',
+        };
+      }
     } else {
       // No JobRunner (e.g. a bare test harness) — plain call with a synthetic
       // jobId so mmxCancel/main proc-tracking still has a key to work with.
@@ -254,34 +293,14 @@
 
     // Collect the output file(s). The builder produces one outFile per call;
     // for the image n>1 case (--out-dir), mmx names the files itself, so
-    // list the out-dir for the new images.
-    //
-    // R6.2 (JobWorkspace für n>1): the out-dir is now a per-run subdir
-    // minted + mkdir'd by this function above. The subdir by construction
-    // contains ONLY files written by THIS run (mmx-cli writes inside the
-    // --out-dir we gave it, no concurrent writer shares it, and the
-    // mkdir happens before the runStart so the dir was empty when mmx
-    // started). The previous mtime-window filter (m >= runStart - 1500 &&
-    // m <= now + 5000) is therefore unnecessary and was removed — it was
-    // both racy (a slow mmx run could exceed the 5s ceiling if the user
-    // had a slow disk) AND false-positive-prone (a pre-existing file in
-    // the shared outputDir with a recent mtime was wrongly included).
-    // We still filter by extension to drop .meta.json / .tmp / .part files
-    // mmx-cli sometimes leaves behind.
+    // inventory the private per-run subdir (P4.2/DB-H-001: a failed mint
+    // aborts above, so the dir only ever holds THIS run's files — no mtime
+    // filter needed; see listRunDirFiles).
     let outFiles = [];
     if (outFile) {
       outFiles.push(outFile);
-    } else if (built.outDir && window.api && typeof window.api.fbList === 'function') {
-      try {
-        const _g = (window.GrantHelper && window.GrantHelper.ensureDirList) ? await window.GrantHelper.ensureDirList(built.outDir) : undefined;
-        const list = (_g && _g.ok === false) ? _g : await window.api.fbList(built.outDir, _g);
-        if (list && list.ok && Array.isArray(list.items)) {
-          outFiles = list.items
-            .filter((it) => !it.isDir && ['.png', '.jpg', '.jpeg', '.webp'].includes(it.ext) && (runSubdir || it.mtimeMs == null || it.mtimeMs >= runStart - 2000)) // R10: when runSubdir is null (mint failed → shared outputDir fallback) skip pre-existing files; the per-run subdir needs no recency filter (R6.2). mtimeMs==null keeps test mocks (no timestamps) working.
-            .sort((a, b) => (a.name || a.path || '').localeCompare(b.name || b.path || ''))
-            .map((it) => it.path);
-        }
-      } catch (_) { /* fall back to empty — best-effort */ }
+    } else if (built.outDir) {
+      outFiles = await listRunDirFiles(built.outDir);
     }
 
     // Run per-row postprocess (bg-removal/crop/resize/optimize/trim) directly —

@@ -186,6 +186,36 @@ test('sanitize keeps report_dir + external_tools (data-loss regression)', () => 
   assert.equal('removebg_api_key' in out, false, 'sanitize must not keep the removed key');
 });
 
+// P4.3 (DB-H-003): batch_max_units must survive serialize → parse AND the
+// ConfigSchema sanitize() whitelist, else Settings → Save resets the cap.
+test('batch_max_units round-trips through serialize → parse with clamping', () => {
+  const userData = 'C:\\Users\\tester\\AppData\\Roaming\\MiniMaxAssetTool';
+  const { cfgMod, tmpDir } = loadFresh(userData);
+  try {
+    assert.equal(cfgMod.parse(cfgMod.serialize({ batch_max_units: 500 })).batch_max_units, 500);
+    // Default when absent / garbage.
+    assert.equal(cfgMod.parse('api_key=k\n').batch_max_units, 200);
+    assert.equal(cfgMod.parse('batch_max_units=banana\n').batch_max_units, 200);
+    // Clamped: below 1 → default; above 10000 → ceiling.
+    assert.equal(cfgMod.parse('batch_max_units=0\n').batch_max_units, 200);
+    assert.equal(cfgMod.parse('batch_max_units=-5\n').batch_max_units, 200);
+    assert.equal(cfgMod.parse('batch_max_units=999999\n').batch_max_units, 10000);
+    assert.equal(cfgMod.parse(cfgMod.serialize({ batch_max_units: 999999 })).batch_max_units, 10000);
+  } finally {
+    try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch {}
+  }
+});
+
+test('sanitize keeps batch_max_units and clamps it (P4.3 data-loss regression)', () => {
+  const { sanitize } = require('../../../main/models/ConfigSchema');
+  assert.equal(sanitize({ batch_max_units: 500 }).batch_max_units, 500);
+  assert.equal(sanitize({ batch_max_units: '750' }).batch_max_units, 750);
+  assert.equal(sanitize({}).batch_max_units, 200, 'absent → default');
+  assert.equal(sanitize({ batch_max_units: 'banana' }).batch_max_units, 200);
+  assert.equal(sanitize({ batch_max_units: 0 }).batch_max_units, 200);
+  assert.equal(sanitize({ batch_max_units: 999999 }).batch_max_units, 10000);
+});
+
 test('sanitize cleans malformed external_tools entries', () => {
   const { sanitize } = require('../../../main/models/ConfigSchema');
   const out = sanitize({

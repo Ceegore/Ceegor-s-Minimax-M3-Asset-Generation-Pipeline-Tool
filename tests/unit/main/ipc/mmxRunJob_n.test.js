@@ -11,6 +11,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('fs');
+const os = require('os');
 const path = require('path');
 const Module = require('module');
 
@@ -157,6 +158,14 @@ test('mmx:run:job with --n 1 (no out-dir needed) also returns code 0', async () 
   resetCache();
   setupMocks({ onSpawn: () => {} });
   const handler = await loadIpcHandler();
+  // P4.1 (DB-H-002/008): the IPC now validates the --out artifact after
+  // runMmx resolves. The runMmx mock doesn't write files, so pre-create a
+  // plausible JPEG (>= 1 KB, JPEG magic) at the --out path.
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'mmx-n1-'));
+  const outFile = path.join(tmpDir, 'one.jpg');
+  const jpg = Buffer.alloc(2048, 0);
+  jpg[0] = 0xFF; jpg[1] = 0xD8; jpg[2] = 0xFF;
+  fs.writeFileSync(outFile, jpg);
   // R1.5b.1: pre-populate the PathGrantService mock so the grant
   // contract is satisfied (the --out file needs write authorisation).
   const pathGrantPath = path.join(ROOT, 'main', 'services', 'PathGrantService.js');
@@ -176,11 +185,12 @@ test('mmx:run:job with --n 1 (no out-dir needed) also returns code 0', async () 
     },
   };
   const result = await handler({}, {
-    args: ['image', 'generate', '--prompt', 'one cat', '--n', '1', '--out', 'C:\\temp\\minimax-pipeline-test\\one.jpg'],
+    args: ['image', 'generate', '--prompt', 'one cat', '--n', '1', '--out', outFile],
     jobId: 'job-n1-test',
     sessionOnly: true,
     rendererApiKey: 'sk-test-only',
   }, 'mock-grant-id');
+  try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch (_) {}
   assert.notEqual(result.code, -1, '--n 1 must also work (regression guard for the single-image path)');
   assert.equal(result.code, 0);
 });

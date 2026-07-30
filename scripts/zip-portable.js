@@ -332,6 +332,31 @@ function printPrivilegeFix() {
     fail('installer test failed: ' + ((e && e.message) || e));
   }
 
+  // ---- Step 1.8 (M-024): per-file integrity manifest inside the release ----
+  log('');
+  log('Step 1.8: writing per-file integrity manifest (FILES.sha256)...');
+  {
+    const SKIP_NAMES = new Set(['FILES.sha256']);
+    const lines = [];
+    (function walk(dir) {
+      for (const ent of fs.readdirSync(dir, { withFileTypes: true })) {
+        const full = path.join(dir, ent.name);
+        if (ent.isDirectory()) { walk(full); continue; }
+        if (SKIP_NAMES.has(ent.name)) continue;
+        const h = crypto.createHash('sha256');
+        const fd = fs.openSync(full, 'r');
+        const buf = Buffer.alloc(64 * 1024);
+        let n;
+        while ((n = fs.readSync(fd, buf, 0, buf.length, null)) > 0) h.update(buf.slice(0, n));
+        fs.closeSync(fd);
+        lines.push(h.digest('hex') + '  ' + path.relative(UNPACKED, full).replace(/\\/g, '/'));
+      }
+    })(UNPACKED);
+    lines.sort((a, b) => a.slice(66).localeCompare(b.slice(66)));
+    fs.writeFileSync(path.join(UNPACKED, 'FILES.sha256'), lines.join('\n') + '\n', 'utf8');
+    log('  ' + lines.length + ' files hashed');
+  }
+
   // ---- Step 2: zip the release folder ----
   log('');
   log('Step 2/2: zipping the release into ' + BASE_NAME + ' archive(s)...');

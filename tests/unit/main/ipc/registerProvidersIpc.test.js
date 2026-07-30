@@ -29,7 +29,7 @@ require.cache[require.resolve('electron')] = {
 
 // Clear caches so modules pick up the env override + electron stub.
 for (const key of Object.keys(require.cache)) {
-  if (key.includes('providersStore') || key.includes('registerProvidersIpc') || key.includes(path.join('src', 'config'))) {
+  if (key.includes('providersStore') || key.includes('registerProvidersIpc') || key.includes('secureHandle') || key.includes(path.join('src', 'config'))) {
     delete require.cache[key];
   }
 }

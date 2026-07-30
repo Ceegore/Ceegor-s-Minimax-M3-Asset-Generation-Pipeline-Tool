@@ -64,6 +64,9 @@ const {
   collectMmxPathFlags: _collectMmxPathFlags,
   authorizeMmxPaths: _authorizeMmxPaths,
 } = require('./mmxPathAuthz');
+const { sanitizeOrReject: _sanitizeOrReject } = require('../../src/mmxArgSanitizer'); // P0-C (360° Audit C-004): blocks --base-url/--config/--proxy + unknown flags
+const { finalizeMmxArtifacts: _finalizeMmxArtifacts } = require('./mmxArtifactCheck'); // P4.1 (360° Audit DB-H-002/008): reject ok:true results whose --out/--download/-o artifact is missing/truncated/corrupt
+const { secureHandle } = require('./secureHandle'); // P1-A (360° Audit H-001): sender/frame/origin-validated IPC wrapper
 
 /**
  * @param {{ getMainWindow: () => (Electron.BrowserWindow|null), appRoot: string }} deps
@@ -86,7 +89,7 @@ function register({ getMainWindow, appRoot }) {
   // is required IF the args contain a path flag (--out, --out-dir,
   // --download, -o). For args with no path flag, the call still
   // succeeds without a grant (e.g. `mmx quota`).
-  ipcMain.handle('mmx:run', async (_e, args, grantId) => {
+  secureHandle('mmx:run', { getMainWindow }, async (_e, args, grantId) => {
     try {
       if (!Array.isArray(args) || args.length < 1) {
         return { ok: false, code: -1, stdout: '', stderr: 'mmx: first arg (subcommand) is required', parsed: null };
@@ -94,12 +97,14 @@ function register({ getMainWindow, appRoot }) {
       if (typeof args[0] !== 'string' || !ALLOWED_MMX_SUBCOMMANDS.has(args[0])) {
         return { ok: false, code: -1, stdout: '', stderr: `mmx: subcommand '${String(args[0])}' is not allowed`, parsed: null };
       }
+      const { err: sErr, safeArgs } = _sanitizeOrReject(args); // P0-C (C-004): block --base-url, --config, etc.
+      if (sErr) return sErr;
       // R1.5b.1: collect the path flags from the args + authorise
       // them against the grant. If no path flag is present, the
       // grant is optional (the call doesn't touch the filesystem
       // via mmx). A missing grantId WITH path flags fails closed
       // (the renderer forgot to mint a grant for the output dir).
-      const pathFlags = _collectMmxPathFlags(args);
+      const pathFlags = _collectMmxPathFlags(safeArgs);
       if (pathFlags.length > 0) {
         const grantAuthz = _authorizeMmxPaths(grantId, pathFlags);
         if (grantAuthz) {
@@ -114,7 +119,7 @@ function register({ getMainWindow, appRoot }) {
       if (cred.error || !cred.apiKey) {
         return { ok: false, code: -1, stdout: '', stderr: cred.error || 'No API key configured. Open Settings and enter a key.', parsed: null };
       }
-      return _redactResult(await runMmx({ args, apiKey: cred.apiKey, sessionOnly: cred.sessionOnly, onLog: sendLog }));
+      return _redactResult(await _finalizeMmxArtifacts(await runMmx({ args: safeArgs, apiKey: cred.apiKey, sessionOnly: cred.sessionOnly, onLog: sendLog }), pathFlags));
     } catch (e) {
       return { ok: false, code: -1, stdout: '', stderr: `IPC error: ${e.message}`, parsed: null };
     }
@@ -130,7 +135,7 @@ function register({ getMainWindow, appRoot }) {
   // renderer forgot to mint a grant for the output dir / cwd).
   // For payload with no path flags AND no cwd, the call still
   // succeeds without a grant (e.g. `mmx quota` from a Diagnose flow).
-  ipcMain.handle('mmx:run:job', async (_e, payload, grantId) => {
+  secureHandle('mmx:run:job', { getMainWindow }, async (_e, payload, grantId) => {
     try {
       const args = payload && payload.args;
       const jobId = payload && payload.jobId;
@@ -141,6 +146,8 @@ function register({ getMainWindow, appRoot }) {
       if (typeof args[0] !== 'string' || !ALLOWED_MMX_SUBCOMMANDS.has(args[0])) {
         return { ok: false, code: -1, stdout: '', stderr: `mmx: subcommand '${String(args[0])}' is not allowed`, parsed: null };
       }
+      const { err: sErr, safeArgs } = _sanitizeOrReject(args); // P0-C (C-004): block --base-url, --config, etc.
+      if (sErr) return sErr;
       // H9-003 (Phase B): fail closed when the installed mmx-cli is older than
       // the supported minimum. mmx 1.0.16 silently drops video duration/
       // resolution/optimizer + speech sound-effect while exiting 0 — the only
@@ -163,7 +170,7 @@ function register({ getMainWindow, appRoot }) {
       // R1.5b.1: collect path flags + cwd, then authorise them all
       // against the single grant. A path flag OUTSIDE the grant or
       // a missing grant for a path-bearing call fails closed.
-      const pathFlags = _collectMmxPathFlags(args);
+      const pathFlags = _collectMmxPathFlags(safeArgs);
       if (pathFlags.length > 0 || (typeof cwd === 'string' && cwd)) {
         const grantAuthz = _authorizeMmxPaths(grantId, pathFlags, cwd);
         if (grantAuthz) {
@@ -179,8 +186,8 @@ function register({ getMainWindow, appRoot }) {
       if (cred.error || !cred.apiKey) {
         return { ok: false, code: -1, stdout: '', stderr: cred.error || 'No API key configured. Open Settings and enter a key.', parsed: null };
       }
-      return _redactResult(await runMmx({
-        args,
+      return _redactResult(await _finalizeMmxArtifacts(await runMmx({
+        args: safeArgs,
         apiKey: cred.apiKey,
         cwd: cwd || undefined,
         sessionOnly: cred.sessionOnly,
@@ -194,13 +201,13 @@ function register({ getMainWindow, appRoot }) {
         // handler still uses it).
         onChunk: (p) => sendLog(p.line, p.jobId, p.kind),
         jobId: jobId || null,
-      }));
+      }), pathFlags));
     } catch (e) {
       return { ok: false, code: -1, stdout: '', stderr: `IPC error: ${e.message}`, parsed: null };
     }
   });
 
-  ipcMain.handle('mmx:voices', async () => {
+  secureHandle('mmx:voices', { getMainWindow }, async () => {
     try {
       const cred = _resolveCredential(null);
       if (cred.error || !cred.apiKey) return [];
@@ -210,7 +217,7 @@ function register({ getMainWindow, appRoot }) {
     }
   });
 
-  ipcMain.handle('mmx:quota', async () => {
+  secureHandle('mmx:quota', { getMainWindow }, async () => {
     try {
       const cred = _resolveCredential(null);
       if (cred.error || !cred.apiKey) return { ok: false, error: cred.error || 'No API key configured.' };
@@ -230,7 +237,7 @@ function register({ getMainWindow, appRoot }) {
   // neutral "parallel is enabled; upstream may throttle" message.
   const PROFILE_TTL_MS = 5 * 60 * 1000;
   let _profileCache = null;
-  ipcMain.handle('mmx:profile', async () => {
+  secureHandle('mmx:profile', { getMainWindow }, async () => {
     try {
       if (_profileCache && (Date.now() - _profileCache.ts) < PROFILE_TTL_MS) {
         return _profileCache.payload;
@@ -293,7 +300,7 @@ function register({ getMainWindow, appRoot }) {
     return out;
   }
 
-  ipcMain.handle('mmx:cancel', (_e, opts) => {
+  secureHandle('mmx:cancel', { getMainWindow }, (_e, opts) => {
     try {
       // `mmx:cancel` accepts either no payload (panic, kill everything)
       // or `{ jobId }` (per-job cancel). A job-scoped cancel kills only
@@ -313,7 +320,7 @@ function register({ getMainWindow, appRoot }) {
     }
   });
 
-  ipcMain.handle('mmx:authStatus', async () => {
+  secureHandle('mmx:authStatus', { getMainWindow }, async () => {
     try {
       const cred = _resolveCredential(null);
       if (cred.error || !cred.apiKey) return { ok: false, error: cred.error || 'No API key configured.' };
@@ -343,7 +350,7 @@ function register({ getMainWindow, appRoot }) {
     }
   });
 
-  ipcMain.handle('mmx:diagnose', async () => {
+  secureHandle('mmx:diagnose', { getMainWindow }, async () => {
     try {
       const cfg = cfgMod.read();
       const r = resolve();

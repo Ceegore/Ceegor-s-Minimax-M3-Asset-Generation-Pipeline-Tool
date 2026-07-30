@@ -31,6 +31,9 @@
 const IPC_REGISTRARS = [
   { name: 'registerAppIpc', core: true },
   { name: 'registerConfigIpc', core: true },
+  // P0-B (C-001): config:getPublic split out of registerConfigIpc (size budget);
+  // core because the renderer boot reads the secret-free config DTO.
+  { name: 'registerConfigPublicIpc', core: true },
   { name: 'registerMmxIpc', core: true },
   { name: 'registerUpscaleIpc', core: false },
   { name: 'registerIsnetbgIpc', core: false },
