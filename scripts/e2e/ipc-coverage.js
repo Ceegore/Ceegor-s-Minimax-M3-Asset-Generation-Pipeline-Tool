@@ -57,6 +57,7 @@ const SCENARIOS_DIR = path.join(__dirname, 'scenarios');
 const INTENTIONALLY_UNINVOKED = {
   'app:relaunch': 'kills the Electron process (app.relaunch + app.exit) — would abort the run',
   'app:resetAndRelaunch': 'deletes local data then kills the process — would abort the run',
+  'app:confirmResetAndRelaunch': 'B-009 Main-owned reset transaction: native dialog + delete + relaunch — would block on the dialog and abort the run',
   'app:prepare-close:ack': 'registered lazily by createMainWindow during the real close handshake, which the harness never opens',
   'renderer:log': 'declared at top level in main/index.js (the app entry), which a harness must not load — it would boot a second app instance',
 };

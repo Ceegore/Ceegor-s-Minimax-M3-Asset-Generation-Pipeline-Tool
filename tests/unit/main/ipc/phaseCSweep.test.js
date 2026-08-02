@@ -185,7 +185,11 @@ test('Phase C / H1: state:set triggers archive append when jobsSnapshot exceeds 
       tabs: {}, jobsSnapshot: snap, jobsArchiveCap: 20,
     });
     report('H1', 'phaseCSweep:H1:state.set', 'after write', { setRes });
-    assert.deepEqual(setRes, { ok: true });
+    // H-044/H-045: state:set now reports how many jobs were archived in
+    // the archive-first transaction (plus any warnings), so the renderer
+    // can surface them. The 5 overflow entries must be reported archived.
+    assert.equal(setRes.ok, true);
+    assert.equal(setRes.jobsArchived, 5, 'the 5 overflow jobs must be reported as archived');
     const got = electron.handlers['state:get']();
     // L2 should be the last 20.
     assert.equal(got.jobsSnapshot.length, 20);

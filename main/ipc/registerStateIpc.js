@@ -184,8 +184,16 @@ function register(deps) {
           delete s.pipeline.image.workspace;
         }
       }
-      stateMod.write(s);
-      return { ok: true };
+      // H-044/H-045: report the archive outcome. `jobsArchived` tells the
+      // renderer how many overflow entries Main moved to the L3 archive
+      // (it drops exactly that many from the FRONT of its in-memory list);
+      // `warnings` surfaces archive failures (the overflow stays in
+      // state.json instead of being silently destroyed).
+      const clean = stateMod.write(s);
+      const res = { ok: true };
+      if (clean && Number(clean._jobsArchived) > 0) res.jobsArchived = Number(clean._jobsArchived);
+      if (clean && Array.isArray(clean._archiveWarnings) && clean._archiveWarnings.length) res.warnings = clean._archiveWarnings;
+      return res;
     } catch (e) { return { ok: false, error: String(e.message || e) }; }
   });
   // Archive IPCs. All four return { ok, ... } envelopes.

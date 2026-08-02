@@ -87,10 +87,15 @@ function checkMagicBytes(header, expectedType) {
     case 'flac':
       return header.slice(0, 4).equals(MAGIC_BYTES.flac);
     default:
-      // Unknown type — skip magic byte check (size check still applies)
-      return true;
+      // H-064: unknown type → FAIL CLOSED. The old fail-open (`return true`)
+      // meant a typo'd expectedType silently skipped the whole magic check.
+      // Callers that want to skip the check must omit expectedType entirely.
+      return false;
   }
 }
+
+/** H-064: image types that get a mandatory full decode during finalization. */
+const IMAGE_DECODE_TYPES = new Set(['png', 'jpeg', 'jpg', 'webp', 'gif']);
 
 /**
  * Validate an artifact file and optionally finalize it (atomic rename).
@@ -101,6 +106,7 @@ function checkMagicBytes(header, expectedType) {
  *   finalPath?: string,     // Final destination (used with tempPath)
  *   expectedType?: string,  // Expected file type for magic byte check
  *   minSize?: number,       // Minimum file size (default 1KB)
+ *   fullDecode?: boolean,   // H-064: full image decode (default true for image types)
  * }} opts
  * @returns {Promise<{ok: true, path: string, size: number} | {ok: false, error: string}>}
  */
@@ -111,6 +117,7 @@ async function validateAndFinalize(opts) {
     finalPath,
     expectedType,
     minSize = MIN_ARTIFACT_SIZE,
+    fullDecode,
   } = opts || {};
 
   const targetPath = tempPath || directPath;
@@ -157,21 +164,53 @@ async function validateAndFinalize(opts) {
     }
   }
 
+  // 3b. H-064: mandatory full decode for image artifacts — magic bytes alone
+  // don't catch truncated/corrupt files that fail during decompression. Runs
+  // in the same transaction (before finalize) so a corrupt file is never
+  // published. Opt out only with an explicit fullDecode:false.
+  if (expectedType && IMAGE_DECODE_TYPES.has((expectedType || '').toLowerCase()) && fullDecode !== false) {
+    const decode = await validateImageDecode(targetPath);
+    if (!decode.ok) {
+      if (tempPath) {
+        try { await fs.promises.unlink(tempPath); } catch (_) {}
+      }
+      return { ok: false, error: decode.error };
+    }
+  }
+
   // 4. Atomic rename (if tempPath + finalPath provided)
   const resultPath = finalPath || targetPath;
   if (tempPath && finalPath) {
     try {
       await fs.promises.mkdir(path.dirname(finalPath), { recursive: true });
+    } catch (e) {
+      return { ok: false, error: `Cannot create destination directory: ${e.message}` };
+    }
+    // H-064: exclusive target reservation — fs.rename silently REPLACES an
+    // existing destination on both Windows and POSIX, so "rename fails when
+    // dest exists" was never true. Reserve the final path with 'wx' (fails
+    // on EEXIST), then rename over our own zero-byte reservation.
+    try {
+      const fh = await fs.promises.open(finalPath, 'wx');
+      await fh.close();
+    } catch (e) {
+      if (e && e.code === 'EEXIST') {
+        return { ok: false, error: `Refusing to overwrite existing file at final path: ${finalPath}` };
+      }
+      return { ok: false, error: `Cannot reserve final path: ${e.message}` };
+    }
+    try {
       await fs.promises.rename(tempPath, finalPath);
     } catch (e) {
-      // If rename fails (cross-device), fall back to copy+delete.
-      // MED-017: use COPYFILE_EXCL to prevent overwriting an existing file
-      // at the destination (the rename would have failed if the dest existed
-      // on the same device, so this mirrors that behaviour cross-device).
+      // If rename fails (cross-device), fall back to copy+delete. Plain
+      // copyFile is safe here: the only file it can replace is our own
+      // reservation created above.
       try {
-        await fs.promises.copyFile(tempPath, finalPath, fs.constants.COPYFILE_EXCL);
+        await fs.promises.copyFile(tempPath, finalPath);
         await fs.promises.unlink(tempPath);
       } catch (e2) {
+        // Remove the reservation so a retry isn't blocked by our own stub.
+        try { await fs.promises.unlink(finalPath); } catch (_) {}
         return { ok: false, error: `Failed to finalize artifact: ${e2.message}` };
       }
     }
@@ -197,8 +236,10 @@ async function validateImageDecode(filePath, opts) {
   try {
     sharp = require('sharp');
   } catch (_) {
-    // Sharp not available (e.g. in tests) — fall back to magic-byte-only.
-    return { ok: true, width: 0, height: 0, skipped: true };
+    // H-064: missing decoder is a BACKEND ERROR, not a silent pass. sharp is
+    // a production dependency; if it fails to load the artifact cannot be
+    // validated and must not be reported as good.
+    return { ok: false, error: 'Image decoder (sharp) is unavailable — cannot validate the artifact.' };
   }
   try {
     const meta = await sharp(filePath, { limitInputPixels: SHARP_PIXEL_LIMIT }).metadata();

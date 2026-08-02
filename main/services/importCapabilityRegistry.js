@@ -22,6 +22,24 @@
 
 'use strict';
 
+// H-058: canonical Real-ESRGAN model ids — MUST match src/realesrgan.js
+// REALESRGAN_MODELS (kept in step by tests). The pre-fix registry documented
+// 'real-esrgan-x4plus' / 'real-esrgan-anime-v3' / 'canvas-fallback' — names
+// the executor NEVER accepted: src/realesrgan.js silently fell back to
+// realesrgan-x4plus for anything unknown, so the documented anime model
+// quietly ran the wrong network and 'canvas-fallback' was pure fiction.
+const REALESRGAN_MODELS = ['realesrgan-x4plus', 'realesrgan-x4plus-anime', 'realesr-animevideov3'];
+// Legacy documented spellings — accepted ONLY as migration aliases for old
+// import files; normalized to canonical before execution.
+const REALESRGAN_MODEL_ALIASES = {
+  'real-esrgan-x4plus': 'realesrgan-x4plus',
+  'real-esrgan-anime-v3': 'realesr-animevideov3',
+};
+function normalizeRealesrganModel(name) {
+  const n = String(name || '').trim();
+  return REALESRGAN_MODEL_ALIASES[n] || n;
+}
+
 // Each entry: { flag, desc, allowed?, default?, note?, aliasOf? }
 //   aliasOf: when set, this flag is an ACCEPTED ALIAS for another flag (H9-002).
 //   The importer resolves aliases to their canonical name before execution.
@@ -43,7 +61,7 @@ const CAPABILITIES = {
       { flag: '--variants', desc: 'Re-runs the generator N times for one prompt (1–5). Note: --n × --variants multiplies the image AND call count.', allowed: '1–5', default: '1' },
       { flag: '--upscale', desc: 'Boolean. Run the bundled Real-ESRGAN 2×/3×/4× upscaler after generation.', allowed: ['true', 'false'], default: 'false' },
       { flag: '--upscale-multiplier', desc: 'Upscale factor when --upscale is true.', allowed: ['2', '3', '4'], default: '2' },
-      { flag: '--upscale-model', desc: 'Real-ESRGAN model.', allowed: ['real-esrgan-x4plus', 'real-esrgan-anime-v3', 'canvas-fallback'], default: 'real-esrgan-x4plus' },
+      { flag: '--upscale-model', desc: 'Real-ESRGAN model. x4plus-anime for line art; animevideov3 ships native 2×/3×/4× params.', allowed: REALESRGAN_MODELS, default: 'realesrgan-x4plus', note: 'H-058: legacy names real-esrgan-x4plus / real-esrgan-anime-v3 are accepted as migration aliases and normalized to the canonical executor ids.' },
       { flag: '--remove-background', desc: 'Boolean. Remove the background to transparency (local IS-Net/BiRefNet, no upload) after generation.', allowed: ['true', 'false'], default: 'false' },
       { flag: '--remove-background-model', desc: 'Background-removal model. BiRefNet Lite gives cleaner edges (~3–8× slower on CPU).', allowed: ['isnet-general-use', 'birefnet-general-lite', 'birefnet-general', 'birefnet-portrait'], default: 'isnet-general-use' },
       { flag: '--crop', desc: 'Crop to an exact WxH rectangle after generation. Format: WxH (e.g. 512x512).', allowed: 'WxH' },
@@ -199,4 +217,4 @@ function validate() {
   return true;
 }
 
-module.exports = { CAPABILITIES, knownFlagsByType, resolveAlias, validate };
+module.exports = { CAPABILITIES, knownFlagsByType, resolveAlias, validate, REALESRGAN_MODELS, REALESRGAN_MODEL_ALIASES, normalizeRealesrganModel };

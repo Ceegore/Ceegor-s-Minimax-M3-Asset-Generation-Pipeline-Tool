@@ -16,6 +16,8 @@
 // ============================================================================
 'use strict';
 
+const crypto = require('crypto');
+
 // ---- CLI COMMAND MATRIX ----
 // The authoritative mapping from modality to the mmx CLI subcommand + verb.
 // Capability probes, ArgvBuilders, and help-parsers ALL derive from this.
@@ -243,6 +245,16 @@ function validateVideoParams(params) {
   return { errors, warnings };
 }
 
+/**
+ * H-001 (_5 audit): compute a stable hash of the VIDEO_MATRIX for diagnostics.
+ * If the renderer's copy diverges, the hash mismatch reveals it.
+ * @returns {string} SHA-256 hex prefix (16 chars).
+ */
+function contractHash() {
+  const canonical = JSON.stringify(VIDEO_MATRIX, Object.keys(VIDEO_MATRIX).sort());
+  return crypto.createHash('sha256').update(canonical).digest('hex').slice(0, 16);
+}
+
 module.exports = {
   COMMAND_MATRIX,
   VERSION_CONSTRAINTS,
@@ -254,5 +266,6 @@ module.exports = {
   getVideoResolutions,
   getVideoModes,
   validateVideoParams,
+  contractHash,
   _semverCmp,
 };

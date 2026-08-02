@@ -35,10 +35,15 @@ const STAGE_STATUS = Object.freeze({
 /** Overall operation statuses. */
 const OP_STATUS = Object.freeze({
   OK: 'ok',
+  OK_WITH_WARNINGS: 'ok_with_warnings',
   PARTIAL: 'partial',
   FAILED: 'failed',
   CANCELLED: 'cancelled',
+  PARTIAL_CANCELLED: 'partial_cancelled',
 });
+
+const _STAGE_STATUS_VALUES = new Set(Object.values(STAGE_STATUS));
+const _OP_STATUS_VALUES = new Set(Object.values(OP_STATUS));
 
 class OperationResult {
   /**
@@ -58,13 +63,19 @@ class OperationResult {
 
   /**
    * Record a stage result.
+   * M-053: only STAGE_STATUS enum values are accepted — arbitrary strings
+   * would silently skew the derived overall status.
    * @param {string} name - Stage name (e.g. 'upscale', 'remove-bg').
    * @param {string} status - One of STAGE_STATUS values.
    * @param {string} [error] - Error detail if status is 'error'.
    * @param {{ required?: boolean }} [opts] - Whether this stage is required (default true).
    * @returns {this}
+   * @throws {Error} On an invalid stage status.
    */
   addStage(name, status, error, opts) {
+    if (!_STAGE_STATUS_VALUES.has(status)) {
+      throw new Error(`OperationResult: invalid stage status "${status}" (allowed: ${[..._STAGE_STATUS_VALUES].join(', ')}).`);
+    }
     const required = opts && opts.required !== undefined ? opts.required : true;
     this.stages.push({ name, status, error: error || undefined, required });
     return this;
@@ -92,38 +103,59 @@ class OperationResult {
 
   /**
    * Force overall status (e.g. 'cancelled' from user action).
+   * M-053: only OP_STATUS enum values are accepted.
    * @param {string} status
+   * @throws {Error} On an invalid status.
    */
   setStatus(status) {
+    if (!_OP_STATUS_VALUES.has(status)) {
+      throw new Error(`OperationResult: invalid status "${status}" (allowed: ${[..._OP_STATUS_VALUES].join(', ')}).`);
+    }
     this._statusOverride = status;
   }
 
   /**
    * Compute overall status from stages.
-   * MED-050: required stage failure → not ok.
+   * M-053 matrix:
+   *   - cancelled override + validated deliverables → 'partial_cancelled'
+   *     (work already delivered before the cancel is not erased)
+   *   - required error + deliverables → 'partial' (MED-050 fix: a required
+   *     failure with validated deliverables is NOT a total failure)
+   *   - required error + no deliverables → 'failed'
+   *   - only optional errors → 'ok_with_warnings'
+   *   - no errors → 'ok'
    * @returns {string} One of OP_STATUS values.
    */
   get status() {
-    if (this._statusOverride) return this._statusOverride;
+    if (this._statusOverride) {
+      // M-053: a cancel that arrives AFTER deliverables were produced is a
+      // partial result, not a void one.
+      if (this._statusOverride === OP_STATUS.CANCELLED && this.deliverables.length > 0) {
+        return OP_STATUS.PARTIAL_CANCELLED;
+      }
+      return this._statusOverride;
+    }
 
     const hasRequiredError = this.stages.some((s) => s.status === STAGE_STATUS.ERROR && s.required);
     const hasAnyError = this.stages.some((s) => s.status === STAGE_STATUS.ERROR);
-    const hasOkStage = this.stages.some((s) => s.status === STAGE_STATUS.OK);
 
-    if (hasRequiredError) return OP_STATUS.FAILED;
-    if (hasAnyError && hasOkStage) return OP_STATUS.PARTIAL;
-    if (hasAnyError) return OP_STATUS.FAILED;
+    if (hasRequiredError) {
+      return this.deliverables.length > 0 ? OP_STATUS.PARTIAL : OP_STATUS.FAILED;
+    }
+    if (hasAnyError) return OP_STATUS.OK_WITH_WARNINGS;
     return OP_STATUS.OK;
   }
 
-  /** True if the operation succeeded (all required stages ok). */
+  /** True if the operation succeeded (no required-stage failures). */
   get ok() {
-    return this.status === OP_STATUS.OK;
+    const s = this.status;
+    return s === OP_STATUS.OK || s === OP_STATUS.OK_WITH_WARNINGS;
   }
 
   /** True if partially successful (some stages failed but deliverables exist). */
   get partial() {
-    return this.status === OP_STATUS.PARTIAL;
+    const s = this.status;
+    return s === OP_STATUS.PARTIAL || s === OP_STATUS.PARTIAL_CANCELLED;
   }
 
   /**

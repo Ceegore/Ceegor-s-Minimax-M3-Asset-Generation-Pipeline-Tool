@@ -9,17 +9,32 @@
 
 function _base(u) { return String(u || '').replace(/\/+$/, ''); }
 
+// H-015 (_5 audit): combine a caller-provided AbortSignal with a per-fetch
+// timeout so that BOTH user-cancel and hung-endpoint protection are active.
+// Previously `signal || timeout` meant the timeout was disabled whenever
+// the caller supplied a signal (which is always in production).
+const DEFAULT_FETCH_TIMEOUT_MS = 60000; // 60s for images/speech/models
+function _fetchSignal(signal, timeoutMs) {
+  const ms = timeoutMs || DEFAULT_FETCH_TIMEOUT_MS;
+  if (typeof AbortSignal.any === 'function' && typeof AbortSignal.timeout === 'function') {
+    const signals = [AbortSignal.timeout(ms)];
+    if (signal) signals.unshift(signal);
+    return AbortSignal.any(signals);
+  }
+  // Fallback (very old Node): prefer caller signal, else timeout.
+  if (signal) return signal;
+  return typeof AbortSignal.timeout === 'function' ? AbortSignal.timeout(ms) : undefined;
+}
+
 // Max time (ms) to poll an async video job before giving up.
 const VIDEO_MAX_WAIT_MS = 10 * 60 * 1000; // 10 minutes
 
 async function listModels({ baseUrl, apiKey, signal }) {
   // MED-007: enforce a 15s timeout so a hung /models endpoint cannot
   // block the settings UI indefinitely.
-  const timeout = AbortSignal.timeout ? AbortSignal.timeout(15000) : null;
-  const combinedSignal = signal || timeout;
   const res = await fetch(_base(baseUrl) + '/models', {
     headers: { Authorization: 'Bearer ' + apiKey },
-    signal: combinedSignal,
+    signal: _fetchSignal(signal, 15000),
   });
   if (!res.ok) throw new Error('models HTTP ' + res.status);
   const j = await res.json();
@@ -32,7 +47,7 @@ async function images({ baseUrl, apiKey, model, prompt, params, signal }) {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + apiKey },
     body: JSON.stringify(body),
-    signal,
+    signal: _fetchSignal(signal),
   });
   if (!res.ok) throw new Error('images HTTP ' + res.status + ': ' + (await res.text().catch(() => '')).slice(0, 400));
   const j = await res.json();
@@ -70,7 +85,7 @@ async function speech({ baseUrl, apiKey, model, input, voice, format, params, si
     method: 'POST',
     headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + apiKey },
     body: JSON.stringify(body),
-    signal,
+    signal: _fetchSignal(signal),
   });
   if (!res.ok) throw new Error('speech HTTP ' + res.status + ': ' + (await res.text().catch(() => '')).slice(0, 400));
   const buf = Buffer.from(await res.arrayBuffer());
@@ -81,13 +96,13 @@ async function speech({ baseUrl, apiKey, model, input, voice, format, params, si
 // the poll is written defensively (multiple fallbacks).
 // HIGH-003: parse unsigned_urls from completed response.
 // MED-011: handle 'cancelled'/'expired' terminal states.
-async function video({ baseUrl, apiKey, model, prompt, params, signal, onProgress }) {
+async function video({ baseUrl, apiKey, model, prompt, params, signal, onProgress, onSubmitted }) {
   const FETCH_TIMEOUT_MS = 30000; // MED-010: per-fetch timeout
   const sub = await fetch(_base(baseUrl) + '/videos', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + apiKey },
     body: JSON.stringify(Object.assign({ model, prompt }, params || {})),
-    signal: signal || AbortSignal.timeout(FETCH_TIMEOUT_MS),
+    signal: _fetchSignal(signal, FETCH_TIMEOUT_MS),
   });
   if (!sub.ok) throw new Error('video submit HTTP ' + sub.status + ': ' + (await sub.text().catch(() => '')).slice(0, 400));
   const j = await sub.json();
@@ -95,7 +110,22 @@ async function video({ baseUrl, apiKey, model, prompt, params, signal, onProgres
   if (!id) throw new Error('video submit: no job id in response');
 
   // HIGH-003: handle polling_url from submit response.
-  const pollBase = j.polling_url || (_base(baseUrl) + '/videos/' + id);
+  // H-013 (_5 audit): validate polling_url origin matches baseUrl before
+  // use. A malicious/compromised provider could return a polling_url on a
+  // different host, causing the API key to be sent to an attacker.
+  let pollBase = _base(baseUrl) + '/videos/' + id;
+  if (j.polling_url && typeof j.polling_url === 'string') {
+    try {
+      const baseOrigin = new URL(_base(baseUrl)).origin;
+      const pollOrigin = new URL(j.polling_url).origin;
+      if (pollOrigin === baseOrigin) {
+        pollBase = j.polling_url;
+      }
+      // else: ignore the foreign polling_url, use the safe default.
+    } catch (_) { /* malformed URL — use default */ }
+  }
+  // H-012: notify caller of the remote job identity for ledger persistence.
+  if (onSubmitted) onSubmitted({ remoteJobId: id, pollUrl: pollBase });
 
   const start = Date.now();
   for (;;) {
@@ -104,7 +134,7 @@ async function video({ baseUrl, apiKey, model, prompt, params, signal, onProgres
     await new Promise((r) => setTimeout(r, 3000));
     const st = await fetch(pollBase, {
       headers: { Authorization: 'Bearer ' + apiKey },
-      signal: signal || AbortSignal.timeout(FETCH_TIMEOUT_MS),
+      signal: _fetchSignal(signal, FETCH_TIMEOUT_MS),
     });
     if (!st.ok) throw new Error('video poll HTTP ' + st.status);
     const s = await st.json();
@@ -114,7 +144,12 @@ async function video({ baseUrl, apiKey, model, prompt, params, signal, onProgres
       // HIGH-003: parse unsigned_urls (OpenRouter video format).
       const urls = _extractVideoUrls(s);
       if (!urls.length) throw new Error('video completed but no output URL in response');
-      return urls.map((url) => ({ url, b64: null, ext: 'mp4', contentType: 'video/mp4' }));
+      // H-014 (_5 audit): attach auth policy so the download layer knows
+      // whether these URLs require Authorization. OpenRouter content URLs
+      // on the same origin as the API may be protected (require Bearer).
+      let trustedOrigin = '';
+      try { trustedOrigin = new URL(_base(baseUrl)).origin; } catch (_) {}
+      return urls.map((url) => ({ url, b64: null, ext: 'mp4', contentType: 'video/mp4', authPolicy: 'bearer', trustedOrigins: [trustedOrigin] }));
     }
     // MED-011: terminal states 'cancelled'/'expired' → immediate error.
     if (s.status === 'failed' || s.status === 'error') throw new Error('video failed: ' + (s.error || 'unknown'));

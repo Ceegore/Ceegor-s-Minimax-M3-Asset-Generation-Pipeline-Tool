@@ -609,7 +609,12 @@ test('settings dialog: clicking Save sends a complete setConfig payload', async 
   // also accepted by the main handler for backward compat, but the
   // renderer now uses the wrapped form.
   assert.ok(sent && typeof sent === 'object', 'payload must be an object');
-  assert.equal(sent.cfg && sent.cfg.api_key, 'sk-test-new-key', 'cfg.api_key must be the new value');
+  // B-007: the API key never travels inside cfg — it goes through the
+  // typed apiKeyAction/apiKeyValue channel. A non-empty entered key
+  // becomes an explicit 'replace' command.
+  assert.ok(sent.cfg && !('api_key' in sent.cfg), 'cfg.api_key must NOT be in the payload (typed channel only)');
+  assert.equal(sent.apiKeyAction, 'replace', 'a newly entered key must send apiKeyAction:replace');
+  assert.equal(sent.apiKeyValue, 'sk-test-new-key', 'apiKeyValue must carry the new key');
   assert.equal(sent.cfg && sent.cfg.output_dir, 'C:\\user\\output', 'cfg.output_dir must be the new value');
   // Theme + styles MUST be preserved (the legacy bug was dropping them).
   assert.equal(sent.cfg && sent.cfg.theme, 'dark', 'cfg.theme must survive the save (M2 regression guard)');
@@ -622,8 +627,11 @@ test('settings dialog: clicking Save sends a complete setConfig payload', async 
   // Transient keys must NOT leak into the cfg object.
   assert.ok(sent.cfg && !('_apiKeyNoSave' in sent.cfg), '_apiKeyNoSave must be stripped from cfg');
   assert.ok(sent.cfg && !('_apiKeyValue' in sent.cfg), '_apiKeyValue must be stripped from cfg');
+  assert.ok(sent.cfg && !('_apiKeyAction' in sent.cfg), '_apiKeyAction must be stripped from cfg');
+  assert.ok(sent.cfg && !('_apiKeyNewValue' in sent.cfg), '_apiKeyNewValue must be stripped from cfg');
   // state.config must reflect the new values after the save resolves.
-  assert.equal(sandbox.state.config.api_key, 'sk-test-new-key');
+  // B-007/SEC-001: the raw api_key never round-trips through the DTO.
+  assert.ok(!sandbox.state.config.api_key, 'the raw api_key must not come back in the public DTO');
   assert.equal(sandbox.state.config.output_dir, 'C:\\user\\output');
   // A "Saved." toast must have fired. The live toast() helper
   // (section20) appends to #toast-root — read from there.
@@ -671,8 +679,12 @@ test('settings dialog: "Don\'t save" checkbox strips api_key from the IPC payloa
   // top-level apiKeyNoSave; the cfg itself has the empty api_key.
   assert.equal(sent.apiKeyNoSave, true,
     'apiKeyNoSave must be true at the top level (the privacy switch signal)');
-  assert.equal(sent.cfg && sent.cfg.api_key, '',
-    'cfg.api_key must be empty in the payload when "Don\'t save" is on');
+  // B-007: cfg carries no api_key field at all; in no-save mode the
+  // typed channel is forced to keep/'' (Main handles the privacy clear).
+  assert.ok(sent.cfg && !('api_key' in sent.cfg),
+    'cfg.api_key must NOT be in the payload when "Don\'t save" is on');
+  assert.equal(sent.apiKeyAction, 'keep', 'no-save mode must not send replace/clear');
+  assert.equal(sent.apiKeyValue, '', 'no-save mode must not carry a persisted key value');
   // SEC-001: the raw API key no longer lives in state.config (public DTO).
   // The session key is routed to the main process via the sessionApiKey field.
   assert.equal(sent.sessionApiKey, 'sk-test-temporary-key', 'sessionApiKey must be sent to main for in-memory storage');

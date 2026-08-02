@@ -116,16 +116,36 @@ function verifyManifest(paths, files) {
   const lines = fs.readFileSync(manifest, 'utf8').split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
   const byRel = {};
   for (const f of files) byRel[relative(paths.output, f)] = f;
+  // H-067 (_5 audit): track which expected files are covered by the
+  // manifest so we can detect MISSING entries (completeness check).
+  const manifestRels = new Set();
   for (const line of lines) {
     const m = line.match(/^([0-9a-fA-F]{64})\s+\*?(.+?)\s*$/);
     if (!m) { errors.push(`Manifest line is not a valid "<sha256>  <file>" entry: "${line}".`); continue; }
     const [, expected, rel] = m;
+    manifestRels.add(rel);
     const fp = byRel[rel] || path.join(paths.output, rel);
     const info = infoFor(fp);
     if (!info.exists) { errors.push(`Manifest references missing file: ${rel}.`); continue; }
     if (info.sha256.toLowerCase() !== expected.toLowerCase()) {
       errors.push(`Checksum mismatch for ${rel}: manifest ${expected} != actual ${info.sha256}.`);
     }
+  }
+  // H-067 (_5 audit): completeness — every expected release file must
+  // appear exactly once in the manifest. A manifest that omits the
+  // installer or an archive part would still pass the old check.
+  for (const rel of Object.keys(byRel)) {
+    if (!manifestRels.has(rel)) {
+      errors.push(`Expected release file "${rel}" is missing from the manifest.`);
+    }
+  }
+  // Duplicate detection: a file listed twice is a manifest corruption.
+  const seen = new Set();
+  for (const line of lines) {
+    const m = line.match(/^([0-9a-fA-F]{64})\s+\*?(.+?)\s*$/);
+    if (!m) continue;
+    if (seen.has(m[2])) errors.push(`Duplicate manifest entry: "${m[2]}".`);
+    seen.add(m[2]);
   }
   return { ok: errors.length === 0, errors };
 }

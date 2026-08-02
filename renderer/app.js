@@ -244,10 +244,11 @@ async function init() {
     if (typeof window.logAction === 'function') window.logAction('file-browser', 'click-new-folder', { fbDir: state.fbDir || '' });
     promptNewFolder();
   });
-  $('#fb-open').addEventListener('click', () => {
+  $('#fb-open').addEventListener('click', async () => {
     const target = state.fbDir || state.config.output_dir || '';
     if (typeof window.logAction === 'function') window.logAction('file-browser', 'click-open-explorer', { target });
-    window.api.fbReveal(target);
+    const _rg = (window.GrantHelper) ? await window.GrantHelper.ensureRead(target) : undefined;
+    window.api.fbReveal(target, _rg);
   });
   // "⚙ Options" button (folder columns / thumbnails). The handler
   // (openFolderOptions in fileBrowser1.js) opens the matching modal
@@ -357,21 +358,23 @@ async function init() {
     const paths = Array.from(state.fbSelected);
     const audioExts = ['.mp3', '.wav', '.flac', '.ogg', '.m4a', '.opus', '.pcm', '.aac', '.wma', '.aif', '.aiff'];
     const audioPaths = paths.filter((p) => audioExts.includes('.' + (p.split('.').pop() || '').toLowerCase()));
-    if (!audioPaths.length) { toast('None of the selected files are audio. Trim only works on .mp3/.wav/.flac/etc.', 'warn', 5000); return; }
-    if (audioPaths.length !== paths.length) {
-      toast(`Trim will only process ${audioPaths.length} audio file${audioPaths.length === 1 ? '' : 's'} (skipped ${paths.length - audioPaths.length} non-audio).`, 'warn', 4000);
+    if (!audioPaths.length) { toast('None of the selected files are audio. The audio cutter only works on .mp3/.wav/.flac/etc.', 'warn', 5000); return; }
+    // H-048 (_5 audit): the audio cutter is an interactive SINGLE-file
+    // editor. The old bulk path opened the cutter for the first audio
+    // file only, yet fbBulkAction counted EVERY selected path as a
+    // success ("N items ok") — a misleading bulk-trim that silently
+    // skipped files. Until a real batch trim exists (one shared settings
+    // dialog + sequential audioCut with a per-file result), the action is
+    // gated to exactly one audio file and renamed "Audio cutter".
+    if (audioPaths.length !== 1) {
+      toast(`The audio cutter edits one file at a time. Select exactly one audio file (you have ${audioPaths.length}).`, 'warn', 6000);
+      return;
     }
-    // Open the audio cutter on the FIRST audio file. The cutter
-    // is single-file; the cutter only opens the first audio file.
-    (window.fbBulkAction || (() => {}))('Trim', async (path) => {
-      if (audioPaths.indexOf(path) !== 0) return; // only the first audio triggers the cutter
-      if (typeof window.showAudioCutter === 'function') {
-        window.showAudioCutter(path);
-      } else {
-        toast('Audio cutter module not loaded.', 'err');
-        throw new Error('audio cutter missing');
-      }
-    });
+    if (typeof window.showAudioCutter === 'function') {
+      window.showAudioCutter(audioPaths[0]);
+    } else {
+      toast('Audio cutter module not loaded.', 'err');
+    }
   });
   $('#fb-bulk-delete').addEventListener('click', () => {
     if (!state.fbSelected || state.fbSelected.size === 0) return;
@@ -498,6 +501,9 @@ async function init() {
     report_dir: (_cfgPublic && _cfgPublic.report_dir) || '',
     region: (_cfgPublic && _cfgPublic.region) || 'global',
     theme: (_cfgPublic && _cfgPublic.theme) || 'dark',
+    // H-046: safe numeric cost-cap field — without it batchManager's gate
+    // computed parseInt(undefined) || 200 and ignored the configured cap.
+    batch_max_units: (_cfgPublic && Number.isFinite(parseInt(_cfgPublic.batch_max_units, 10))) ? parseInt(_cfgPublic.batch_max_units, 10) : 200,
     styles: (_cfgPublic && Array.isArray(_cfgPublic.styles)) ? _cfgPublic.styles : [],
     external_tools: (_cfgPublic && Array.isArray(_cfgPublic.external_tools)) ? _cfgPublic.external_tools : [],
   };
@@ -610,6 +616,32 @@ async function init() {
       music: (state.batches && state.batches.music) ? state.batches.music.length : 0,
       video: (state.batches && state.batches.video) ? state.batches.video.length : 0,
     });
+  }
+
+  // H-053: if batches.json was unreadable, Main backed it up and blocked
+  // batch writes (batches:set fails with EBATCHRECOVERY) until the user
+  // explicitly acknowledges via a Main-owned native dialog. Surface it
+  // visibly at boot instead of letting autosaves fail silently.
+  try {
+    if (typeof window.api.batchesRecoveryStatus === 'function') {
+      const rec = await window.api.batchesRecoveryStatus();
+      if (rec && rec.ok && rec.pending) {
+        if (typeof window.toast === 'function') {
+          window.toast('Batch storage (batches.json) could not be read'
+            + (rec.pending.backupPath ? ' — a backup was saved to ' + rec.pending.backupPath : '')
+            + '. Confirm the recovery dialog to continue with empty queues.', 'err', 12000);
+        }
+        if (typeof window.logAction === 'function') window.logAction('boot', 'batches-recovery-pending', rec.pending);
+        const ack = await window.api.batchesAcknowledgeRecovery();
+        if (!ack || !ack.acknowledged) {
+          if (typeof window.toast === 'function') {
+            window.toast('Batch saving stays disabled until the recovery is confirmed (restart the app to retry).', 'warn', 10000);
+          }
+        }
+      }
+    }
+  } catch (e) {
+    if (typeof window.logWarn === 'function') window.logWarn('boot', 'batches-recovery-check', e);
   }
 
   // Detect addons at boot so the file log captures which optional
@@ -1096,6 +1128,7 @@ async function nextFreeForcePrefixPath(dir, counter, prefix, ext, altExts) {
   // to a timestamp-suffixed name so the caller still gets a unique
   // path and no generated file (which cost API credits) is ever lost.
   const MAX_TRIES = 1000;
+  let checkErrors = 0; // H-050: track how many iterations failed to check
   for (let i = 0; i < MAX_TRIES; i++) {
     const name = buildForcePrefixFileName(counter, prefix, ext);
     const full = base + sep + name;
@@ -1109,7 +1142,7 @@ async function nextFreeForcePrefixPath(dir, counter, prefix, ext, altExts) {
       // R6: a failed grant envelope must not be forwarded — fb:exists would resolve {ok:false,exists:false} and we'd return an unverifiable name as "free" (silent overwrite). Treat it as occupied so the counter bumps.
       const r = (existsGrant && existsGrant.ok === false) ? { exists: true } : await window.api.fbExists(full, existsGrant);
       exists = !!(r && r.exists);
-    } catch { exists = false; }
+    } catch { exists = true; checkErrors++; } // H-050: fail-CLOSED — an unverifiable path is treated as occupied
     if (!exists && Array.isArray(altExts) && altExts.length) {
       const padded = String(counter.n).padStart(6, '0');
       const stem = `${prefix || ''}${padded}`;
@@ -1120,10 +1153,17 @@ async function nextFreeForcePrefixPath(dir, counter, prefix, ext, altExts) {
           const altGrant = (window.GrantHelper) ? await window.GrantHelper.ensureRead(base + sep + `${stem}.${altExt}`) : undefined;
           const r2 = (altGrant && altGrant.ok === false) ? { exists: true } : await window.api.fbExists(base + sep + `${stem}.${altExt}`, altGrant);
           if (r2 && r2.exists) { exists = true; break; }
-        } catch { /* treat as not-existing on error */ }
+        } catch { exists = true; } // H-050: fail-CLOSED — unverifiable alt-ext treated as occupied
       }
     }
     if (!exists) return full;
+  }
+  // H-050: if EVERY existence check errored (persistent IPC/permission
+  // failure), we cannot verify ANY path — refuse to produce a name rather
+  // than risk a collision. The caller surfaces the error and the user can
+  // retry once the filesystem/IPC is healthy again.
+  if (checkErrors >= MAX_TRIES) {
+    throw new Error('Cannot find a free output name: all ' + MAX_TRIES + ' existence checks failed (IPC or permission error). No file was created.');
   }
   // Fallback: a timestamp-suffixed name that's effectively impossible
   // to collide with an existing file. The counter is still advanced
@@ -1876,11 +1916,17 @@ function scheduleStateSave() {
   // to have happened before showing "Saved." — otherwise a quick
   // quit can lose the change even after the toast.
   //
+  // H-051 (_5 audit): the promise resolves with a TYPED result:
+  //   { ok: true }                          — save succeeded
+  //   { ok: false, error: '...' }           — save failed (disk/IPC)
+  //   { ok: false, canceled: true }         — canceled before it fired
+  // Multiple debounce callers share the SAME write and the SAME result.
+  //
   // Debounce coalescing: if a second call lands within the 500 ms
   // window, the first timer is cleared — but every caller's promise
   // must still resolve. Collect all pending resolvers and fire
   // them together when the single save completes.
-  if (_suppressStateSave > 0) return Promise.resolve();
+  if (_suppressStateSave > 0) return Promise.resolve({ ok: true, suppressed: true });
   clearTimeout(_stateSaveTimer);
   return new Promise((resolve) => {
     _pendingStateSaveResolvers.push(resolve);
@@ -1895,26 +1941,31 @@ function scheduleStateSave() {
           window.logAction('state-save', 'fired');
         }
         if (r && typeof r.then === 'function') {
-          r.then(_flushPendingStateSaveResolvers, _flushPendingStateSaveResolvers);
+          r.then(
+            (res) => _flushPendingStateSaveResolvers({ ok: true, state: res }),
+            (err) => _flushPendingStateSaveResolvers({ ok: false, error: String((err && err.message) || err) })
+          );
         } else {
-          _flushPendingStateSaveResolvers();
+          _flushPendingStateSaveResolvers({ ok: true, state: r });
         }
-      } catch (_) {
-        _flushPendingStateSaveResolvers();
+      } catch (e) {
+        _flushPendingStateSaveResolvers({ ok: false, error: String((e && e.message) || e) });
       }
     }, 500);
   });
 }
 
-// Resolves all pending scheduleStateSave() callers. Called when the
-// debounced saveAllStates completes (success or failure — callers
-// don't need to know, they just need the save to have been attempted).
-function _flushPendingStateSaveResolvers() {
+// H-051 (_5 audit): resolves all pending scheduleStateSave() callers
+// with a TYPED result object so they can distinguish success from
+// failure. Called when the debounced saveAllStates completes OR when
+// cancelPendingStateSave() deterministically terminates the waiters.
+function _flushPendingStateSaveResolvers(result) {
   // Mutate-in-place clear (the array is const-declared, so it can't
   // be reassigned — use .length = 0 instead of = []).
   const resolvers = _pendingStateSaveResolvers.slice();
   _pendingStateSaveResolvers.length = 0;
-  for (const r of resolvers) { try { r(); } catch (_) {} }
+  const typed = result || { ok: true };
+  for (const r of resolvers) { try { r(typed); } catch (_) {} }
 }
 
 // R2.5 close handshake (extracted to renderer/closeHandshake.js to keep this file under 1892 LOC).
@@ -1934,13 +1985,16 @@ function suppressStateSave(fn) {
   finally { _suppressStateSave--; }
 }
 window.suppressStateSave = suppressStateSave;
-// Issue 3: cancel a pending debounced state save. Used by the
-// "Delete all local data" flow so the 500 ms-debounced save can't fire
-// in the reset→relaunch window and write the in-memory snapshot (which
-// still holds the just-deleted settings) back to disk.
+// Issue 3 + H-051 (_5 audit): cancel a pending debounced state save.
+// Used by the "Delete all local data" flow so the 500 ms-debounced save
+// can't fire in the reset→relaunch window and write the in-memory
+// snapshot (which still holds the just-deleted settings) back to disk.
+// H-051: also deterministically resolves all pending waiters with
+// { ok: false, canceled: true } so no promise stays open forever.
 function cancelPendingStateSave() {
   clearTimeout(_stateSaveTimer);
   _stateSaveTimer = null;
+  _flushPendingStateSaveResolvers({ ok: false, canceled: true });
 }
 window.cancelPendingStateSave = cancelPendingStateSave;
 function toPersistable(obj) {
@@ -1982,7 +2036,27 @@ function saveAllStates() {
       const snapshot = toPersistable(rawSnapshot);
       // EFH2-007d fix: skip the save when serialization failed (undefined).
       if (snapshot === undefined) return Promise.resolve();
-      return window.api.stateSet(snapshot).catch((err) => {
+      return window.api.stateSet(snapshot).then((r) => {
+        // H-044: Main (not the renderer) moves L2 overflow to the L3
+        // archive. After a successful save, drop exactly the archived
+        // count from the FRONT of the in-memory list — those are the
+        // oldest entries Main just appended to the archive; jobs that
+        // finished during the round trip were appended to the END and
+        // stay untouched.
+        if (r && r.ok) {
+          const archived = Number(r.jobsArchived) || 0;
+          if (archived > 0 && Array.isArray(state.jobsSnapshot)) {
+            state.jobsSnapshot.splice(0, archived);
+          }
+        }
+        // H-045: archive failures are warnings (the overflow stays in
+        // state.json) — surface them instead of silently dropping.
+        if (r && Array.isArray(r.warnings) && r.warnings.length) {
+          if (typeof window.reportIpcWarnings === 'function') window.reportIpcWarnings(r);
+          else if (typeof window.toast === 'function') window.toast('Jobs archive warning: ' + r.warnings[0], 'warn', 6000);
+        }
+        return r;
+      }).catch((err) => {
         if (typeof window.logAction === 'function') {
           window.logAction('state-save', 'failed', { error: String(err && err.message || err) });
         }

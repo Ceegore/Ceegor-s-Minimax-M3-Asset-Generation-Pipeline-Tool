@@ -42,6 +42,9 @@ const pathSecurity = require('../services/PathSecurityService');
 const { clearApiKeyFromMmxCliConfig } = require('../../src/mmxApiKeySync');
 const voicesCache = require('../services/VoicesCacheService');
 const { updateSessionCredential } = require('../services/updateSessionCredential');
+// B-006: one Main-side resolver for key presence (persisted OR session).
+const { credentialPresence } = require('../services/credentialPresence');
+const { clampBatchMaxUnits } = require('../services/batchUnitsGate'); // H-046 (_5 audit): canonical clamp for the safe numeric cost-cap field
 const { secureHandle } = require('./secureHandle'); // P1-A (360° Audit H-001): sender/frame/origin-validated IPC wrapper
 
 const PURPOSE_TO_ORIGIN = Object.freeze({
@@ -113,6 +116,44 @@ function register({ getMainWindow }) {
       if (cfg == null || typeof cfg !== 'object' || Array.isArray(cfg)) {
         return { ok: false, config: _publicConfig(cfgMod.read()), error: 'Config must be a plain object.' };
       }
+      // B-007: the API key is a typed secret command, NOT a config text
+      // field. The renderer's key input renders EMPTY (secretless DTO),
+      // so a plain `api_key: ""` in the cfg MUST NEVER mean "delete the
+      // stored key" — that wiped the key on every unrelated settings
+      // save. Resolution order:
+      //   1. apiKeyNoSave (privacy switch) → persisted key cleared
+      //      (R2.3.1 contract), session key handled separately.
+      //   2. Explicit payload.apiKeyAction: 'keep' | 'replace' | 'clear'
+      //      ('replace' requires a non-empty payload.apiKeyValue).
+      //   3. Legacy inference (bare-cfg callers): a NON-EMPTY
+      //      cfg.api_key means replace; empty/absent means KEEP.
+      const rawAction = (isWrapped && payload.apiKeyAction !== undefined) ? payload.apiKeyAction : null;
+      if (rawAction !== null && rawAction !== 'keep' && rawAction !== 'replace' && rawAction !== 'clear') {
+        return { ok: false, config: _publicConfig(cfgMod.read()), error: "apiKeyAction must be 'keep', 'replace' or 'clear'." };
+      }
+      const legacyKey = (typeof cfg.api_key === 'string') ? cfg.api_key.trim() : '';
+      let keyAction;
+      let keyValue = '';
+      if (apiKeyNoSave) {
+        keyAction = 'clear'; // privacy switch: nothing persisted
+      } else if (rawAction === 'replace') {
+        keyValue = (typeof payload.apiKeyValue === 'string') ? payload.apiKeyValue.trim() : '';
+        if (!keyValue) {
+          return { ok: false, config: _publicConfig(cfgMod.read()), error: "apiKeyAction 'replace' requires a non-empty apiKeyValue." };
+        }
+        keyAction = 'replace';
+      } else if (rawAction === 'clear') {
+        keyAction = 'clear';
+      } else if (rawAction === 'keep') {
+        keyAction = 'keep';
+      } else {
+        // Legacy inference: empty text never means delete.
+        keyAction = legacyKey ? 'replace' : 'keep';
+        keyValue = legacyKey;
+      }
+      // The api_key never flows through the generic merge below — it is
+      // applied explicitly per keyAction after the prev-read.
+      if ('api_key' in cfg) { try { delete cfg.api_key; } catch (_) {} }
       // S1 §4: output_dir / report_dir changes REQUIRE a matching
       // grant. Compare the new payload against the on-disk state so
       // we can detect a "user changed the value" vs "user re-saved
@@ -191,8 +232,24 @@ function register({ getMainWindow }) {
         }
       }
       const safe = sanitize(Object.assign({}, prev, cfg)); // KGO5-013: merge preserves absent fields
+      // B-007: apply the typed key command AFTER the merge so the
+      // renderer's cfg can never influence the stored secret implicitly.
+      if (keyAction === 'replace') safe.api_key = keyValue;
+      else if (keyAction === 'clear') safe.api_key = '';
+      else safe.api_key = (prev && typeof prev.api_key === 'string') ? prev.api_key : '';
       cfgMod.write(safe);
       if (isWrapped && typeof payload.apiKeyNoSave === 'boolean') updateSessionCredential(apiKeyNoSave, payload.sessionApiKey);
+      // B-007: an EXPLICIT clear (not the privacy switch) also removes the
+      // mmx CLI copy and any session credential — the user asked for the
+      // key to be gone everywhere.
+      let explicitClearWarning = null;
+      if (keyAction === 'clear' && !apiKeyNoSave) {
+        try { require('../services/SessionCredentialStore').clearSessionCredential(); } catch (_) {}
+        const rc = clearApiKeyFromMmxCliConfig();
+        if (rc !== true) {
+          explicitClearWarning = 'config:set cleared config.txt but mmxApiKeySync.clearApiKeyFromMmxCliConfig returned ' + JSON.stringify(rc) + '; ~/.mmx/config.json may still contain a previously-persisted api_key.';
+        }
+      }
       if (typeof voicesCache?.reset === 'function') {
         try { voicesCache.reset(); } catch { /* best-effort */ }
       }
@@ -213,6 +270,7 @@ function register({ getMainWindow }) {
           privacyWarning = 'config:set wrote config.txt but mmxApiKeySync.clearApiKeyFromMmxCliConfig returned ' + JSON.stringify(r) + '; ~/.mmx/config.json may still contain a previously-persisted api_key.';
         }
       }
+      if (!privacyWarning && explicitClearWarning) privacyWarning = explicitClearWarning;
       return {
         ok: true,
         config: _publicConfig(cfgMod.read()),
@@ -369,23 +427,35 @@ function loadPremadeStylesFromDisk() {
 /**
  * SEC-001: Build a secret-free config DTO for IPC responses.
  * The raw api_key NEVER crosses the IPC boundary.
+ * B-006: key presence comes from the shared credentialPresence resolver
+ * (persisted OR session) — no local re-derivation.
  * @param {object} cfg - Raw config from cfgMod.read().
  * @returns {object} Public-safe config shape.
  */
 function _publicConfig(cfg) {
   if (!cfg || typeof cfg !== 'object') {
-    return { hasApiKey: false, apiKeyLast4: '', output_dir: '', report_dir: '', region: 'global', theme: 'dark', styles: [], external_tools: [] };
+    const p0 = credentialPresence(null);
+    return { hasApiKey: p0.hasApiKey, hasPersistedApiKey: p0.hasPersistedApiKey, hasSessionApiKey: p0.hasSessionApiKey, apiKeyLast4: p0.apiKeyLast4, output_dir: '', report_dir: '', region: 'global', theme: 'dark', batch_max_units: 200, styles: [], external_tools: [], externalToolsEnabled: (() => { try { return require('../services/FeatureFlags').externalToolsEnabled(); } catch (_) { return true; } })() };
   }
-  const key = typeof cfg.api_key === 'string' ? cfg.api_key : '';
+  const presence = credentialPresence(cfg);
   return {
-    hasApiKey: key.length > 0,
-    apiKeyLast4: key.length >= 4 ? key.slice(-4) : '',
+    hasApiKey: presence.hasApiKey,
+    hasPersistedApiKey: presence.hasPersistedApiKey,
+    hasSessionApiKey: presence.hasSessionApiKey,
+    apiKeyLast4: presence.apiKeyLast4,
     output_dir: cfg.output_dir || '',
     report_dir: cfg.report_dir || '',
     region: cfg.region === 'cn' ? 'cn' : 'global',
     theme: cfg.theme === 'light' ? 'light' : 'dark',
+    // H-046: safe numeric field — keeps the renderer's cost-gate display in
+    // sync with the authoritative config (Main re-checks every paid call).
+    batch_max_units: clampBatchMaxUnits(cfg.batch_max_units),
     styles: Array.isArray(cfg.styles) ? cfg.styles : [],
     external_tools: Array.isArray(cfg.external_tools) ? cfg.external_tools : [],
+    // H-052 (_5 audit): expose the feature-flag state so the renderer can
+    // hide/disable the external tools UI in packaged builds (instead of
+    // showing a fully configurable editor that can never execute).
+    externalToolsEnabled: (() => { try { return require('../services/FeatureFlags').externalToolsEnabled(); } catch (_) { return true; } })(),
   };
 }
 

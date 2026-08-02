@@ -19,7 +19,40 @@ const { spawn, spawnSync } = require('child_process');
 const path = require('path');
 const fs = require('fs');
 const { getSafeProcessEnv } = require('./cpuGuard');
-const jobRegistry = require('./jobRegistry');
+const jobRegistry = require('./services/jobRegistryCompat');
+
+// H-021 (_5 audit): validate ONNX/background-removal output is a real PNG.
+const PNG_MAGIC = Buffer.from([0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A]);
+const MIN_OUTPUT_BYTES = 64;
+const STDERR_CAP = 1024 * 1024; // 1 MB
+
+function validatePngOutput(filePath) {
+  try {
+    const stat = fs.statSync(filePath);
+    if (stat.size < MIN_OUTPUT_BYTES) {
+      return { ok: false, error: 'output file is too small (' + stat.size + ' bytes) — likely truncated' };
+    }
+    const fd = fs.openSync(filePath, 'r');
+    const header = Buffer.alloc(24);
+    const bytesRead = fs.readSync(fd, header, 0, 24, 0);
+    fs.closeSync(fd);
+    if (bytesRead < 24) return { ok: false, error: 'output file too short to contain PNG header' };
+    if (!header.slice(0, 8).equals(PNG_MAGIC)) {
+      return { ok: false, error: 'output file does not have a valid PNG signature' };
+    }
+    const width = header.readUInt32BE(16);
+    const height = header.readUInt32BE(20);
+    if (width === 0 || height === 0) {
+      return { ok: false, error: 'output PNG has zero dimensions (' + width + 'x' + height + ')' };
+    }
+    if (width > 32768 || height > 32768) {
+      return { ok: false, error: 'output PNG dimensions exceed pixel budget (' + width + 'x' + height + ')' };
+    }
+    return { ok: true, width, height };
+  } catch (e) {
+    return { ok: false, error: 'output validation failed: ' + (e && e.message || e) };
+  }
+}
 
 const {
   findModelPath,
@@ -127,7 +160,10 @@ function runBinary(srcPath, dstPath, opts) {
     // KGO6-005: use the proper BELOW_NORMAL constant (numeric 1 fell in the NORMAL band).
     try { if (process.platform === 'win32') { const _os = require('os'); _os.setPriority(proc.pid, _os.constants.priority.PRIORITY_BELOW_NORMAL); } } catch (_) {}
     if (opts.jobId) jobRegistry.register(opts.jobId, proc, { backend: 'isnetbg', srcPath, dstPath });
-    proc.stderr.on('data', (b) => { stderr += b.toString('utf8'); });
+    proc.stderr.on('data', (b) => {
+      if (stderr.length < STDERR_CAP) stderr += b.toString('utf8');
+      else if (stderr.length === STDERR_CAP) stderr += '\n[stderr truncated at 1 MB]';
+    });
     proc.on('error', (err) => {
       resetCache();
       if (opts.jobId) jobRegistry.unregister(opts.jobId, proc);
@@ -136,7 +172,12 @@ function runBinary(srcPath, dstPath, opts) {
     proc.on('close', (code) => {
       if (opts.jobId) jobRegistry.unregister(opts.jobId, proc);
       if (code === 0 && fs.existsSync(dstPath)) {
-        resolveP({ ok: true, code, stderr, outputPath: dstPath });
+        const check = validatePngOutput(dstPath);
+        if (!check.ok) {
+          resolveP({ ok: false, code, stderr: stderr + '\nOutput validation: ' + check.error, outputPath: null });
+        } else {
+          resolveP({ ok: true, code, stderr, outputPath: dstPath });
+        }
       } else {
         resolveP({ ok: false, code, stderr: stderr || `isnetbg exited with code ${code}`, outputPath: null });
       }
@@ -222,7 +263,10 @@ function runNode(srcPath, dstPath, opts) {
         outputPath: null,
       });
     }, timeoutMs);
-    proc.stderr.on('data', (b) => { stderr += b.toString('utf8'); });
+    proc.stderr.on('data', (b) => {
+      if (stderr.length < STDERR_CAP) stderr += b.toString('utf8');
+      else if (stderr.length === STDERR_CAP) stderr += '\n[stderr truncated at 1 MB]';
+    });
     proc.on('error', (err) => {
       if (killed) return;
       clearTimeout(killTimer);
@@ -234,7 +278,12 @@ function runNode(srcPath, dstPath, opts) {
       if (opts.jobId) jobRegistry.unregister(opts.jobId, proc);
       if (killed) return;
       if (code === 0 && fs.existsSync(dstPath)) {
-        resolveP({ ok: true, code, stderr, outputPath: dstPath });
+        const check = validatePngOutput(dstPath);
+        if (!check.ok) {
+          resolveP({ ok: false, code, stderr: stderr + '\nOutput validation: ' + check.error, outputPath: null });
+        } else {
+          resolveP({ ok: true, code, stderr, outputPath: dstPath });
+        }
       } else {
         resolveP({ ok: false, code, stderr: stderr || `isnetbg_node exited with code ${code}`, outputPath: null });
       }

@@ -421,7 +421,13 @@ function buildImportedEntry(type, prompt, params) {
       const { errors: vvErrors } = vv(type, Object.assign({}, resolved, { prompt }), { partial: true });
       if (vvErrors && vvErrors.length) errors.push(...vvErrors);
     }
-  } catch (_) { /* validation must never block import */ }
+  } catch (e) {
+    // H-055: a THROWING validator must not produce a silently-unvalidated
+    // executable row. Import still succeeds (the prompt is kept), but the
+    // row is marked defective so the BatchGen runner refuses to spend a
+    // billable request on parameters nobody ever checked.
+    errors.push('Validation infrastructure failed: ' + String((e && e.message) || e));
+  }
   if (errors.length) entry._defective = errors;
   else if (entry._defective) delete entry._defective;
   return entry;

@@ -180,8 +180,12 @@ test('session-only Settings save stores the key in Main memory and never in conf
     cfg: { api_key: '' }, apiKeyNoSave: true, sessionApiKey: 'sk-session-only', grants: {},
   });
   assert.equal(r.ok, true, r.error);
-  // SEC-001: config:set returns a public DTO — empty key means hasApiKey:false.
-  assert.equal(r.config.hasApiKey, false);
+  // B-006: hasApiKey reflects persisted OR session credential. The session
+  // key was just stored, so presence must be true — while the persisted
+  // flag stays false (nothing written to config.txt).
+  assert.equal(r.config.hasApiKey, true);
+  assert.equal(r.config.hasPersistedApiKey, false);
+  assert.equal(r.config.hasSessionApiKey, true);
   assert.equal(require(SESSION_STORE).getSessionCredential(), 'sk-session-only');
 });
 

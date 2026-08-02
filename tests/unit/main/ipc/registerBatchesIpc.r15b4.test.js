@@ -316,65 +316,55 @@ test('R1.5b.4: batches:generateExamples writes to effectiveOutputDir (not a rend
   assert.ok(r.path.startsWith(TMP), 'outPath must STILL be under TMP (the format arg cannot redirect the dest)');
 });
 
-test('R1.5b.4: batches:generateExamples deletes the other format file (legacy behaviour)', async () => {
+test('R1.5b.4 (H-054): batches:generateExamples writes ONLY the chosen format and never deletes the other', async () => {
   const { handlers } = loadIpc();
-  // After the first call with format=md, the handler wrote both
-  // files then DELETED the unselected (txt). So only the .md
-  // file should remain on disk.
+  // H-054 replaced the legacy "write both, delete the unselected one"
+  // behaviour (which silently destroyed a user file of the same name)
+  // with exclusive-create of ONLY the chosen format. So requesting md
+  // must NOT create or delete the txt file, and vice versa.
   await handlers.get('batches:generateExamples')(null, 'md');
-  assert.ok(fs.existsSync(path.join(TMP, 'example_batch_import.md')));
+  assert.ok(fs.existsSync(path.join(TMP, 'example_batch_import.md')),
+    'the chosen md file must be written');
   assert.ok(!fs.existsSync(path.join(TMP, 'example_batch_import.txt')),
-    'txt file must be deleted when format=md is requested (legacy behaviour)');
-  // A second call with format=txt should now delete md and
-  // keep txt (the legacy toggle).
+    'the unselected txt file must NOT be created when format=md');
+  // A second call with format=txt writes the txt file and LEAVES the
+  // existing md file untouched (the handler never deletes user files).
   await handlers.get('batches:generateExamples')(null, 'txt');
-  assert.ok(!fs.existsSync(path.join(TMP, 'example_batch_import.md')),
-    'md file must be deleted when format=txt is requested');
   assert.ok(fs.existsSync(path.join(TMP, 'example_batch_import.txt')),
-    'txt file must be created when format=txt is requested');
+    'the chosen txt file must be written');
+  assert.ok(fs.existsSync(path.join(TMP, 'example_batch_import.md')),
+    'H-054: the pre-existing md file must NOT be deleted when format=txt');
+  // Clean up so the next test sees a pristine state.
+  for (const f of ['example_batch_import.md', 'example_batch_import.txt']) {
+    try { fs.unlinkSync(path.join(TMP, f)); } catch (_) {}
+  }
 });
 
-test('R1.5b.4 Phasenpruefung-of-Phasenpruefung-of-Phasenpruefung: batches:generateExamples partial-failure (2nd write throws) returns ok:false and does NOT throw to the renderer', async () => {
-  // The handler writes md, then txt, then deletes the unselected
-  // one. If the txt write throws (e.g. disk full on the second
-  // write), the handler catches the error and returns {ok:false,
-  // error}. The .md file is left behind. This is acceptable
-  // best-effort behaviour, but it must NOT throw to the renderer
-  // and it must NOT leave the grant service called.
-  // Clean up any leftover example files from earlier tests so
-  // the partial-failure assertion sees a pristine state.
+test('R1.5b.4 (H-054): batches:generateExamples write-failure returns ok:false and does NOT throw to the renderer', async () => {
+  // H-054: the handler performs a SINGLE exclusive-create ('wx') write of
+  // the chosen format. If that write fails with a non-EEXIST error (e.g.
+  // disk full), the handler catches it and returns {ok:false, error}
+  // without throwing to the renderer and without any grant check firing.
   for (const f of ['example_batch_import.md', 'example_batch_import.txt']) {
     try { fs.unlinkSync(path.join(TMP, f)); } catch (_) { /* may not exist */ }
   }
-  const txtPath = path.join(TMP, 'example_batch_import.txt');
+  const mdPath = path.join(TMP, 'example_batch_import.md');
   const { handlers, calls, writeFileCalls } = loadIpc({
     writeFile: {
-      shouldThrow: (p) => p === txtPath,
-      message: 'simulated disk full on txt write',
+      shouldThrow: (p) => p === mdPath,
+      message: 'simulated disk full on md write',
       code: 'ENOSPC',
     },
   });
   const r = await handlers.get('batches:generateExamples')(null, 'md');
-  assert.equal(r.ok, false, 'partial failure must surface as ok:false');
+  assert.equal(r.ok, false, 'a failed write must surface as ok:false');
   assert.ok(r.error && /simulated disk full/.test(r.error),
     'the error message must be propagated to the renderer');
-  // The md write succeeded (delegated to the real fs.writeFileSync),
-  // the txt write threw. The handler never reached the unlink
-  // branch. The .md file is on disk (it was the first write and
-  // was delegated); the .txt file is NOT on disk (its write
-  // threw before any bytes hit the disk).
-  assert.ok(fs.existsSync(path.join(TMP, 'example_batch_import.md')),
-    'md file was written before the txt write threw and must remain on disk');
-  assert.ok(!fs.existsSync(txtPath),
-    'txt file must not exist when its write threw');
-  // The handler attempted exactly 2 writes (md + txt) — the
-  // unlink was never reached.
-  assert.equal(writeFileCalls.length, 2,
-    'handler must have attempted exactly 2 writes (md + txt) before throwing on the txt write');
+  assert.ok(!fs.existsSync(mdPath), 'no md file may remain when its write threw');
+  assert.equal(writeFileCalls.length, 1,
+    'H-054: exactly one write is attempted (the single chosen-format file)');
   // No grant check fired.
   assert.equal(calls.grantAuthorize.length, 0);
-  // Clean up the .md file so the next test sees a clean state.
-  try { fs.unlinkSync(path.join(TMP, 'example_batch_import.md')); } catch (_) {}
 });
 
 // ===========================================================================

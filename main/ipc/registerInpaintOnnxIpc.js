@@ -95,14 +95,21 @@ function register(deps) {
     if (!outAuthz.ok) {
       return bad(`Output path "${outPath}" is not authorised by the grant (${outAuthz.error})`);
     }
-    // SEC-012: write masks to userData/tmp/<jobId>/ instead of beside
+    // SEC-012: write masks to userData/tmp/<runId>/ instead of beside
     // the source image. A compromised renderer must not be able to
     // place arbitrary files next to user documents via the mask write.
-    // The temp directory is Main-derived (not renderer-influenced).
+    // B-010: the temp directory name is a Main-minted crypto-random
+    // runId — NEVER the renderer-supplied args.jobId. A renderer
+    // jobId like "..\\..\\secrets" or "." would otherwise flow into
+    // path.join() and later into the recursive rm() in the finally
+    // block. args.jobId remains an untrusted correlation label used
+    // ONLY as a jobRegistry Map key (for cancel), never as a path.
     const assetCfg = assetPaths.getConfig();
-    const tmpBase = (assetCfg && assetCfg.userDataPath)
-      ? path.join(assetCfg.userDataPath, 'tmp', args.jobId || 'inpaint-' + randomUUID())
-      : path.join(require('os').tmpdir(), 'minimax-inpaint-' + randomUUID());
+    const tmpRoot = (assetCfg && assetCfg.userDataPath)
+      ? path.join(assetCfg.userDataPath, 'tmp')
+      : path.join(require('os').tmpdir(), 'minimax-inpaint');
+    const runId = 'inpaint-' + randomUUID();
+    const tmpBase = path.join(tmpRoot, runId);
     await fsp.mkdir(tmpBase, { recursive: true });
     const maskPath = path.join(tmpBase, '.ie_inpaint_mask_' + randomUUID() + '.png');
 
@@ -152,7 +159,16 @@ function register(deps) {
     } finally {
       // SEC-012 / MED-043: cleanup the entire temp directory in finally
       // so no mask artifacts leak on success or error.
-      try { await fsp.rm(tmpBase, { recursive: true, force: true }); } catch (_) {}
+      // B-010: defence-in-depth — even though tmpBase is Main-minted,
+      // verify it is a STRICT descendant of tmpRoot before the
+      // recursive delete. A path.relative() that is empty, starts
+      // with '..' or is absolute means "not strictly inside" and the
+      // delete is refused.
+      try {
+        const rel = path.relative(tmpRoot, tmpBase);
+        const contained = rel && !rel.startsWith('..' + path.sep) && rel !== '..' && !path.isAbsolute(rel);
+        if (contained) await fsp.rm(tmpBase, { recursive: true, force: true });
+      } catch (_) {}
     }
     // R3.2.2: result passes through `adaptInpaintResult` (validates
     // the 9 contract fields, maps `path` → `outputPath`, preserves
@@ -289,7 +305,7 @@ async function validateOnnxCandidate(modelPath, modelSpec) {
   try {
     ort = require('onnxruntime-node');
   } catch (_) {
-    return 'onnxruntime-node not available — cannot validate the model.';
+    return 'onnxruntime-node not available \u2014 cannot validate the model.';
   }
   let session;
   try {
@@ -310,9 +326,76 @@ async function validateOnnxCandidate(modelPath, modelSpec) {
         ') but the ONNX session exposes ' + names.length +
         ' (' + JSON.stringify(names) + '). The file may be a different export.';
     }
+    // H-022 (_5 audit): run a real mini-inference to validate output shape/type.
+    // A model with the right input count but wrong output (e.g. a classifier)
+    // is rejected here instead of failing during the user's actual heal operation.
+    const S = 64; // mini test size (fast, low memory)
+    const inferenceErr = await _runProbeInference(ort, session, modelSpec, S);
+    if (inferenceErr) return inferenceErr;
     return null; // validation passed
   } finally {
     try { await session.release(); } catch (_) {}
+  }
+}
+
+/**
+ * H-022: run a probe inference with a mini tensor and validate the output.
+ * @param {object} ort - onnxruntime-node module
+ * @param {object} session - InferenceSession
+ * @param {object} modelSpec - model registry entry
+ * @param {number} S - spatial size for the test tensor
+ * @returns {string|null} error message or null if OK
+ */
+async function _runProbeInference(ort, session, modelSpec, S) {
+  const style = modelSpec.inputStyle || 'concat';
+  const outCh = modelSpec.outputChannels || 3;
+  try {
+    // Build feeds matching the model's input style.
+    const feeds = {};
+    const inputNames = session.inputNames || [];
+    if (style === 'concat') {
+      // Single 4-channel tensor [1, 4, S, S].
+      const data = new Float32Array(1 * 4 * S * S).fill(0.5);
+      feeds[inputNames[0]] = new ort.Tensor('float32', data, [1, 4, S, S]);
+    } else {
+      // Split: image [1, 3, S, S] + mask [1, 1, S, S].
+      const imgData = new Float32Array(1 * 3 * S * S).fill(0.5);
+      const maskData = new Float32Array(1 * 1 * S * S).fill(1.0);
+      feeds[inputNames[0]] = new ort.Tensor('float32', imgData, [1, 3, S, S]);
+      feeds[inputNames[1]] = new ort.Tensor('float32', maskData, [1, 1, S, S]);
+    }
+    // Timeout: abort if inference takes > 15s (a 64x64 probe should be < 2s).
+    const timer = setTimeout(() => { try { session.release(); } catch (_) {} }, 15000);
+    let results;
+    try {
+      results = await session.run(feeds);
+    } finally {
+      clearTimeout(timer);
+    }
+    // Validate output existence.
+    const outputNames = session.outputNames || [];
+    if (!outputNames.length) return 'model declares no outputs';
+    const outTensor = results[outputNames[0]];
+    if (!outTensor) return 'model returned no data for output "' + outputNames[0] + '"';
+    // Validate output shape: expect [1, outCh, H, W].
+    const dims = outTensor.dims;
+    if (!dims || dims.length !== 4) {
+      return 'output rank is ' + (dims ? dims.length : 0) + ' (expected 4: [1,C,H,W])';
+    }
+    if (dims[0] !== 1 || dims[1] !== outCh) {
+      return 'output shape [' + dims.join(',') + '] does not match expected [1,' + outCh + ',H,W]';
+    }
+    // Validate output values: must be finite (no NaN/Inf).
+    const data = outTensor.data;
+    if (data && data.length > 0) {
+      const sample = Math.min(data.length, 1000);
+      for (let i = 0; i < sample; i++) {
+        if (!Number.isFinite(data[i])) return 'output contains non-finite value at index ' + i;
+      }
+    }
+    return null; // probe passed
+  } catch (e) {
+    return 'probe inference failed: ' + ((e && e.message) || e);
   }
 }
 

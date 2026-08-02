@@ -8,6 +8,10 @@
 const cfgMod = require('../../src/config');
 // P1-A (360° Audit H-001): secure IPC wrapper with sender/frame/origin validation.
 const { secureHandle } = require('./secureHandle');
+// B-006: one Main-side resolver for key presence (persisted OR session).
+const { credentialPresence } = require('../services/credentialPresence');
+// H-046 (_5 audit): canonical clamp for the safe numeric cost-cap field.
+const { clampBatchMaxUnits } = require('../services/batchUnitsGate');
 
 /**
  * @param {{ getMainWindow: () => (Electron.BrowserWindow|null) }} deps
@@ -17,20 +21,28 @@ function register({ getMainWindow }) {
     try {
       const c = cfgMod.read();
       const cfg = (c && typeof c === 'object') ? c : {};
-      const key = typeof cfg.api_key === 'string' ? cfg.api_key : '';
+      // B-006: hasApiKey must be true when EITHER a persisted key
+      // (config.txt) OR a session-only key (SessionCredentialStore)
+      // exists — otherwise "Don't save my API key" mode blocks every tab.
+      const presence = credentialPresence(cfg);
       return {
         ok: true,
-        hasApiKey: key.length > 0,
-        apiKeyLast4: key.length >= 4 ? key.slice(-4) : '',
+        hasApiKey: presence.hasApiKey,
+        hasPersistedApiKey: presence.hasPersistedApiKey,
+        hasSessionApiKey: presence.hasSessionApiKey,
+        apiKeyLast4: presence.apiKeyLast4,
         output_dir: cfg.output_dir || '',
         report_dir: cfg.report_dir || '',
         region: cfg.region === 'cn' ? 'cn' : 'global',
         theme: cfg.theme === 'light' ? 'light' : 'dark',
+        // H-046: safe numeric field — without it the renderer's cost gate
+        // computed parseInt(undefined) || 200 and ignored the configured cap.
+        batch_max_units: clampBatchMaxUnits(cfg.batch_max_units),
         styles: Array.isArray(cfg.styles) ? cfg.styles : [],
         external_tools: Array.isArray(cfg.external_tools) ? cfg.external_tools : [],
       };
     } catch (_) {
-      return { ok: true, hasApiKey: false, apiKeyLast4: '', output_dir: '', report_dir: '', region: 'global', theme: 'dark', styles: [], external_tools: [] };
+      return { ok: true, hasApiKey: false, hasPersistedApiKey: false, hasSessionApiKey: false, apiKeyLast4: '', output_dir: '', report_dir: '', region: 'global', theme: 'dark', batch_max_units: 200, styles: [], external_tools: [] };
     }
   });
 }

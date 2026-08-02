@@ -378,10 +378,16 @@ function printPrivilegeFix() {
     function w(dir) { for (const e of fs.readdirSync(dir, { withFileTypes: true })) { const p = path.join(dir, e.name); if (e.isDirectory()) w(p); else s += fs.statSync(p).size; } }
     w(d); return s;
   })(UNPACKED);
-  const SPLIT_THRESHOLD = 2.9 * 1024 * 1024 * 1024; // ~2.9 GB raw → >1.9 GB compressed
+  // H-068 (_5 audit): GitHub release attachments are capped at 2 GiB per
+  // file. The old 2.9 GiB raw threshold assumed good compression; model
+  // files are already compressed and deflate barely shrinks them. Use a
+  // conservative threshold equal to PART_RAW_CAP so even incompressible
+  // payloads trigger splitting before the single-zip path can exceed 2 GiB.
+  const GITHUB_LIMIT = 2 * 1024 * 1024 * 1024; // 2 GiB hard platform cap
   // Raw-size cap per part. Compressed output is ≤ raw size for deflate (plus
   // negligible header overhead), so 1900 MiB raw stays safely under 2 GiB.
   const PART_RAW_CAP = 1900 * 1024 * 1024;
+  const SPLIT_THRESHOLD = PART_RAW_CAP; // split when raw > 1900 MiB
   const wantSplit = unpackedSize > SPLIT_THRESHOLD && process.env.ZIP_NO_SPLIT !== '1';
   if (wantSplit) {
     log('  Unpacked size: ' + (unpackedSize / 1024 / 1024).toFixed(0) + ' MB — producing independent part zips (≤ 1900 MiB raw each).');
@@ -414,6 +420,13 @@ function printPrivilegeFix() {
       let partSize = 0;
       for (const f of files) {
         const size = fs.statSync(f).size;
+        // H-068: a single file exceeding the part cap cannot be split
+        // further — warn loudly but still include it (the post-build
+        // check below will fail the build if the archive exceeds the
+        // platform limit).
+        if (size > PART_RAW_CAP) {
+          log('  ⚠  WARNING: single file exceeds part cap: ' + path.relative(STAGE, f) + ' (' + (size / 1024 / 1024).toFixed(0) + ' MiB)');
+        }
         if (partSize + size > PART_RAW_CAP && partitions[partitions.length - 1].length > 0) {
           partitions.push([]);
           partSize = 0;
@@ -445,6 +458,16 @@ function printPrivilegeFix() {
     fail('7-Zip zipping failed: ' + (e && e.message || e));
   }
   fs.renameSync(STAGE, UNPACKED);
+
+  // H-068 (_5 audit): post-build hard size check. Every produced archive
+  // MUST be under the GitHub 2 GiB upload limit. Fail closed — a too-large
+  // artifact must never ship.
+  for (const fp of finalPaths) {
+    const archiveSize = fs.statSync(fp).size;
+    if (archiveSize > GITHUB_LIMIT) {
+      fail(`archive exceeds the 2 GiB platform upload limit: ${path.basename(fp)} (${(archiveSize / 1024 / 1024).toFixed(0)} MiB). Re-partition or reduce the payload.`);
+    }
+  }
 
   // Publish the same dual-purpose installer beside the archive. It can verify
   // and extract the part zips using built-in Windows tools, or install

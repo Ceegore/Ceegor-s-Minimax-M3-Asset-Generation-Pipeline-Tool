@@ -46,8 +46,10 @@ test('pipeline:import copies files into the workspace with the img_<id> naming',
     require('../../../../main/ipc/registerPipelineIpc').register({ appRoot: process.cwd(), getMainWindow: () => null });
 
     // Source file anywhere on disk (a read — not gated).
+    // H-059: write the full 8-byte PNG signature so FormatRegistry.fromMagic()
+    // recognizes it (the old inline check only needed 4 bytes).
     const src = path.join(cfgDir, 'src.png');
-    fs.writeFileSync(src, Buffer.from([0x89, 0x50, 0x4e, 0x47]));
+    fs.writeFileSync(src, Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0x00, 0x0d]));
     // R1.4 Phasenpruefung-2: explicitly mint a workspaceId for the
     // test path so the test exercises the WORKSPACEID routing (not
     // the auto-mint fallback that happens to match this path). The

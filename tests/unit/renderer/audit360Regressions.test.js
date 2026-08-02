@@ -190,20 +190,36 @@ test('H2: ArchiveViewer.js does not shadow the close() function with a local but
 });
 
 // =====================================================================
-// H3: archive duplicates — renderer-side trim in _pushJobSnapshot
+// H3 (superseded by H-044): archive starvation — the renderer must NOT
+// pre-trim jobsSnapshot to jobsArchiveCap. The old client-side trim meant
+// the overflow never reached src/state.js write(), so nothing was ever
+// appended to the L3 archive (the oldest entries were silently destroyed).
+// Main now archives the overflow on every save and reports `jobsArchived`;
+// saveAllStates drops exactly that many entries from the renderer's list.
 // =====================================================================
-test('H3: JobRunner._pushJobSnapshot trims jobsSnapshot to jobsArchiveCap client-side (revert guard)', () => {
-  const code = fs.readFileSync(path.join(ROOT, 'renderer', 'jobs', 'JobRunner.js'), 'utf8');
-  // The fix adds a client-side trim right after the push. Assert the
-  // slice(-cap) is present — without it, the renderer's array only
-  // grows and every save re-archives the same overflow (HIGH-1 in the
-  // persistence audit, live-reproduced).
+test('H-044: JobRunner._pushJobSnapshot keeps the overflow (no cap trim; only a runaway hard bound)', () => {
+  const raw = fs.readFileSync(path.join(ROOT, 'renderer', 'jobs', 'JobRunner.js'), 'utf8');
+  // Strip comment lines so the explanatory comment (which names the old
+  // jobsArchiveCap behaviour) doesn't false-fire — we assert on CODE only.
+  const code = raw.split('\n').filter((l) => !l.trim().startsWith('//')).join('\n');
   const pushMatch = code.match(/function _pushJobSnapshot[\s\S]*?\n  \}/);
   assert.ok(pushMatch, 'could not locate _pushJobSnapshot in JobRunner.js');
-  assert.ok(/jobsSnapshot\.length\s*>\s*cap/.test(pushMatch[0]),
-    '_pushJobSnapshot must compare length against the cap (H3 regression: no client-side trim)');
-  assert.ok(/slice\(-cap\)/.test(pushMatch[0]),
-    '_pushJobSnapshot must slice(-cap) to keep the newest entries (H3 regression)');
+  assert.ok(!/slice\(-cap\)/.test(pushMatch[0]),
+    '_pushJobSnapshot must NOT trim to jobsArchiveCap (H-044: pre-trim starves the Main-side archiver)');
+  assert.ok(!/jobsArchiveCap/.test(pushMatch[0]),
+    '_pushJobSnapshot must not read jobsArchiveCap at all — Main owns the L2→L3 move');
+  assert.ok(/HARD_BOUND\s*=\s*5000/.test(pushMatch[0]),
+    '_pushJobSnapshot must keep the 5000-entry runaway bound (memory safety when saves persistently fail)');
+  assert.ok(/slice\(-HARD_BOUND\)/.test(pushMatch[0]),
+    'the runaway bound must keep the NEWEST entries');
+});
+
+test('H-044: saveAllStates drops exactly jobsArchived entries from the FRONT after a successful save', () => {
+  const raw = fs.readFileSync(path.join(ROOT, 'renderer', 'app.js'), 'utf8');
+  assert.ok(/Number\(r\.jobsArchived\)\s*\|\|\s*0/.test(raw),
+    'saveAllStates must read r.jobsArchived from the state:set response');
+  assert.ok(/state\.jobsSnapshot\.splice\(0,\s*archived\)/.test(raw),
+    'saveAllStates must splice the archived count off the FRONT of state.jobsSnapshot');
 });
 
 // =====================================================================

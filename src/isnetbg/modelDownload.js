@@ -102,9 +102,12 @@ async function downloadModel(modelKey, onProgress) {
   activeDownload = resolvedKey;
 
   try {
-    // Determine destination path
+    // Determine destination path.
+    // H-065: downloads must target the writable override dir exclusively —
+    // resolveAsset() returns the bundled (read-only in packaged builds)
+    // path whenever a bundled copy of the model exists.
     const assetPaths = require('../assetPaths');
-    const destPath = assetPaths.resolveAsset('models', m.file);
+    const destPath = assetPaths.resolveWritableOverride('models', m.file);
 
     const tmp = destPath + '.tmp-' + process.pid + '-' + crypto.randomUUID();
 

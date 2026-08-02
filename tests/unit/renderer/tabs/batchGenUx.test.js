@@ -96,10 +96,10 @@ test('T6: the combined confirm derives per-type paid-call counts from computeExp
 });
 
 // ---- T7: auto-close only on a truly clean run (review fix B) ----
-test('T7: overlay auto-close requires no error, no fail, NO SKIPPED, not aborted', () => {
+test('T7: overlay auto-close requires no error, no fail, no partial (H-056), NO SKIPPED, not aborted', () => {
   assert.match(MANAGER,
-    /if \(!batchError && fail === 0 && skipped === 0 && !window\._batchAbortByTab\[tabKey\]\) \{\s*overlay\.remove\(\);/,
-    'skipped-defective runs must keep the overlay so the per-item log stays inspectable (review fix B)');
+    /if \(!batchError && fail === 0 && partial === 0 && skipped === 0 && !window\._batchAbortByTab\[tabKey\]\) \{\s*overlay\.remove\(\);/,
+    'skipped-defective / postprocess-partial runs must keep the overlay so the per-item log stays inspectable (review fix B / H-056)');
 });
 
 test('T7: the non-clean branch turns Stop into a working Close button', () => {
@@ -111,7 +111,7 @@ test('T7: the non-clean branch turns Stop into a working Close button', () => {
 });
 
 test('T7: the summary toast uses the same clean-run rule as the auto-close', () => {
-  assert.match(MANAGER, /batchError \? 'err' : \(\(fail === 0 && skipped === 0\) \? 'ok' : 'warn'\)/);
+  assert.match(MANAGER, /batchError \? 'err' : \(\(fail === 0 && partial === 0 && skipped === 0\) \? 'ok' : 'warn'\)/);
 });
 
 // ---- computeExpectedCalls: functional check of the shared reduce ----

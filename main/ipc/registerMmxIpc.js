@@ -65,6 +65,8 @@ const {
   authorizeMmxPaths: _authorizeMmxPaths,
 } = require('./mmxPathAuthz');
 const { sanitizeOrReject: _sanitizeOrReject } = require('../../src/mmxArgSanitizer'); // P0-C (360° Audit C-004): blocks --base-url/--config/--proxy + unknown flags
+const { checkMmxUnits: _checkMmxUnits } = require('../services/batchUnitsGate'); // H-046 (_5 audit): Main-side authoritative batch_max_units cost cap
+const { registerAuthTestDraft } = require('./authTestDraft'); // H-040 (_5 audit): test the DRAFT key, not the saved one
 const { finalizeMmxArtifacts: _finalizeMmxArtifacts } = require('./mmxArtifactCheck'); // P4.1 (360° Audit DB-H-002/008): reject ok:true results whose --out/--download/-o artifact is missing/truncated/corrupt
 const { secureHandle } = require('./secureHandle'); // P1-A (360° Audit H-001): sender/frame/origin-validated IPC wrapper
 
@@ -89,8 +91,8 @@ function register({ getMainWindow, appRoot }) {
   // is required IF the args contain a path flag (--out, --out-dir,
   // --download, -o). For args with no path flag, the call still
   // succeeds without a grant (e.g. `mmx quota`).
-  // HIGH-011: optional 4th arg `readGrantId` for input file paths.
-  secureHandle('mmx:run', { getMainWindow }, async (_e, args, grantId, readGrantId) => {
+  // B-002: optional 4th arg `readGrantIds` (string or array) for input file paths.
+  secureHandle('mmx:run', { getMainWindow }, async (_e, args, grantId, readGrantIds) => {
     try {
       if (!Array.isArray(args) || args.length < 1) {
         return { ok: false, code: -1, stdout: '', stderr: 'mmx: first arg (subcommand) is required', parsed: null };
@@ -100,6 +102,8 @@ function register({ getMainWindow, appRoot }) {
       }
       const { err: sErr, safeArgs } = _sanitizeOrReject(args); // P0-C (C-004): block --base-url, --config, etc.
       if (sErr) return sErr;
+      const unitsErr = _checkMmxUnits(safeArgs); // H-046: authoritative cost cap
+      if (unitsErr) return { ok: false, code: -1, stdout: '', stderr: unitsErr, parsed: null };
       // R1.5b.1: collect the path flags from the args + authorise
       // them against the grant. If no path flag is present, the
       // grant is optional (the call doesn't touch the filesystem
@@ -107,8 +111,8 @@ function register({ getMainWindow, appRoot }) {
       // (the renderer forgot to mint a grant for the output dir).
       const pathFlags = _collectMmxPathFlags(safeArgs);
       if (pathFlags.length > 0) {
-        // HIGH-011: pass optional readGrantId for input file paths.
-        const grantAuthz = _authorizeMmxPaths(grantId, pathFlags, undefined, readGrantId);
+        // B-002: pass optional plural readGrantIds for input file paths.
+        const grantAuthz = _authorizeMmxPaths(grantId, pathFlags, undefined, readGrantIds);
         if (grantAuthz) {
           return { ok: false, code: -1, stdout: '', stderr: grantAuthz, parsed: null };
         }
@@ -137,9 +141,10 @@ function register({ getMainWindow, appRoot }) {
   // renderer forgot to mint a grant for the output dir / cwd).
   // For payload with no path flags AND no cwd, the call still
   // succeeds without a grant (e.g. `mmx quota` from a Diagnose flow).
-  // HIGH-011: optional readGrantId in payload for input file paths.
+  // B-002: optional readGrantIds (plural, array) in payload for input file
+  // paths; the singular payload.readGrantId is kept for back-compat.
   secureHandle('mmx:run:job', { getMainWindow }, async (_e, payload, grantId) => {
-    const readGrantId = payload && payload.readGrantId;
+    const readGrantIds = payload && (payload.readGrantIds !== undefined ? payload.readGrantIds : payload.readGrantId);
     try {
       const args = payload && payload.args;
       const jobId = payload && payload.jobId;
@@ -152,6 +157,8 @@ function register({ getMainWindow, appRoot }) {
       }
       const { err: sErr, safeArgs } = _sanitizeOrReject(args); // P0-C (C-004): block --base-url, --config, etc.
       if (sErr) return sErr;
+      const unitsErr = _checkMmxUnits(safeArgs); // H-046: authoritative cost cap
+      if (unitsErr) return { ok: false, code: -1, stdout: '', stderr: unitsErr, parsed: null };
       // H9-003 (Phase B): fail closed when the installed mmx-cli is older than
       // the supported minimum. mmx 1.0.16 silently drops video duration/
       // resolution/optimizer + speech sound-effect while exiting 0 — the only
@@ -176,8 +183,8 @@ function register({ getMainWindow, appRoot }) {
       // a missing grant for a path-bearing call fails closed.
       const pathFlags = _collectMmxPathFlags(safeArgs);
       if (pathFlags.length > 0 || (typeof cwd === 'string' && cwd)) {
-        // HIGH-011: pass optional readGrantId for input file paths.
-        const grantAuthz = _authorizeMmxPaths(grantId, pathFlags, cwd, readGrantId);
+        // B-002: pass optional plural readGrantIds for input file paths.
+        const grantAuthz = _authorizeMmxPaths(grantId, pathFlags, cwd, readGrantIds);
         if (grantAuthz) {
           return { ok: false, code: -1, stdout: '', stderr: grantAuthz, parsed: null };
         }
@@ -354,6 +361,10 @@ function register({ getMainWindow, appRoot }) {
       return { ok: false, error: e.message, command: null, argv: null };
     }
   });
+
+  // H-040 (_5 audit): register the draft-key test handler (extracted to
+  // authTestDraft.js to stay under the frozen SIZE-BUDGET).
+  registerAuthTestDraft({ getMainWindow, runMmx, sendLog });
 
   secureHandle('mmx:diagnose', { getMainWindow }, async () => {
     try {

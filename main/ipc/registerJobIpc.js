@@ -18,7 +18,7 @@
 'use strict';
 
 const { ipcMain } = require('electron');
-const jobRegistry = require('../../src/jobRegistry');
+const jobRegistry = require('../../src/services/jobRegistryCompat');
 // P1-A (360° Audit H-001): secure IPC wrapper.
 const { secureHandle } = require('./secureHandle');
 

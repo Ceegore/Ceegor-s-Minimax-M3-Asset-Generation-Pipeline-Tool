@@ -101,8 +101,33 @@ async function rename(p, newName) {
   validateName(newName);
   const dir = path.dirname(p);
   const dest = path.join(dir, newName);
-  if (fssync.existsSync(dest)) throw new Error('A file/folder with that name already exists.');
-  await fs.rename(p, dest);
+  // H-032 (_5 audit): atomic no-clobber rename. The old existsSync() +
+  // fs.rename() had a TOCTOU window where a parallel job could create
+  // the destination between check and rename, causing silent overwrite.
+  // Strategy: try fs.link() first (atomic, fails with EEXIST if dest
+  // exists), then remove source. Fall back to existsSync + rename for
+  // directories (hard links don't work on directories).
+  const st = await fs.stat(p);
+  if (st.isDirectory()) {
+    // Directories: no atomic no-clobber primitive exists. Use the
+    // existsSync guard (TOCTOU window is minimal for directory renames
+    // since parallel jobs don't create same-named directories).
+    if (fssync.existsSync(dest)) throw new Error('A file/folder with that name already exists.');
+    await fs.rename(p, dest);
+  } else {
+    // Files: atomic link + unlink. fs.link() fails with EEXIST if dest
+    // already exists — no TOCTOU window.
+    try {
+      await fs.link(p, dest);
+    } catch (e) {
+      if (e && e.code === 'EEXIST') throw new Error('A file/folder with that name already exists.');
+      // Cross-device or permission issue — fall back to guarded rename.
+      if (fssync.existsSync(dest)) throw new Error('A file/folder with that name already exists.');
+      await fs.rename(p, dest);
+      return dest;
+    }
+    await fs.unlink(p);
+  }
   return dest;
 }
 
@@ -119,32 +144,39 @@ async function moveTo(src, destDir) {
       i++;
     }
   }
-  // R9: on Windows fs.rename silently OVERWRITES an existing destination.
-  // The collision loop above picked a free name, but a concurrent writer
-  // could have created it in the meantime (TOCTOU). Re-check right before
-  // the rename and fail loudly rather than clobber a file we don't own.
-  if (fssync.existsSync(dest)) {
-    throw new Error('Destination "' + dest + '" appeared during the move — refusing to overwrite.');
-  }
-  // EXDEV fallback. fs.rename throws EXDEV across drive letters — extremely
-  // common on Windows (output_dir on D:, source on C:). Fall back to
-  // copy+delete so cross-device moves work transparently. (POSIX rename
-  // inside the same FS stays atomic; the fallback only fires on EXDEV.)
-  try {
-    await fs.rename(src, dest);
-  } catch (e) {
-    if (e && (e.code === 'EXDEV' || /cross-device|spans devices/i.test(String(e.message || '')))) {
-      await fs.cp(src, dest, { recursive: true, force: false, errorOnExist: true });
-      // R4: if rm fails after a successful cp the file exists in BOTH places;
-      // report that partial state instead of a generic "move failed".
-      try {
-        await fs.rm(src, { recursive: true, force: true });
-      } catch (rmErr) {
-        throw new Error('Copied to "' + dest + '" but could not delete the original (' + String((rmErr && rmErr.message) || rmErr) + '). The file now exists in both locations.');
+  // H-032 (_5 audit): atomic no-clobber move. The existsSync loop above
+  // picks a free name, but a concurrent writer could claim it between the
+  // check and the commit. Use platform no-replace primitives so the
+  // operation fails loudly instead of silently overwriting.
+  const st = await fs.stat(src);
+  if (st.isDirectory()) {
+    // Directories: no atomic no-clobber primitive exists. Re-check +
+    // cp with errorOnExist is the best available guard.
+    if (fssync.existsSync(dest)) {
+      throw new Error('Destination "' + dest + '" appeared during the move — refusing to overwrite.');
+    }
+    await fs.cp(src, dest, { recursive: true, force: false, errorOnExist: true });
+    await fs.rm(src, { recursive: true, force: true });
+  } else {
+    // Files: try atomic link+unlink (same-device). fs.link() fails with
+    // EEXIST if dest was claimed between name-finding and commit — no
+    // TOCTOU window. Cross-device (EXDEV) falls back to COPYFILE_EXCL.
+    try {
+      await fs.link(src, dest);
+    } catch (e) {
+      if (e && e.code === 'EEXIST') {
+        throw new Error('Destination "' + dest + '" appeared during the move — refusing to overwrite.');
       }
-    } else {
+      if (e && (e.code === 'EXDEV' || /cross-device|spans devices/i.test(String(e.message || '')))) {
+        // Cross-device: copy with exclusive flag (atomic no-clobber),
+        // then remove source.
+        await fs.copyFile(src, dest, fssync.constants.COPYFILE_EXCL);
+        await fs.rm(src, { force: true });
+        return dest;
+      }
       throw e;
     }
+    await fs.unlink(src);
   }
   return dest;
 }
@@ -166,7 +198,10 @@ async function copyTo(src, destDir) {
   if (st.isDirectory()) {
     // MED-022: async recursive directory copy. The previous fssync.cpSync
     // blocked the main-process event loop for large trees.
-    await fs.cp(src, dest, { recursive: true, errorOnExist: true });
+    // H-033 (_5 audit): explicit force:false + errorOnExist:true so a
+    // TOCTOU race on the destination directory fails loudly instead of
+    // silently merging/overwriting an existing tree.
+    await fs.cp(src, dest, { recursive: true, force: false, errorOnExist: true });
   } else {
     // R8: COPYFILE_EXCL — if a file appears at `dest` between the rename-loop
     // above and this copy (TOCTOU), fail instead of silently overwriting it.

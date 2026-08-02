@@ -78,7 +78,8 @@ async function pickAndCopy(kind, showOpenDialog, appRoot) {
   const validation = validatePickedFile(srcPath, kind);
   if (!validation.ok) return validation;
 
-  // Resolve the destination (always <appRoot>/bin[/<subdir>]/<destName>).
+  // Resolve the destination (H-065: always the writable override dir,
+  // <userData>/assets[/<subdir>]/<destName> — never the bundled bin/).
   const destPath = getDestPath(kind, appRoot);
   if (!destPath) return { ok: false, error: 'Failed to resolve destination for ' + kind };
 

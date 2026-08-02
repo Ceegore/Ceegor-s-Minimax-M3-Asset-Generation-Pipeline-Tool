@@ -567,11 +567,12 @@ function showItemContextMenu(it, x, y, opts) {
     actions.push({ label: '📂 Open in Explorer', onClick: async () => {
       close();
       try {
-        const r = await window.api.fbOpenInExplorer(it.path);
+        const _rg = (window.GrantHelper) ? await window.GrantHelper.ensureRead(it.path) : undefined;
+        const r = await window.api.fbOpenInExplorer(it.path, _rg);
         if (!r || !r.ok) toast('Open in Explorer failed: ' + ((r && r.error) || 'unknown error'), 'err', 4000);
       } catch (e) { toast('Open in Explorer failed: ' + (e && e.message || e), 'err', 4000); }
     } });
-    actions.push({ label: '↗ Reveal', onClick: async () => { close(); await window.api.fbReveal(it.path); } });
+    actions.push({ label: '↗ Reveal', onClick: async () => { close(); const _rg = (window.GrantHelper) ? await window.GrantHelper.ensureRead(it.path) : undefined; await window.api.fbReveal(it.path, _rg); } });
 
     // Image pipeline — only for image files
     if (isImage) {

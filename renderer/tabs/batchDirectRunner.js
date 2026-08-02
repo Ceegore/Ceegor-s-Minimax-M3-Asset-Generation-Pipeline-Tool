@@ -15,7 +15,9 @@
 //
 // The batch runner calls runVariantDirect(tabKey, item, ctxOverrides) per
 // variant. Returns { ok, outFile, error } (a cancel additionally carries
-// status: 'partial'|'cancel' + outputPaths — see P4.6 below).
+// status: 'partial'|'cancel' + outputPaths — see P4.6 below; a generation
+// that succeeded but whose row-requested postprocess FAILED carries
+// status: 'partial' + postprocessErrors — see H-056 below).
 
 (function () {
   'use strict';
@@ -175,6 +177,11 @@
     if (!Array.isArray(args) || args.length < 2) {
       return { ok: false, outFile: null, error: 'Built argv is empty.' };
     }
+    // B-002: mint read grants for any local input reference paths the built
+    // argv carries (--subject-ref image=, --first-frame, …) — the batch's
+    // output grant does not cover arbitrary ref locations. URLs are skipped.
+    const readGrantIds = (window.GrantHelper && window.GrantHelper.ensureMmxReadGrants)
+      ? await window.GrantHelper.ensureMmxReadGrants(args) : [];
     // Call mmx directly (the IPC layer is DOM-agnostic). Wrap the call in
     // JobRunner.run({tabKey}) exactly like the tab handlers do for an
     // interactive generation (imageTab.js/speechTab.js etc.) — this is
@@ -208,7 +215,7 @@
             // ensureRunSubdir uses for fb:ensureDir above).
             // B.2: ctx.grantId is the batch-owned grant from makeCtx (not
             // the JobRunner's jobCtx, which only carries signal/abort).
-            r = await window.api.mmxRunJob({ args, jobId: ctrl.jobId }, ctx.grantId);
+            r = await window.api.mmxRunJob({ args, jobId: ctrl.jobId, readGrantIds }, ctx.grantId);
             if (jobCtx.signal.aborted) return { status: 'cancel' };
             const okInner = !!(r && (r.ok || r.code === 0));
             return okInner ? { status: 'ok' } : { status: 'err', error: (r && (r.stderr || r.error)) || 'mmx failed' };
@@ -271,7 +278,7 @@
       // jobId so mmxCancel/main proc-tracking still has a key to work with.
       const jobId = 'batch-direct-' + Date.now() + '-' + Math.random().toString(36).slice(2, 6);
       try {
-        r = await window.api.mmxRunJob({ args, jobId }, ctx.grantId);
+        r = await window.api.mmxRunJob({ args, jobId, readGrantIds }, ctx.grantId);
       } catch (e) {
         return { ok: false, outFile, error: 'mmxRunJob threw: ' + (e && e.message || e) };
       }
@@ -308,6 +315,12 @@
     // BGR-017 fix: prefer the per-call override (concurrent batch safety);
     // fall back to the global for backwards compatibility.
     const pp = (ctxOverrides && ctxOverrides.rowPostprocess) || (window.state && window.state._batchRowPostprocess) || null;
+    // H-056: a postprocess op the ROW explicitly requested (crop/resize/
+    // optimize/remove-bg/upscale/trim) is a required part of the deliverable —
+    // its failure must not be reduced to a toast while the run reports full
+    // success (the caller's auto-remove would then delete the queue row).
+    // Collected errors are returned as status:'partial' + postprocessErrors.
+    let ppErrors = [];
     if (pp && outFiles.length > 0 && window.BatchPostprocess && typeof window.BatchPostprocess.runRowPostprocess === 'function') {
       try {
         const result = await window.BatchPostprocess.runRowPostprocess(outFiles, pp);
@@ -321,11 +334,15 @@
         // BGR-016 fix: surface partial-failure errors instead of swallowing
         // them silently. The user needs to know when a postprocess op failed.
         if (result.errors && result.errors.length > 0) {
+          ppErrors = result.errors.slice(); // H-056: propagate to the return value
           const errMsg = result.errors.join('; ');
           if (typeof toast === 'function') toast('Post-process partial failure: ' + errMsg, 'warn', 6000);
           if (typeof window.logWarn === 'function') window.logWarn('batch-direct', 'postprocess-partial', { errors: result.errors });
         }
       } catch (e) {
+        // H-056: a throwing postprocess runner is just as much a failed
+        // requested step as a per-op error — report it, don't swallow it.
+        ppErrors.push('postprocess runner threw: ' + (e && e.message || e));
         if (typeof toast === 'function') toast('Post-process failed: ' + (e && e.message || e), 'warn', 5000);
       }
     }
@@ -351,6 +368,14 @@
     // nothing on disk to show for it.
     if (!outFiles.length && !outFile) {
       return { ok: false, outFile: null, error: 'Generation succeeded but output files could not be discovered.' };
+    }
+    // H-056: generation delivered files but a row-requested postprocess step
+    // failed. ok stays true (the raw / last-successful deliverable exists on
+    // disk — guaranteed by the BGR-024/R6.3 outputs contract), but the result
+    // is a PARTIAL success: the caller must not auto-remove the queue row and
+    // history must record the failed step so the user can repair + re-run.
+    if (ppErrors.length) {
+      return { ok: true, status: 'partial', postprocessErrors: ppErrors, outFile: outFiles[0] || outFile, error: null };
     }
     return { ok: true, outFile: outFiles[0] || outFile, error: null };
   }

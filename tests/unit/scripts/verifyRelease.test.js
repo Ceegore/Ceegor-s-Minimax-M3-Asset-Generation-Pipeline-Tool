@@ -176,7 +176,15 @@ test('evaluate PASSES on a complete, consistent single-archive release', () => {
     makeRealZip(paths.archive);
     const easyInstaller = path.join(paths.output, 'Install MiniMax Asset Tool.cmd');
     fs.writeFileSync(easyInstaller, '@echo off\r\n', 'utf8');
-    fs.writeFileSync(paths.manifest, `${infoFor(easyInstaller).sha256}  ${path.basename(easyInstaller)}\n`, 'utf8');
+    // H-067: manifest must include ALL expected release files (completeness).
+    // Use forward-slash relative paths (matching the releaseArtifacts.relative() convention).
+    const exeRel = path.relative(paths.output, paths.executable).replace(/\\/g, '/');
+    const manifestLines = [
+      `${infoFor(easyInstaller).sha256}  ${path.basename(easyInstaller)}`,
+      `${infoFor(paths.executable).sha256}  ${exeRel}`,
+      `${infoFor(paths.archive).sha256}  ${path.basename(paths.archive)}`,
+    ];
+    fs.writeFileSync(paths.manifest, manifestLines.join('\n') + '\n', 'utf8');
     // QA-025: provenance is now required.
     fs.writeFileSync(paths.provenance, JSON.stringify({
       version: '9.8.7', electronVersion: '99.0.0', asarSha256: null,

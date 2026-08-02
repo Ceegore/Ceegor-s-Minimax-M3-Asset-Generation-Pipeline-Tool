@@ -42,11 +42,13 @@ function loadWithMockSpawn(mockSpawn) {
     }
     return realLoad.call(this, request, parent, isMain);
   };
-  // Clear cached realesrgan + jobRegistry so they reload with the mock.
+  // Clear cached realesrgan + jobRegistryCompat (+ JobController) so they reload with the mock.
   const resrPath = require.resolve(path.join(ROOT, 'src', 'realesrgan.js'));
-  const regPath = require.resolve(path.join(ROOT, 'src', 'jobRegistry.js'));
+  const regPath = require.resolve(path.join(ROOT, 'src', 'services', 'jobRegistryCompat.js'));
+  const ctrlPath = require.resolve(path.join(ROOT, 'src', 'services', 'JobController.js'));
   delete require.cache[resrPath];
   delete require.cache[regPath];
+  delete require.cache[ctrlPath];
   try {
     const realesrgan = require(resrPath);
     const jobRegistry = require(regPath);

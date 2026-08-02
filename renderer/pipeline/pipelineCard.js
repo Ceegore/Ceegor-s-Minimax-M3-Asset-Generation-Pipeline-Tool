@@ -460,9 +460,9 @@
     const colFiles = board.items.filter((i) => i.column === column).map((i) => i.files[column]).filter(Boolean);
     window.Pipeline.openImage(item.files[column], colFiles);
   }
-  function revealItem(item, column) {
+  async function revealItem(item, column) {
     const f = item.files[column];
-    if (f) window.api.fbReveal(f);
+    if (f) { const _rg = (window.GrantHelper) ? await window.GrantHelper.ensureRead(f) : undefined; window.api.fbReveal(f, _rg); }
   }
   async function exportCopy(item, column) {
     const f = item.files[column];

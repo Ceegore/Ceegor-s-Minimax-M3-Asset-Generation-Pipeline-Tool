@@ -272,7 +272,7 @@ async function showOptimizeOverlay(srcPath, targets) {
         // "Reveal in Explorer" + "Preview" buttons, so the user
         // doesn't have to dig through the folder browser to
         // find the result.
-        const revealBtn = el('button', { class: 'btn-mini', onclick: () => window.api.fbReveal(r.outputPath) }, '↗ Reveal in Explorer');
+        const revealBtn = el('button', { class: 'btn-mini', onclick: async () => { const _rg = (window.GrantHelper) ? await window.GrantHelper.ensureRead(r.outputPath) : undefined; window.api.fbReveal(r.outputPath, _rg); } }, '↗ Reveal in Explorer');
         const previewBtn = el('button', { class: 'btn-mini', onclick: () => { try { previewImageFromFile(r.outputPath); } catch (_) {} } }, '🖼 Preview');
         resultsBox.appendChild(el('div', { class: 'row', style: 'margin-top: 6px; gap: 6px;' }, [revealBtn, previewBtn]));
         // Refresh the file browser so the new sibling shows up

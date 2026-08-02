@@ -89,11 +89,12 @@ test('batches:generateExamples writes to the effective output dir, NOT the asar'
     const otherPath = path.join(outDir, `example_batch_import.${otherFmt}`);
     assert.ok(!fs.existsSync(otherPath),
       `unwanted file ${otherPath} should NOT exist when fmt=${fmt}`);
-    // mdPath / txtPath still point at the canonical names
-    // (renderer may read either; we just need the contract to
-    // hold).
-    assert.equal(path.basename(r.mdPath), 'example_batch_import.md');
-    assert.equal(path.basename(r.txtPath), 'example_batch_import.txt');
+    // H-054: the handler returns { ok, format, path } and writes ONLY
+    // the chosen format (exclusive-create, never overwriting/deleting a
+    // user file). There is no longer an mdPath/txtPath pair — the old
+    // "write both, delete the unselected one" behaviour was removed
+    // because it silently destroyed user files of the same name.
+    assert.equal(r.format, fmt, 'r.format must echo the chosen format');
     // …and crucially, NOTHING was written inside the asar.
     assert.ok(!fs.existsSync(path.join(asarRoot, 'example_batch_import.md')),
       'example file leaked into the asar (read-only)');

@@ -403,7 +403,7 @@
   function openImage(filePath, fileList) {
     if (typeof window.openImageOverlay !== 'function') {
       // Fallback: open in Explorer if the overlay isn't available.
-      try { window.api.fbOpenInExplorer(filePath); } catch (_) {}
+      try { (async () => { const _rg = (window.GrantHelper) ? await window.GrantHelper.ensureRead(filePath) : undefined; window.api.fbOpenInExplorer(filePath, _rg); })(); } catch (_) {}
       return;
     }
     // Set the preview batch as the OBJECT shape buildOverlayNavList expects

@@ -17,7 +17,7 @@
 const { spawn, spawnSync } = require('child_process');
 const path = require('path');
 const fs = require('fs');
-const jobRegistry = require('./jobRegistry');
+const jobRegistry = require('./services/jobRegistryCompat');
 
 const BINARY_NAME = process.platform === 'win32'
   ? 'realesrgan-ncnn-vulkan.exe'
@@ -216,6 +216,10 @@ function run(srcPath, dstPath, opts = {}) {
     // with ok:true, so the caller could not tell what actually ran. This text
     // is promoted into the result's `warnings[]` by the IPC legacy adapter.
     let stderr = '';
+    // H-019 (_5 audit): cap stderr accumulation at 1 MB so a chatty/broken
+    // binary cannot exhaust main-process memory. Progress parsing uses the
+    // current chunk only, so truncation doesn't affect the progress bar.
+    const STDERR_CAP = 1024 * 1024;
     if (typeof opts.model === 'string' && opts.model && opts.model !== model) {
       stderr += `Unknown upscale model "${opts.model}" — using "${model}" instead.\n`;
     }
@@ -248,7 +252,7 @@ function run(srcPath, dstPath, opts = {}) {
     let lastPct = -1;
     proc.stderr.on('data', (b) => {
       const txt = b.toString('utf8');
-      stderr += txt;
+      if (stderr.length < STDERR_CAP) stderr += txt;
       if (!onProgress) return;
       // Match the LAST percentage in the chunk (a chunk may contain several
       // lines). Accept both dot and comma decimal separators.
@@ -262,7 +266,14 @@ function run(srcPath, dstPath, opts = {}) {
         }
       }
     });
+    // H-019 (_5 audit): hard runtime timeout (10 minutes). If the binary
+    // hangs (GPU deadlock, infinite loop), kill it so the Promise resolves.
+    const RUNTIME_TIMEOUT_MS = 10 * 60 * 1000;
+    const killTimer = setTimeout(() => {
+      try { proc.kill('SIGKILL'); } catch (_) {}
+    }, RUNTIME_TIMEOUT_MS);
     proc.on('error', (err) => {
+      clearTimeout(killTimer);
       // ENOENT etc. — the binary disappeared between find and spawn.
       cachedBinaryPath = null;
       if (opts.jobId) jobRegistry.unregister(opts.jobId, proc);
@@ -270,6 +281,7 @@ function run(srcPath, dstPath, opts = {}) {
       resolveP({ ok: false, code: -1, stderr: String(err.message || err), outputPath: null });
     });
     proc.on('close', (code) => {
+      clearTimeout(killTimer);
       if (opts.jobId) jobRegistry.unregister(opts.jobId, proc);
       cleanupTemp();
       if (code === 0 && fs.existsSync(dstPath)) {
@@ -294,7 +306,11 @@ function run(srcPath, dstPath, opts = {}) {
           // (source * scale) instead of pre-resizing to an arbitrary 16px
           // minimum per-axis (which distorted aspect ratio and doubled the
           // effective scale when the model's -s was applied on top).
-          const scaleNum = Number(opts.scale || 4);
+          // H-020 (_5 audit): clamp to the same scale whitelist as the main
+          // path so the tiny-image fallback cannot bypass it.
+          const SCALES = [1, 2, 3, 4];
+          const rawS = Math.round(Number(opts.scale));
+          const scaleNum = SCALES.includes(rawS) ? rawS : 4;
           const finalW = Math.max(1, Math.round((dims.width || 1) * scaleNum));
           const finalH = Math.max(1, Math.round((dims.height || 1) * scaleNum));
           sharp(srcPath)

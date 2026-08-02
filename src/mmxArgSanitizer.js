@@ -60,27 +60,46 @@ const BLOCKED_GLOBAL_FLAGS = new Set([
  * @type {Readonly<Record<string, ReadonlySet<string>>>}
  */
 const SUBCOMMAND_FLAG_ALLOWLIST = Object.freeze({
+  // B-005: each set must cover EVERY flag the corresponding tab's real
+  // default argv can emit (renderer/tabs/argvBuilders.js + the live-UI
+  // Generate handlers). Before this fix the sanitizer fail-closed on
+  // legitimate UI flags (--prompt-optimizer, --volume, --genre, …), so
+  // whole feature groups silently died with "blocked disallowed flag(s)".
+  // Unknown flags outside these sets still fail closed.
   image: new Set([
     '--prompt', '-p', '--model', '-m', '--n', '--size', '-s',
     '--out', '-o', '--out-dir', '--download', '--negative-prompt',
     '--seed', '--guidance-scale', '--steps', '--width', '--height',
     '--aspect-ratio', '--style', '--ref-image', '--strength',
+    // B-005: UI defaults (imageTab.js / buildImageArgs)
+    '--response-format', '--prompt-optimizer', '--aigc-watermark',
+    '--subject-ref',
   ]),
   speech: new Set([
     '--text', '-t', '--model', '-m', '--voice', '-v', '--speed',
     '--out', '-o', '--out-dir', '--download', '--format',
     '--text-file', '--language',
+    // B-005: UI defaults (speechTab.js / buildSpeechArgs)
+    '--volume', '--pitch', '--sample-rate', '--bitrate', '--channels',
+    '--subtitles', '--pronunciation',
   ]),
   music: new Set([
     '--prompt', '-p', '--model', '-m', '--out', '-o', '--out-dir',
     '--download', '--lyrics', '--lyrics-file', '--duration',
     '--instrumental',
+    // B-005: UI defaults (musicTab.js / buildMusicArgs)
+    '--lyrics-optimizer', '--genre', '--mood', '--vocals',
+    '--instruments', '--bpm', '--key', '--tempo', '--structure',
+    '--references', '--avoid', '--use-case', '--extra', '--format',
+    '--sample-rate', '--bitrate', '--aigc-watermark', '--output-format',
   ]),
   video: new Set([
     '--prompt', '-p', '--model', '-m', '--out', '-o', '--out-dir',
     '--download', '--duration', '--resolution', '--fps',
     '--first-frame', '--last-frame', '--subject-image', '--subject-ref',
     '--audio-file',
+    // B-005: UI defaults (videoTab.js / buildVideoArgs)
+    '--prompt-optimizer', '--fast-pretreatment', '--poll-interval',
   ]),
   quota: new Set([]),
   voices: new Set(['--model', '-m']),

@@ -13,6 +13,9 @@ const { redactRunMmxResult: _redactRunMmxResult, redactStderrChunk: _redactStder
 // H11-5: node/mmx-entry resolution lives in src/mmxResolve.js (extracted so this
 // file stays within its frozen size budget). The bundled mmx-cli is preferred.
 const { findNodeExe, findMmxEntry, needsRunAsNode, isWindows } = require('./mmxResolve');
+// Process tracking + kill/cancel logic extracted to keep this file under the
+// frozen 542-LOC SIZE-BUDGET.
+const { currentGenProcs, procsByJobId, getActiveProcs, killWithEscalation: _killWithEscalation, cancelOne, cancelByJobId, cancelAll } = require('./mmxProcTracker');
 
 const AGENT_FLAGS = ['--non-interactive'];
 // mmx-cli 1.0.18 notices MINIMAX_API_KEY but does not promote it to the
@@ -483,58 +486,6 @@ function quote(v) {
   const s = String(v);
   if (/[\s"']/.test(s)) return '"' + s.replace(/"/g, '\\"') + '"';
   return s;
-}
-
-// Track every active mmx proc so individual jobs can be cancelled on demand.
-// The renderer runs multiple jobs in parallel (one per tab + secondary jobs
-// for post-processing), so a single-slot tracker no longer works. We track
-// the whole Set and expose cancelOne(proc) / getActiveProcs() / cancelAll()
-// helpers. cancelAll() remains the "panic" button.
-const currentGenProcs = new Set();
-// Map<jobId, proc> alongside the Set above, populated only when
-// runMmx({..., jobId}) is given one. Lets JobRunner.cancel(jobId) kill exactly
-// that job's proc instead of every in-flight generation.
-const procsByJobId = new Map();
-function getActiveProcs() {
-  return Array.from(currentGenProcs);
-}
-// SIGKILL escalation. Windows is fine (proc.kill uses TerminateProcess which
-// can't be caught), but on macOS/Linux a mmx child that catches SIGTERM
-// survives. Send SIGTERM, then SIGKILL after 2s, mirroring the isnetbg
-// timeout pattern. We tag the proc as user-canceled so the close handler can
-// resolve with { canceled: true } instead of a bare code:null error (H7-025).
-function _killWithEscalation(proc, opts) {
-  if (opts && opts.userCanceled && proc) {
-    try { proc._canceledByUser = true; } catch (_) {}
-  }
-  try { proc.kill('SIGTERM'); } catch (_) {}
-  setTimeout(() => {
-    try {
-      // Only escalate if the proc is still running. proc.killed is
-      // true after a successful kill(); on Windows TerminateProcess
-      // already reaped the proc so this is a no-op.
-      if (!proc.killed) proc.kill('SIGKILL');
-    } catch (_) {}
-  }, 2000).unref();
-}
-function cancelOne(proc) {
-  if (!proc) return false;
-  if (!currentGenProcs.has(proc)) return false;
-  _killWithEscalation(proc, { userCanceled: true });
-  return true;
-}
-function cancelByJobId(jobId) {
-  if (!jobId) return false;
-  const proc = procsByJobId.get(jobId);
-  if (!proc) return false;
-  return cancelOne(proc);
-}
-function cancelAll() {
-  for (const p of currentGenProcs) {
-    _killWithEscalation(p, { userCanceled: true });
-  }
-  currentGenProcs.clear();
-  procsByJobId.clear();
 }
 
 module.exports = { runMmx, resolve, cancelAll, cancelOne, cancelByJobId, getActiveProcs, tryParseAll, probeMmxVersion, compareSemver, SUPPORTED_MMX };

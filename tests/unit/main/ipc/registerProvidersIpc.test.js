@@ -83,13 +83,15 @@ test('providers:generate throws on download HTTP error (url-based output)', asyn
   const handler = handlers.get('providers:generate');
 
   // The adapter returns a URL-based output; the handler's download fetch gets a 404.
+  // H-018: use a public IP literal so the DNS validation step is skipped
+  // (hostname-based URLs would require mocking dns.promises.resolve4).
   let callCount = 0;
   globalThis.fetch = async (url) => {
     callCount++;
     // First call: the adapter's API call (images/generations) — return a URL output.
-    if (callCount === 1) return jsonResp({ data: [{ url: 'https://cdn.example.com/img.png' }] });
+    if (callCount === 1) return jsonResp({ data: [{ url: 'https://93.184.216.34/img.png' }] });
     // Second call: the handler's download — return 404.
-    return { ok: false, status: 404, arrayBuffer: async () => new ArrayBuffer(0), text: async () => 'not found' };
+    return { ok: false, status: 404, headers: new Map(), arrayBuffer: async () => new ArrayBuffer(0), text: async () => 'not found' };
   };
 
   const r = await handler({}, {
@@ -120,7 +122,7 @@ test('providers:getPublic returns default config (SEC-002: secret-free DTO)', ()
   }
 });
 
-test('providers:set persists and round-trips via getPublic (SEC-002)', () => {
+test('providers:set persists and round-trips via getPublic (SEC-002)', async () => {
   const setHandler = handlers.get('providers:set');
   const getHandler = handlers.get('providers:getPublic');
   const data = getHandler({});
@@ -128,7 +130,7 @@ test('providers:set persists and round-trips via getPublic (SEC-002)', () => {
   // Include ALL providers so the store doesn't lose entries (providers:set
   // replaces the full array).
   const update = { providers: data.providers.map((p, i) => i === 0 ? { ...p, apiKey: 'sk-roundtrip' } : { id: p.id, label: p.label, kind: p.kind, baseUrl: p.baseUrl || '' }), selections: data.selections };
-  const r = setHandler({}, update);
+  const r = await setHandler({}, update);
   assert.equal(r.ok, true);
   const back = getHandler({});
   // SEC-002: verify via hasKey boolean, not raw apiKey.

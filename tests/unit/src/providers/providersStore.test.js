@@ -80,6 +80,23 @@ test('providersStore: read() recovers from corrupted JSON', () => {
   assert.equal(d.providers.length, 3);
 });
 
+test('H-036: read() creates a .corrupt- backup of the damaged file', () => {
+  // Clean any prior backups
+  const dir = path.dirname(store.file());
+  for (const f of fs.readdirSync(dir)) {
+    if (f.includes('.corrupt-')) fs.unlinkSync(path.join(dir, f));
+  }
+  // Write garbage
+  const garbage = '{THIS_IS_CORRUPT_DATA_12345!!!';
+  fs.writeFileSync(store.file(), garbage);
+  store.read();
+  // A backup file must now exist containing the original corrupt data
+  const backups = fs.readdirSync(dir).filter((f) => f.includes('.corrupt-'));
+  assert.ok(backups.length >= 1, 'at least one .corrupt- backup must be created');
+  const backupContent = fs.readFileSync(path.join(dir, backups[0]), 'utf8');
+  assert.equal(backupContent, garbage, 'backup must preserve the original corrupt data');
+});
+
 test('providersStore: write() works in a fresh directory (configDir pre-created)', () => {
   const nestedDir = path.join(tmpDir, 'nested', 'deep');
   fs.mkdirSync(nestedDir, { recursive: true });

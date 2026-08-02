@@ -313,10 +313,29 @@ function resolutionsForVideoModel(model) {
   const list = VIDEO_RESOLUTIONS_BY_MODEL[model];
   return (Array.isArray(list) && list.length) ? list.slice() : ['768P'];
 }
+// H-003 (_5 audit): mode-level resolution filtering. In FL2V mode
+// (first+last frame interpolation), 512P is NOT supported even though
+// Hailuo-02 generally allows it. The effective mode is derived from
+// which reference images are set.
+const VIDEO_FL2V_EXCLUDED_RESOLUTIONS = new Set(['512P']);
+function resolutionsForVideoMode(model, mode) {
+  const base = resolutionsForVideoModel(model);
+  if (mode === 'FL2V') return base.filter((r) => !VIDEO_FL2V_EXCLUDED_RESOLUTIONS.has(r));
+  return base;
+}
+// Derive the effective video mode from the form state.
+function deriveVideoMode(hasFirst, hasLast, hasSubject) {
+  if (hasFirst && hasLast) return 'FL2V';
+  if (hasSubject) return 'S2V';
+  if (hasFirst) return 'I2V';
+  return 'T2V';
+}
 // Also used as a hint for which models support a given resolution, so the
 // dropdown labels can stay accurate.
 window.VIDEO_RESOLUTIONS_BY_MODEL = VIDEO_RESOLUTIONS_BY_MODEL;
 window.resolutionsForVideoModel = resolutionsForVideoModel;
+window.resolutionsForVideoMode = resolutionsForVideoMode;
+window.deriveVideoMode = deriveVideoMode;
 window.VIDEO_DEFAULT_RESOLUTION = VIDEO_DEFAULT_RESOLUTION;
 
 function _mmxNorm(values) {
@@ -393,7 +412,9 @@ function validateValues(tabKey, values, opts) {
     if (!partial && !instrumental && !optimizer && !hasLyrics) errors.push('Music needs lyrics — provide lyrics, or enable instrumental / auto-lyrics.');
   } else if (tabKey === 'video') {
     enumCheck('resolution', A.resolution);
-    rangeCheck('duration', A.duration);
+    // H-002 (_5 audit): duration is a discrete enum [6, 10], NOT a range.
+    // The old rangeCheck() received an array and performed no validation.
+    enumCheck('duration', A.duration);
     // Model-aware resolution check (H7-020): each model only supports a subset
     // of the union above. If the selected resolution isn't valid for the
     // selected model, flag it with a precise message instead of letting the
@@ -404,9 +425,14 @@ function validateValues(tabKey, values, opts) {
         errors.push(`--resolution ${v.resolution} is not supported by ${v.model}. Use one of: ${allowedForModel.join(', ')}.`);
       }
     }
+    // H-003 (_5 audit): FL2V mode (first+last frame) excludes 512P even
+    // though Hailuo-02 generally supports it.
     const hasFirst = !!(v['first-frame'] || v['first-frame-image']);
     const hasLast = !!(v['last-frame'] || v['last-frame-image']);
     const hasSubject = !!(v['subject-image']);
+    if (hasFirst && hasLast && v.resolution && VIDEO_FL2V_EXCLUDED_RESOLUTIONS.has(String(v.resolution))) {
+      errors.push(`--resolution ${v.resolution} is not available in first+last-frame (FL2V) mode. Use 768P or 1080P.`);
+    }
     if (String(v.model) === 'MiniMax-Hailuo-2.3-Fast' && !hasFirst) errors.push('MiniMax-Hailuo-2.3-Fast requires a first-frame image.');
     if (hasLast && !hasFirst) errors.push('A last-frame image also requires a first-frame image.');
     // S2V-01 is the subject-reference model — the API rejects it without
@@ -419,6 +445,43 @@ function validateValues(tabKey, values, opts) {
       errors.push('--duration 10 is only available at 768P (1080P caps at 6 s). Switch to 768P or pick --duration 6.');
     }
     if (v.prompt && String(v.prompt).length > A.promptMax) errors.push(`Prompt is ${String(v.prompt).length} chars; max for video is ${A.promptMax}.`);
+  }
+  // -------------------------------------------------------------------------
+  // H-057: tool/postprocess flag contract. These flags are accepted at import
+  // (capability registry) and consumed by batchPostprocess at runtime, but
+  // previously had NO validator — a malformed value (crop:"huge",
+  // resize:"12") parsed to null in parseDims() and the op was SILENTLY
+  // skipped. Validate here so bad rows are marked defective at import
+  // instead of quietly delivering un-postprocessed output.
+  const dimCheck = (key) => {
+    if (v[key] == null || v[key] === '') return;
+    if (!/^\s*\d+\s*[x×]\s*\d+\s*(?:px)?\s*$/i.test(String(v[key]))) {
+      errors.push(`${key} "${v[key]}" is not a valid WxH size — use e.g. 512x512.`);
+    }
+  };
+  if (tabKey === 'image') {
+    dimCheck('crop'); dimCheck('resize');
+    enumCheck('optimize-format', ['keep', 'png', 'jpeg', 'webp', 'avif']);
+    rangeCheck('optimize-quality', { min: 1, max: 100, integer: true });
+    enumCheck('upscale-multiplier', [2, 3, 4]);
+    // Canonical executor ids (src/realesrgan.js) + the legacy spellings the
+    // registry documents as migration aliases (normalized at runtime, H-058).
+    enumCheck('upscale-model', ['realesrgan-x4plus', 'realesrgan-x4plus-anime', 'realesr-animevideov3', 'real-esrgan-x4plus', 'real-esrgan-anime-v3']);
+    enumCheck('remove-background-model', ['isnet-general-use', 'birefnet-general-lite', 'birefnet-general', 'birefnet-portrait']);
+  } else if (tabKey === 'speech' || tabKey === 'music') {
+    const hasStart = v['trim-start'] != null && v['trim-start'] !== '';
+    const hasEnd = v['trim-end'] != null && v['trim-end'] !== '';
+    if (hasStart !== hasEnd) {
+      errors.push('trim-start and trim-end must be set together (a one-sided trim is skipped at runtime).');
+    } else if (hasStart && hasEnd) {
+      const s = _mmxNum(v['trim-start']), e = _mmxNum(v['trim-end']);
+      if (Number.isNaN(s) || Number.isNaN(e)) {
+        errors.push('trim-start/trim-end must be numbers (seconds).');
+      } else {
+        if (s < 0) errors.push(`trim-start ${s} must be ≥ 0.`);
+        if (e <= s) errors.push(`trim-end ${e} must be greater than trim-start ${s}.`);
+      }
+    }
   }
   return { errors };
 }

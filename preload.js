@@ -495,7 +495,7 @@ contextBridge.exposeInMainWorld('api', {
   // covered by a Main-minted grantId, forwarded as the trailing arg. Without
   // it a path-bearing generation call fails closed in main. Callers that mint
   // the output grant via ensureSubDir (state._fbGrantId) thread it through.
-  mmxRun: (args, grantId) => ipcRenderer.invoke('mmx:run', args, grantId),
+  mmxRun: (args, grantId, readGrantIds) => ipcRenderer.invoke('mmx:run', args, grantId, readGrantIds), // B-002: optional read grant(s) for input file paths
   // Job-aware mmx run: the handler attaches every chunk to the jobId
   // so the renderer's LogService routes the line into the right log row.
   mmxRunJob: (payload, grantId) => ipcRenderer.invoke('mmx:run:job', payload, grantId),
@@ -506,6 +506,9 @@ contextBridge.exposeInMainWorld('api', {
   // concurrent calls" hint.
   mmxProfile: () => ipcRenderer.invoke('mmx:profile'),
   authStatus: () => ipcRenderer.invoke('mmx:authStatus'),
+  // H-040 (_5 audit): test a DRAFT key (typed but not yet saved) so the
+  // user gets immediate feedback on the key they're about to commit.
+  authTestDraft: (payload) => ipcRenderer.invoke('mmx:authTestDraft', payload),
   diagnose: () => ipcRenderer.invoke('mmx:diagnose'),
   // Accepts an optional { jobId } payload for per-job cancel. With no
   // payload it kills every in-flight proc. `opts` is forwarded as-is;
@@ -530,8 +533,9 @@ contextBridge.exposeInMainWorld('api', {
   // R1.3: every mutating handler now requires a `grantId` minted by
   // Main (picker, app-output, config-output). The renderer must hold
   // the grant and pass it on each call. A missing/empty grantId is
-  // rejected before any file-system operation. Read-side handlers
-  // (fb:list, fb:reveal, fb:openInExplorer) stay ungated per S1 §3.
+  // rejected before any file-system operation.
+  // H-029 (_5 audit): fb:reveal and fb:openInExplorer now also require
+  // a read grant (Main enforces it). Callers use GrantHelper.ensureRead.
   fbMkdir: (dir, name, grantId) => ipcRenderer.invoke('fb:mkdir', dir, name, grantId),
   fbEnsureDir: (dir, grantId) => ipcRenderer.invoke('fb:ensureDir', dir, grantId),
   fbRename: (path, newName, grantId) => ipcRenderer.invoke('fb:rename', path, newName, grantId),
@@ -541,11 +545,11 @@ contextBridge.exposeInMainWorld('api', {
   // a common-ancestor grant (e.g. two different trusted roots).
   fbMove: (src, destDir, grantId, destGrantId) => ipcRenderer.invoke('fb:move', src, destDir, grantId, destGrantId),
   fbCopy: (src, destDir, grantId, destGrantId) => ipcRenderer.invoke('fb:copy', src, destDir, grantId, destGrantId),
-  fbReveal: (path) => ipcRenderer.invoke('fb:reveal', path),
+  fbReveal: (path, grantId) => ipcRenderer.invoke('fb:reveal', path, grantId),
   // Open a NEW Windows Explorer window at the file's parent folder.
   // fbReveal only highlights the file in an existing window; this opens
   // a fresh one. Both honour the same allow-list in the main process.
-  fbOpenInExplorer: (path) => ipcRenderer.invoke('fb:openInExplorer', path),
+  fbOpenInExplorer: (path, grantId) => ipcRenderer.invoke('fb:openInExplorer', path, grantId),
   // R1.3: fb:read and fb:exists now require a read grant (S1 §3
   // "Existenz-Probes" and content reads). Same grantId channel as
   // the mutating handlers.
@@ -759,10 +763,15 @@ contextBridge.exposeInMainWorld('api', {
   // ---- batches (BatchGen storage) ----
   batchesGet: () => ipcRenderer.invoke('batches:get'),
   batchesSet: (batches) => ipcRenderer.invoke('batches:set', batches),
+  // H-053: corrupt batches.json recovery. Status is polled at boot; the
+  // acknowledge shows a Main-owned native dialog and (on OK) re-enables
+  // batches:set writes.
+  batchesRecoveryStatus: () => ipcRenderer.invoke('batches:recoveryStatus'),
+  batchesAcknowledgeRecovery: () => ipcRenderer.invoke('batches:acknowledgeRecovery'),
 
   // ---- file picker ----
   pickFile: (opts) => ipcRenderer.invoke('file:pick', opts),
-  fileSaveAs: (srcPath) => ipcRenderer.invoke('file:saveAs', srcPath),
+  fileSaveAs: (srcPath, sourceReadGrantId) => ipcRenderer.invoke('file:saveAs', srcPath, sourceReadGrantId),
   // Legacy alias for `window.api.fbOpenDialog`, kept so leftover callers
   // (e.g. 3rd-party extensions) keep working. New code should use pickFile.
   fbOpenDialog: (opts) => ipcRenderer.invoke('file:pick', opts),
@@ -879,12 +888,18 @@ contextBridge.exposeInMainWorld('api', {
     resetAllData: (payload) => ipcRenderer.invoke('app:resetAllData', payload),
     relaunchApp: () => ipcRenderer.invoke('app:relaunch'),
     resetAndRelaunch: (payload) => ipcRenderer.invoke('app:resetAndRelaunch', payload),
+    // B-009: single Main-owned reset transaction. Main shows its own fixed
+    // native warning dialog; on confirm it deletes + verifies + relaunches
+    // in ONE handler. No renderer-side token plumbing to get out of sync.
+    confirmResetAndRelaunch: () => ipcRenderer.invoke('app:confirmResetAndRelaunch'),
 
   // ---- M3 in-tool document generation (F3) ----
   // Sends a chat-completion request to MiniMax M3 via the main process.
   // The API key is read from config in main — the renderer never sees it.
   // Payload: { messages, jsonMode?, temperature?, maxTokens?, model? }
   m3Chat: (payload) => ipcRenderer.invoke('m3:chat', payload),
+  // H-005 (_5 audit): cancel an in-flight M3 request by runId.
+  m3Cancel: (runId) => ipcRenderer.invoke('m3:cancel', runId),
 
   // ---- Other APIs tab (non-MiniMax providers) ----
   // SEC-002: `providers:get` (raw, includes apiKey) REMOVED. The renderer
@@ -899,6 +914,8 @@ contextBridge.exposeInMainWorld('api', {
   providersGenerate: (req) => ipcRenderer.invoke('providers:generate', req),
   // Cancel an in-flight generation job.
   providersCancel: (jobId) => ipcRenderer.invoke('providers:cancel', { jobId }),
+  // H-012: query pending remote jobs for resume after restart.
+  providersPendingJobs: () => ipcRenderer.invoke('providers:pendingJobs'),
   // Progress events for async jobs (video/music poll loops).
   onProvidersProgress: (cb) => {
     const fn = (_e, d) => cb(d);

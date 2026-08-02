@@ -111,15 +111,17 @@ function openSettings() {
       for (const tdef of tabDefs) {
         const inst = panes[tdef.id].instance;
         if (inst && typeof inst.validate === 'function') {
-          // R3.3.AuditFix-PP-2: try/catch around validate() so a
-          // buggy pane doesn't crash the whole save flow. We log
-          // the throw and continue (the pane's other panes still
-          // get validated).
+          // R3.3.AuditFix-PP-2 + H-039 (_5 audit): try/catch around
+          // validate() so a buggy pane doesn't crash the save flow.
+          // H-039: a thrown validator is now a FAILURE (fail-closed) —
+          // the error message blocks the save. Previously errs was set
+          // to [] which silently let unvalidated data through.
           let errs = null;
           try { errs = inst.validate(); }
           catch (e) {
-            try { window.toast(tdef.label + ': validate() threw — ' + (e && e.message || e), 'err', 5000); } catch (_) {}
-            errs = [];
+            const msg = 'validate() threw — ' + ((e && e.message) || e);
+            try { window.toast(tdef.label + ': ' + msg, 'err', 5000); } catch (_) {}
+            errs = [msg]; // H-039: fail-CLOSED — block the save
           }
           if (errs && errs.length) errs.forEach((e) => allErrors.push({ pane: tdef.label, error: e }));
         }
@@ -128,17 +130,28 @@ function openSettings() {
       const merged = { ...state.config };
       let apiKeyNoSave = false;
       let apiKeyInMemory = '';
+      // B-007: typed secret command — the key never travels inside cfg.
+      let apiKeyAction = 'keep';
+      let apiKeyValue = '';
       let collectedGrants = {};
       for (const tdef of tabDefs) {
         const inst = panes[tdef.id].instance;
         if (inst && typeof inst.collect === 'function') {
           const partial = inst.collect();
-          // General pane carries three transient keys
-          // (_apiKeyNoSave, _apiKeyValue) that are NOT part of the
-          // saved config schema — they're just a channel between the
-          // pane and the Save handler. Strip them before setConfig so
-          // config.txt stays clean.
+          // General pane carries transient keys (_apiKeyAction,
+          // _apiKeyNewValue, _apiKeyNoSave, _apiKeyValue) that are NOT
+          // part of the saved config schema — they're just a channel
+          // between the pane and the Save handler. Strip them before
+          // setConfig so config.txt stays clean.
           if (partial && typeof partial === 'object') {
+            if (typeof partial._apiKeyAction === 'string') {
+              apiKeyAction = partial._apiKeyAction;
+              delete partial._apiKeyAction;
+            }
+            if (typeof partial._apiKeyNewValue === 'string') {
+              apiKeyValue = partial._apiKeyNewValue;
+              delete partial._apiKeyNewValue;
+            }
             if (typeof partial._apiKeyNoSave === 'boolean') {
               apiKeyNoSave = partial._apiKeyNoSave;
               delete partial._apiKeyNoSave;
@@ -157,13 +170,15 @@ function openSettings() {
           Object.assign(merged, partial);
         }
       }
-      // When the user checked "Don't save" on the API-key row,
-      // strip api_key from `merged` so it never reaches config.txt.
-      // The entered value (in apiKeyInMemory) IS assigned to
-      // state.config.api_key below so the current session keeps
-      // working — only the persisted form is suppressed.
+      // B-007: the API key never travels inside cfg — it goes through the
+      // typed apiKeyAction/apiKeyValue channel. Make sure no pane (or the
+      // state.config spread) leaked an api_key-ish field into merged.
+      delete merged.api_key;
       if (apiKeyNoSave) {
-        merged.api_key = '';
+        // Privacy switch: Main clears the persisted key (R2.3.1) and
+        // routes the entered value to the session store.
+        apiKeyAction = 'keep';
+        apiKeyValue = '';
       }
       // Capture the OLD output_dir from the pre-save snapshot
       // (state.config, before the Object.assign(merged, partial)
@@ -189,7 +204,7 @@ function openSettings() {
       // saveBtn-handler body-extraction regex (used by the legacy
       // v1129 A1/A2 tests) from truncating on an inline object
       // literal. See those tests for the brittle regex pattern.
-      const setConfigPayload = { cfg: merged, apiKeyNoSave: !!apiKeyNoSave, sessionApiKey: apiKeyInMemory, grants: collectedGrants };
+      const setConfigPayload = { cfg: merged, apiKeyNoSave: !!apiKeyNoSave, sessionApiKey: apiKeyInMemory, apiKeyAction, apiKeyValue, grants: collectedGrants };
       const result = await window.api.setConfig(setConfigPayload);
       // config:set returns an envelope `{ ok, config, error, warnings? }`.
       // A write failure (read-only fs, disk full, permission revoked)
@@ -217,6 +232,16 @@ function openSettings() {
       // <html data-theme> attribute is only updated here, not on the
       // config write itself).
       if (typeof applyTheme === 'function') applyTheme(saved.theme || 'dark');
+      // H-038 (_5 audit): commit buffered state-side fields (realesrganModel,
+      // popupPolicy, batchesExportFormat, batchesAutoRemove, jobsArchiveCap)
+      // only NOW — after the save succeeded. Cancel never reaches here, so
+      // the global state stays untouched when the user discards changes.
+      for (const tdef of tabDefs) {
+        const inst = panes[tdef.id].instance;
+        if (inst && typeof inst.commitState === 'function') {
+          try { inst.commitState(); } catch (_) {}
+        }
+      }
       scheduleStateSave();
       // KGO7-006: `config:set` returns ok:true once config.txt is written,
       // even when the privacy switch failed to scrub the api_key out of

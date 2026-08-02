@@ -52,7 +52,7 @@ const INDEX_HTML_BUTTONS = [
   { id: 'fb-options',     topic: 'sidebar.options',     expectText: /Options|Column/i },
   { id: 'fb-bulk-move',   topic: null,                   expectText: /Move/i },
   { id: 'fb-bulk-copy',   topic: null,                   expectText: /Copy/i },
-  { id: 'fb-bulk-trim',   topic: 'sidebar.bulkTrim',    expectText: /Trim/i },
+  { id: 'fb-bulk-trim',   topic: 'sidebar.bulkTrim',    expectText: /Audio cutter/i }, // H-048: renamed from "Trim" (misleading bulk-trim) to the single-file audio cutter
   { id: 'fb-bulk-delete', topic: null,                   expectText: /Delete/i },
   { id: 'fb-bulk-clear',  topic: null,                   expectText: /Clear/i },
   // Log bar

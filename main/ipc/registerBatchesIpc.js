@@ -19,14 +19,16 @@
 //                         arg is the full state object (no
 //                         file-path strings).
 //
-//   - `batches:generateExamples` — writes 2 files
-//                         (`example_batch_import.md` +
-//                         `example_batch_import.txt`) to
+//   - `batches:generateExamples` — writes ONE example manual
+//                         (`example_batch_import.md` OR `.txt`,
+//                         H-054: exclusive-create under a free
+//                         name, never overwriting/deleting user
+//                         files) to
 //                         `cfgMod.effectiveOutputDir(cfg)`
 //                         (Main-known path, derived from
-//                         config). The `format` arg just picks
-//                         which file to keep; no path
-//                         strings in the payload.
+//                         config). The `format` arg picks the
+//                         file type; no path strings in the
+//                         payload.
 //
 //   - `batches:saveManualAs` — opens the native Save-As
 //                         dialog; the user picks the file
@@ -90,40 +92,82 @@ function register(deps) {
   });
   secureHandle('batches:set', { getMainWindow }, (_e, batches) => {
     try { batchMod.write(batches); return { ok: true }; }
+    catch (e) { return { ok: false, error: String(e.message || e), code: e && e.code }; }
+  });
+
+  // H-053: recovery status for the renderer boot check. While a recovery is
+  // pending, batches:set fails with EBATCHRECOVERY (write() refuses) so the
+  // corrupt-file backup can't be silently overwritten with empty queues.
+  secureHandle('batches:recoveryStatus', { getMainWindow }, () => {
+    try { return { ok: true, pending: batchMod.pendingRecovery() }; }
     catch (e) { return { ok: false, error: String(e.message || e) }; }
+  });
+
+  // H-053: Main-owned acknowledge. The native dialog lives HERE (not in the
+  // renderer) so a compromised renderer can't unblock writes without a user
+  // gesture. Cancel keeps writes blocked; OK re-enables them (the backup
+  // file stays on disk either way).
+  secureHandle('batches:acknowledgeRecovery', { getMainWindow }, async () => {
+    try {
+      const pending = batchMod.pendingRecovery();
+      if (!pending) return { ok: true, acknowledged: true, pending: null };
+      const win = getMainWindow();
+      const opts = {
+        type: 'warning',
+        buttons: ['Continue with empty queues', 'Cancel'],
+        defaultId: 1,
+        cancelId: 1,
+        title: 'Batch queue recovery',
+        message: 'The saved batch queues (batches.json) could not be read (' + pending.reason + ').',
+        detail: (pending.backupPath
+          ? 'A backup of the unreadable file was saved to:\n' + pending.backupPath + '\n\n'
+          : '')
+          + 'Continue with empty queues? Saving batch changes stays disabled until you continue.',
+      };
+      const r = win ? await dialog.showMessageBox(win, opts) : await dialog.showMessageBox(opts);
+      if (!r || r.response !== 0) return { ok: true, acknowledged: false, pending };
+      batchMod.acknowledgeRecovery();
+      return { ok: true, acknowledged: true, pending: null };
+    } catch (e) {
+      return { ok: false, error: String(e.message || e) };
+    }
   });
 
   secureHandle('batches:generateExamples', { getMainWindow }, async (_e, format) => {
     try {
-      // Write the example files next to the user's actual generated assets
+      // Write the example file next to the user's actual generated assets
       // (the effective output dir), not inside the read-only asar archive.
       const cfg = cfgMod.read();
       const targetDir = cfgMod.effectiveOutputDir(cfg);
       try { fs.mkdirSync(targetDir, { recursive: true }); } catch (_) { /* best-effort */ }
 
-      const mdContent = generateManual();
-      const txtContent = buildTxtManual();
-
-      fs.writeFileSync(path.join(targetDir, 'example_batch_import.md'), mdContent, 'utf8');
-      fs.writeFileSync(path.join(targetDir, 'example_batch_import.txt'), txtContent, 'utf8');
-      // Delete the format the user did NOT pick so they only see a single file.
-      // Unknown / missing -> fall back to 'md'.
+      // H-054: only the format the user picked is generated. The old code
+      // wrote BOTH files and then deleted the non-chosen one — silently
+      // overwriting and/or deleting a user file of the same name.
       const chosenFormat = (format === 'txt') ? 'txt' : 'md';
-      let finalPath;
-      if (chosenFormat === 'md') {
-        try { fs.unlinkSync(path.join(targetDir, 'example_batch_import.txt')); } catch (_) { /* may not exist */ }
-        finalPath = path.join(targetDir, 'example_batch_import.md');
-      } else {
-        try { fs.unlinkSync(path.join(targetDir, 'example_batch_import.md')); } catch (_) { /* may not exist */ }
-        finalPath = path.join(targetDir, 'example_batch_import.txt');
+      const content = (chosenFormat === 'txt') ? buildTxtManual() : generateManual();
+
+      // H-054: exclusive creation ('wx') under a free name. Existing files
+      // are NEVER overwritten and NEVER deleted; on collision the export
+      // gets the next "example_batch_import (N).<ext>" name.
+      const base = 'example_batch_import';
+      let finalPath = null;
+      for (let i = 0; i < 100; i++) {
+        const name = (i === 0 ? base : base + ' (' + i + ')') + '.' + chosenFormat;
+        const candidate = path.join(targetDir, name);
+        try {
+          fs.writeFileSync(candidate, content, { encoding: 'utf8', flag: 'wx' });
+          finalPath = candidate;
+          break;
+        } catch (err) {
+          if (err && err.code === 'EEXIST') continue;
+          throw err;
+        }
       }
-      return {
-        ok: true,
-        format: chosenFormat,
-        path: finalPath,
-        mdPath: path.join(targetDir, 'example_batch_import.md'),
-        txtPath: path.join(targetDir, 'example_batch_import.txt'),
-      };
+      if (!finalPath) {
+        return { ok: false, error: 'No free file name for ' + base + '.' + chosenFormat + ' in ' + targetDir };
+      }
+      return { ok: true, format: chosenFormat, path: finalPath };
     } catch (e) {
       return { ok: false, error: String(e.message || e) };
     }

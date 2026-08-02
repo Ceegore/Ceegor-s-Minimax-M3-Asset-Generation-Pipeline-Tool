@@ -23,6 +23,36 @@
 const crypto = require('crypto');
 const { dialog } = require('electron');
 
+// H-031 (_5 audit): Main-owned IMMUTABLE action descriptions. The renderer
+// must NEVER control the text shown in the native confirmation dialog —
+// a compromised renderer could display "Open preview" for a full reset.
+// Only these Main-defined texts are shown; renderer-supplied descriptions
+// are ignored for security-critical actions.
+const ACTION_TEXTS = Object.freeze({
+  'app:resetAllData': {
+    title: 'Reset All Data',
+    message: 'Delete ALL local data?',
+    detail: 'This permanently removes your state, job history, provider keys, session credentials, and all cached data. The app will restart with factory defaults. This CANNOT be undone.',
+  },
+  'app:clearHistory': {
+    title: 'Clear Job History',
+    message: 'Clear the entire job history?',
+    detail: 'All archived job entries will be permanently deleted.',
+  },
+  'providers:deleteAll': {
+    title: 'Remove All Providers',
+    message: 'Remove all provider configurations?',
+    detail: 'All custom provider entries and their API keys will be permanently deleted.',
+  },
+});
+
+// Fallback for actions not in the table above (non-critical or new actions).
+const FALLBACK_TEXT = Object.freeze({
+  title: 'Confirm Action',
+  message: 'Are you sure you want to proceed?',
+  detail: 'This action cannot be undone.',
+});
+
 /** @type {Map<string, {action: string, mintedAt: number, consumed: boolean}>} */
 const _tokens = new Map();
 
@@ -42,15 +72,17 @@ async function mintToken(win, opts) {
   const action = opts && typeof opts.action === 'string' ? opts.action : '';
   if (!action) return { ok: false, error: 'action is required' };
 
-  const description = (opts && typeof opts.description === 'string') ? opts.description : action;
+  // H-031 (_5 audit): use Main-owned text ONLY. The renderer-supplied
+  // description is deliberately ignored to prevent social engineering.
+  const texts = ACTION_TEXTS[action] || FALLBACK_TEXT;
 
   // Show native confirmation dialog
   const buttons = ['Confirm', 'Cancel'];
   const result = await dialog.showMessageBox(win || undefined, {
     type: 'warning',
-    title: 'Confirm Destructive Action',
-    message: `Are you sure you want to: ${description}?`,
-    detail: 'This action cannot be undone.',
+    title: texts.title,
+    message: texts.message,
+    detail: texts.detail,
     buttons,
     defaultId: 1, // Default to Cancel (safe default)
     cancelId: 1,
@@ -112,4 +144,10 @@ function validateToken(token, expectedAction) {
   return { ok: true };
 }
 
-module.exports = { mintToken, validateToken, TOKEN_TTL_MS };
+module.exports = { mintToken, validateToken, clearAll, TOKEN_TTL_MS };
+
+/**
+ * H-030 (_5 audit): clear all pending tokens. Called during a full reset
+ * so stale tokens cannot be replayed after the app state is wiped.
+ */
+function clearAll() { _tokens.clear(); }

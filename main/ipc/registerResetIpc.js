@@ -6,7 +6,7 @@
 // confirmation token minted via native dialog. A compromised renderer
 // cannot bypass the native dialog to mint tokens.
 'use strict';
-const { ipcMain, app } = require('electron');
+const { ipcMain, app, dialog } = require('electron');
 const fs = require('fs');
 const path = require('path');
 const { configDir } = require('../../src/config');
@@ -19,6 +19,9 @@ const { secureHandle } = require('./secureHandle');
 // NEVER the user's generated assets. Returns a per-file result so the UI
 // reports partial failures honestly instead of claiming a clean reset.
 // HIGH-017: also deletes providers.json and SecretStore blobs.
+// H-030 (_5 audit): also cancels active cloud jobs, clears in-memory
+// caches (CloudJobGate, ConfirmationTokenService), and wipes the daily
+// budget persistence so the reset is a true fresh start.
 function deleteLocalDataFiles() {
   const dir = configDir();
   const results = [];
@@ -52,6 +55,40 @@ function deleteLocalDataFiles() {
   }
   try { results.push({ file: '~/.mmx/config.json (api_key)', ok: clearApiKeyFromMmxCliConfig() }); }
   catch (e) { results.push({ file: '~/.mmx/config.json', ok: false, error: String((e && e.message) || e) }); }
+  // B-009 / H-046: also wipe the in-memory session credential so a reset
+  // leaves NO credential behind (persisted OR session-only).
+  try {
+    require('../services/SessionCredentialStore').clearSessionCredential();
+    results.push({ file: 'session credential (memory)', ok: true });
+  } catch (e) {
+    results.push({ file: 'session credential (memory)', ok: false, error: String((e && e.message) || e) });
+  }
+  // H-030 (_5 audit): cancel all active cloud job slots so no in-flight
+  // job writes to a freshly-deleted output directory after reset.
+  try {
+    require('../services/CloudJobGate').cancelAll();
+    results.push({ file: 'cloud job slots (memory)', ok: true });
+  } catch (e) {
+    results.push({ file: 'cloud job slots (memory)', ok: false, error: String((e && e.message) || e) });
+  }
+  // H-030 (_5 audit): clear all confirmation tokens so stale tokens
+  // cannot be replayed after reset.
+  try {
+    const cts = require('../services/ConfirmationTokenService');
+    if (typeof cts.clearAll === 'function') cts.clearAll();
+    results.push({ file: 'confirmation tokens (memory)', ok: true });
+  } catch (e) {
+    results.push({ file: 'confirmation tokens (memory)', ok: false, error: String((e && e.message) || e) });
+  }
+  // H-030 (_5 audit): remove the persisted daily budget counter so the
+  // reset truly starts fresh.
+  try {
+    const budgetFile = path.join(configDir(), 'daily-budget.json');
+    if (fs.existsSync(budgetFile)) fs.unlinkSync(budgetFile);
+    results.push({ file: 'daily-budget.json', ok: true });
+  } catch (e) {
+    results.push({ file: 'daily-budget.json', ok: false, error: String((e && e.message) || e) });
+  }
   return { ok: results.every((r) => r.ok), results };
 }
 
@@ -89,6 +126,43 @@ function register(deps) {
     }
     app.relaunch();
     app.exit(0);
+  });
+
+  // B-009: single Main-owned transaction for "Delete all local data".
+  // The renderer calls this ONE channel with no payload. Main:
+  //   1. shows a FIXED native warning dialog (text is Main-owned and
+  //      immutable — a compromised renderer cannot soften it),
+  //   2. on Cancel: returns { ok:false, canceled:true } with ZERO mutation,
+  //   3. on Confirm: deletes all local data files, verifies per-file
+  //      results, and relaunches ONLY on full success.
+  // No renderer-supplied confirmation token is involved — the native
+  // dialog IS the trust gesture, inside the same handler, so the
+  // renderer can neither skip it nor desynchronise delete/relaunch.
+  secureHandle('app:confirmResetAndRelaunch', { getMainWindow }, async () => {
+    const win = getMainWindow();
+    const r = await dialog.showMessageBox(win || undefined, {
+      type: 'warning',
+      title: 'Delete all local data',
+      message: 'Permanently delete ALL tool settings and state?',
+      detail: 'This deletes: config.txt (API key, output dir, region, theme, styles), '
+        + 'state.json (UI/pipeline state), batches.json (batch queues), the job archive, '
+        + 'stored provider keys, and the mmx CLI api_key.\n\n'
+        + 'Your generated assets (images, audio, video) are NOT touched.\n\n'
+        + 'The app relaunches into first-run setup afterwards. This cannot be undone.',
+      buttons: ['Delete and relaunch', 'Cancel'],
+      defaultId: 1,
+      cancelId: 1,
+    });
+    if (r.response !== 0) return { ok: false, canceled: true };
+    const result = deleteLocalDataFiles();
+    if (!result.ok) {
+      return { ok: false, error: 'Reset partially failed. Some files could not be deleted.', results: result.results };
+    }
+    app.relaunch();
+    app.exit(0);
+    // Unreachable in production (app.exit terminates), but keeps the
+    // contract honest for tests that stub app.exit.
+    return { ok: true, results: result.results };
   });
 }
 module.exports = { register };

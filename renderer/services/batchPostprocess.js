@@ -107,7 +107,18 @@
                     { kind: 'directory', capabilities: ['read', 'write'] }
                   ) : undefined;
               if (resrGrant && resrGrant.ok === false) errors.push('upscale grant: ' + (resrGrant.error || 'mintGrant failed'));
-              const upModel = opts.upscaleModel || (window.state && window.state.realesrganModel) || 'realesrgan-x4plus';
+              // H-058: canonical Real-ESRGAN model names only. The executor
+              // (src/realesrgan.js) silently falls back to x4plus for unknown
+              // names, so an unnormalized legacy spelling would run the WRONG
+              // network without any hint. Accept documented legacy aliases,
+              // reject everything else loudly (throw → 'upscale failed: …').
+              const RESR_MODELS = ['realesrgan-x4plus', 'realesrgan-x4plus-anime', 'realesr-animevideov3'];
+              const RESR_ALIASES = { 'real-esrgan-x4plus': 'realesrgan-x4plus', 'real-esrgan-anime-v3': 'realesr-animevideov3' };
+              const rawModel = String(opts.upscaleModel || (window.state && window.state.realesrganModel) || 'realesrgan-x4plus').trim();
+              const upModel = RESR_ALIASES[rawModel] || rawModel;
+              if (!RESR_MODELS.includes(upModel)) {
+                throw new Error('unknown upscale-model "' + rawModel + '" — use one of: ' + RESR_MODELS.join(', '));
+              }
               const modelNativeScale = (upModel === 'realesr-animevideov3')
                 ? Math.max(2, Math.min(4, mult))
                 : 4;

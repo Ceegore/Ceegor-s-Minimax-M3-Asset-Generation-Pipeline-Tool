@@ -18,11 +18,20 @@
 //   - `collectMmxPathFlags(args)` walks the args array, splitting
 //     `--flag=value` (one token) and `--flag value` (two tokens)
 //     forms. Returns an array of `{ flag, value, kind }` where
-//     `kind` is 'file' or 'dir'.
-//   - `authorizeMmxPaths(grantId, pathFlags, cwd, readGrantId)`
+//     `kind` is 'file', 'dir', 'input' or 'url'.
+//     B-003: input flag values are strictly typed — an https:// URL
+//     is kind 'url' (URL policy, no local grant); any other scheme
+//     (http:, file:, \\unc via smb:, data:, …) is rejected in the
+//     authoriser; everything else is a LOCAL path requiring a read
+//     grant. `--subject-ref` carries a composite value
+//     (`type=character,image=<path-or-url>`) — the `image=` part is
+//     extracted for classification/authorisation.
+//   - `authorizeMmxPaths(grantId, pathFlags, cwd, readGrantIds)`
 //     authorises every path the args (and optional cwd) would touch.
-//     HIGH-011: input file flags are authorised against a separate
-//     readGrantId (falls back to grantId for backward compat).
+//     B-002: `readGrantIds` is plural — a single grantId string OR an
+//     array of grantId strings. An input path is authorised if ANY of
+//     the supplied read grants covers it (falls back to grantId for
+//     backward compat when no read grants are supplied).
 //     Returns `null` on success, or an error string (suitable
 //     for the IPC's `stderr` field) on the first failed
 //     authorisation. A missing / non-string grantId fails closed
@@ -60,10 +69,24 @@ const MMX_INPUT_FILE_FLAGS = new Set([
   '--input',           // generic input file
 ]);
 
+// B-003: any value with a URL scheme (`scheme://…`). Windows drive
+// paths (`C:\…`) don't match — no `//` after the colon.
+const URL_SCHEME_RE = /^[a-z][a-z0-9+.-]*:\/\//i;
+
+// B-002/B-003: `--subject-ref` values are composites in the form
+// `type=character,image=<path-or-url>`. Extract the `image=` part —
+// that's the thing mmx actually opens. A plain value (no `image=`)
+// is returned unchanged.
+function extractSubjectRefTarget(value) {
+  const idx = value.indexOf('image=');
+  return idx === -1 ? value : value.slice(idx + 'image='.length);
+}
+
 /**
  * Walk the args array and collect every path-taking flag + its
- * value. Returns `[{ flag, value, kind }]` where `kind` is 'file'
- * or 'dir'.
+ * value. Returns `[{ flag, value, kind }]` where `kind` is 'file',
+ * 'dir', 'input' (local input path needing a read grant) or 'url'
+ * (B-003: https-only URL policy, no local grant).
  *
  * Supports both `--flag=value` (one token) and `--flag value` (two
  * adjacent tokens) forms. The first form is one token; the second
@@ -74,6 +97,22 @@ const MMX_INPUT_FILE_FLAGS = new Set([
 function collectMmxPathFlags(args) {
   const out = [];
   if (!Array.isArray(args)) return out;
+  // B-002/B-003: type the collected entry. Input flags carry either a
+  // local path (kind 'input' → read grant) or a URL (kind 'url' →
+  // https-only policy). `--subject-ref` composites are unwrapped first.
+  const push = (flag, rawValue) => {
+    let kind = MMX_FILE_PATH_FLAGS.has(flag) ? 'file'
+             : MMX_DIR_PATH_FLAGS.has(flag) ? 'dir'
+             : MMX_INPUT_FILE_FLAGS.has(flag) ? 'input'
+             : null;
+    if (!kind) return;
+    let value = rawValue;
+    if (kind === 'input') {
+      if (flag === '--subject-ref') value = extractSubjectRefTarget(value);
+      if (URL_SCHEME_RE.test(value)) kind = 'url';
+    }
+    out.push({ flag, value, kind });
+  };
   for (let i = 0; i < args.length; i++) {
     const a = args[i];
     if (typeof a !== 'string') continue;
@@ -82,24 +121,17 @@ function collectMmxPathFlags(args) {
       const flag = a.slice(0, eq);
       const value = a.slice(eq + 1);
       if (!value) continue;
-      const kind = MMX_FILE_PATH_FLAGS.has(flag) ? 'file'
-                 : MMX_DIR_PATH_FLAGS.has(flag) ? 'dir'
-                 : MMX_INPUT_FILE_FLAGS.has(flag) ? 'input'
-                 : null;
-      if (kind) out.push({ flag, value, kind });
+      push(flag, value);
       continue;
     }
     if (i >= args.length - 1) continue;
     const value = args[i + 1];
     if (typeof value !== 'string' || !value) continue;
-    const kind = MMX_FILE_PATH_FLAGS.has(a) ? 'file'
-               : MMX_DIR_PATH_FLAGS.has(a) ? 'dir'
-               : MMX_INPUT_FILE_FLAGS.has(a) ? 'input'
-               : null;
-    if (!kind) continue;
+    const isPathFlag = MMX_FILE_PATH_FLAGS.has(a) || MMX_DIR_PATH_FLAGS.has(a) || MMX_INPUT_FILE_FLAGS.has(a);
+    if (!isPathFlag) continue;
     // A value starting with '-' is itself a flag, not a value.
     if (value.startsWith('-')) continue;
-    out.push({ flag: a, value, kind });
+    push(a, value);
     i++; // consume the value
   }
   return out;
@@ -110,35 +142,59 @@ function collectMmxPathFlags(args) {
  * Returns `null` on success, or an error string on the first failed
  * authorisation.
  *
- * HIGH-011: separate read/write grants. Input file flags (--first-frame,
- * --text-file, etc.) are authorised against `readGrantId` (if provided)
- * with operation 'read'; output file/dir flags (--out, --out-dir) are
- * authorised against `grantId` with operation 'write'. When no separate
- * `readGrantId` is supplied, all paths fall back to the single `grantId`
- * for backward compatibility.
+ * B-002: plural read grants. Input file flags (--first-frame,
+ * --subject-ref image=, etc.) are authorised with operation 'read'
+ * against the supplied `readGrantIds` (string or array of strings) —
+ * an input path passes if ANY read grant covers it. When no read
+ * grants are supplied, input paths fall back to the single `grantId`
+ * for backward compatibility. Output file/dir flags (--out, --out-dir)
+ * are authorised against `grantId` with operation 'write'.
+ *
+ * B-003: kind 'url' entries are never authorised as local paths —
+ * they must be https:// (http:, file:, data:, … fail closed).
  *
  * @param {string} grantId - write grant for output paths
  * @param {Array} pathFlags - collected path flags
  * @param {string} [cwd] - optional working directory
- * @param {string} [readGrantId] - HIGH-011: optional separate read grant for input paths
+ * @param {string|string[]} [readGrantIds] - B-002: read grant(s) for local input paths
  */
-function authorizeMmxPaths(grantId, pathFlags, cwd, readGrantId) {
-  // HIGH-011: separate read/write grants. Input file flags are authorised
-  // against readGrantId (or fallback grantId); output flags against grantId.
+function authorizeMmxPaths(grantId, pathFlags, cwd, readGrantIds) {
   const hasInputFlags = pathFlags.some(({ kind }) => kind === 'input');
-  const hasOutputFlags = pathFlags.some(({ kind }) => kind !== 'input');
+  const hasOutputFlags = pathFlags.some(({ kind }) => kind === 'file' || kind === 'dir');
   if (hasOutputFlags && (!grantId || typeof grantId !== 'string')) {
     return 'mmx: a grantId is required for the output path(s) (use a Main-minted grant from the picker or app-output)';
   }
-  const effectiveReadGrant = (readGrantId && typeof readGrantId === 'string') ? readGrantId : grantId;
-  if (hasInputFlags && (!effectiveReadGrant || typeof effectiveReadGrant !== 'string')) {
+  // B-002: normalise readGrantIds (string | string[] | undefined) into a
+  // candidate list; fall back to the write grantId for backward compat.
+  const readGrants = (Array.isArray(readGrantIds) ? readGrantIds : [readGrantIds])
+    .filter((g) => g && typeof g === 'string');
+  if (readGrants.length === 0 && grantId && typeof grantId === 'string') {
+    readGrants.push(grantId);
+  }
+  if (hasInputFlags && readGrants.length === 0) {
     return 'mmx: a readGrantId (or grantId) is required for input file path(s)';
   }
   for (const { flag, value, kind } of pathFlags) {
+    if (kind === 'url') {
+      // B-003: URL policy — https only. Everything else (http:, file:,
+      // ftp:, data:, …) fails closed; there is no grant that can
+      // authorise a non-https remote reference.
+      if (!/^https:\/\//i.test(value)) {
+        return `mmx: "${flag}" URL "${value}" is not allowed (only https:// URLs are accepted for remote references)`;
+      }
+      continue;
+    }
     if (kind === 'input') {
-      const authz = _authorizePath(effectiveReadGrant, 'read', value);
-      if (!authz.ok) {
-        return `mmx: "${flag}" path "${value}" is not authorised by the read grant (${authz.error})`;
+      // B-002: pass if ANY supplied read grant authorises the path.
+      let lastErr = 'no read grant supplied';
+      let authorized = false;
+      for (const rg of readGrants) {
+        const authz = _authorizePath(rg, 'read', value);
+        if (authz.ok) { authorized = true; break; }
+        lastErr = authz.error;
+      }
+      if (!authorized) {
+        return `mmx: "${flag}" path "${value}" is not authorised by the read grant (${lastErr})`;
       }
     } else {
       const authz = _authorizePath(grantId, 'write', value);
@@ -163,6 +219,7 @@ module.exports = {
   MMX_FILE_PATH_FLAGS,
   MMX_DIR_PATH_FLAGS,
   MMX_INPUT_FILE_FLAGS,
+  extractSubjectRefTarget,
   collectMmxPathFlags,
   authorizeMmxPaths,
 };

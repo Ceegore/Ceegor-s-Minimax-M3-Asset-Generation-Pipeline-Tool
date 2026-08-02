@@ -17,13 +17,15 @@
     return next;
   }
 
-  // Map of item id → cancel flag (set by cancel(); checked after the await).
-  const _cancel = {};
+  const _cancel = {}; // item id → cancel flag
+  let _opCounter = 0; // H-011: per-run op ID so cleanup only touches its own output.
+  function mintOpId(id) { return id + '_op' + (++_opCounter) + '_' + Date.now().toString(36); }
 
   async function run(item) {
     if (item.status === 'running') return;
     const column = item.column;
     if (!['upscale', 'removebg', 'crop', 'resize', 'optimize'].includes(column)) return;
+    const opId = mintOpId(item.id); item._activeOpId = opId; // H-011: scoped cleanup
     _cancel[item.id] = false;
     item._runGen = (item._runGen || 0) + 1; // R6.6.6: stale-progress filter generation.
     item.status = 'running';
@@ -63,13 +65,8 @@
         dst = await doOptimize(item, src, settings, board);
       }
       if (_cancel[item.id]) {
-        // P3.5 (DA-H-011): clean up partial output of a cancelled run.
-        if (dst) {
-          try {
-            const delGrant = (window.GrantHelper) ? await window.GrantHelper.ensureDelete(dst) : undefined;
-            if (!delGrant || delGrant.ok !== false) window.api.fbDelete(dst, delGrant).catch(() => {});
-          } catch (_) { /* best-effort cleanup */ }
-        }
+        // H-011: delete partial output only if this op still owns it (cancel+restart race guard).
+        if (dst && item._activeOpId === opId) { try { const dg = window.GrantHelper ? await window.GrantHelper.ensureDelete(dst) : undefined; if (!dg || dg.ok !== false) await window.api.fbDelete(dst, dg); } catch (_) {} }
         item.status = 'idle'; PipelineBoard.updateCard(item); return;
       }
       if (!dst) throw new Error('Operation produced no output file.');

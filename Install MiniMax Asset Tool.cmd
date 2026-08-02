@@ -38,48 +38,77 @@ if /I "%SOURCE_DIR%"=="%INSTALL_DIR%" goto :shortcuts
 echo Installing to:
 echo   %INSTALL_DIR%
 echo.
-if not exist "%INSTALL_DIR%" mkdir "%INSTALL_DIR%" >nul 2>&1
-if not exist "%INSTALL_DIR%" (
-  echo [ERROR] Windows could not create the installation folder.
-  echo Close this window, move the extracted release to a normal folder,
-  echo and try again. Administrator access should not be needed.
+
+rem H-066 (_5 audit): stage into a temporary directory FIRST, verify, then
+rem swap. If the copy or hash check fails, the existing installation is
+rem left byte-identical and startable. Old files that are not part of the
+rem new release are removed by the swap (robocopy /MIR on the staging dir).
+set "STAGING_DIR=%INSTALL_DIR%.staging-%RANDOM%-%RANDOM%"
+if exist "%STAGING_DIR%" goto :temp_collision
+mkdir "%STAGING_DIR%" >nul 2>&1
+if not exist "%STAGING_DIR%" (
+  echo [ERROR] Windows could not create the staging folder.
+  echo Close this window and try again.
   pause
   exit /b 1
 )
 
-robocopy "%SOURCE_DIR%" "%INSTALL_DIR%" /E /COPY:DAT /DCOPY:DAT /R:2 /W:1 /XJ /NFL /NDL /NJH /NJS
+robocopy "%SOURCE_DIR%" "%STAGING_DIR%" /E /COPY:DAT /DCOPY:DAT /R:2 /W:1 /XJ /NFL /NDL /NJH /NJS
 set "COPY_RESULT=%ERRORLEVEL%"
 if %COPY_RESULT% GEQ 8 (
   echo.
   echo [ERROR] Windows could not copy all application files.
   echo Robocopy exit code: %COPY_RESULT%
   echo Check that there is at least 4 GB of free disk space and try again.
+  rmdir /s /q "%STAGING_DIR%" >nul 2>&1
   pause
   exit /b 1
 )
 
-:shortcuts
-if not exist "%INSTALL_DIR%\MiniMaxAssetTool.exe" goto :copy_incomplete
-if not exist "%INSTALL_DIR%\resources\app.asar" goto :copy_incomplete
-if not exist "%INSTALL_DIR%\resources\bin\models\birefnet-general.onnx" goto :copy_incomplete
-if not exist "%INSTALL_DIR%\resources\bin\models\lama-big.onnx" goto :copy_incomplete
-if not exist "%INSTALL_DIR%\resources\bin\realesrgan-ncnn-vulkan.exe" goto :copy_incomplete
+rem Verify the staging directory BEFORE touching the live installation.
+if not exist "%STAGING_DIR%\MiniMaxAssetTool.exe" goto :staging_incomplete
+if not exist "%STAGING_DIR%\resources\app.asar" goto :staging_incomplete
+if not exist "%STAGING_DIR%\resources\bin\models\birefnet-general.onnx" goto :staging_incomplete
+if not exist "%STAGING_DIR%\resources\bin\models\lama-big.onnx" goto :staging_incomplete
+if not exist "%STAGING_DIR%\resources\bin\realesrgan-ncnn-vulkan.exe" goto :staging_incomplete
 
 rem M-024 (360 Audit): per-file hash verification against FILES.sha256.
-if not exist "%INSTALL_DIR%\FILES.sha256" goto :skip_hash_check
-set "MINIMAX_INSTALL_DIR_FOR_HASH=%INSTALL_DIR%"
+if not exist "%STAGING_DIR%\FILES.sha256" goto :skip_hash_check
+set "MINIMAX_INSTALL_DIR_FOR_HASH=%STAGING_DIR%"
 powershell.exe -NoProfile -NonInteractive -Command "$ErrorActionPreference='Stop'; $root=$env:MINIMAX_INSTALL_DIR_FOR_HASH; $manifest=Join-Path $root 'FILES.sha256'; $bad=0; foreach($line in [IO.File]::ReadAllLines($manifest)){if($line -match '^([0-9a-fA-F]{64})\s+(.+)$'){$rel=$matches[2].Trim(); $fp=Join-Path $root $rel; if(-not [IO.File]::Exists($fp)){Write-Host ('  MISSING: '+$rel); $bad++; continue}; $actual=(Get-FileHash -Algorithm SHA256 -LiteralPath $fp).Hash.ToLowerInvariant(); if($actual -ne $matches[1].ToLowerInvariant()){Write-Host ('  TAMPERED: '+$rel); $bad++}}}; if($bad -gt 0){throw ($bad.ToString()+' file(s) failed integrity check.')}"
 if errorlevel 1 (
   echo.
-  echo [ERROR] One or more installed files failed the integrity check.
-  echo The installation may be corrupted or tampered with.
-  echo Delete the installation folder and try again:
-  echo   %INSTALL_DIR%
+  echo [ERROR] One or more files failed the integrity check.
+  echo The existing installation was NOT modified.
+  rmdir /s /q "%STAGING_DIR%" >nul 2>&1
   pause
   exit /b 1
 )
 echo Integrity check passed.
 :skip_hash_check
+
+rem Swap: remove old installation, rename staging to final.
+rem If the old dir exists, move it aside first (rollback safety).
+set "OLD_DIR=%INSTALL_DIR%.old-%RANDOM%"
+if exist "%INSTALL_DIR%" (
+  ren "%INSTALL_DIR%" "%OLD_DIR%" >nul 2>&1
+  if exist "%INSTALL_DIR%" (
+    echo [ERROR] Could not move the existing installation aside.
+    echo Close the app if it is running and try again.
+    rmdir /s /q "%STAGING_DIR%" >nul 2>&1
+    pause
+    exit /b 1
+  )
+)
+ren "%STAGING_DIR%" "%INSTALL_DIR%" >nul 2>&1
+if not exist "%INSTALL_DIR%\MiniMaxAssetTool.exe" (
+  echo [ERROR] The final rename failed. Attempting rollback...
+  if defined OLD_DIR if exist "%OLD_DIR%" ren "%OLD_DIR%" "%INSTALL_DIR%" >nul 2>&1
+  pause
+  exit /b 1
+)
+rem Remove the old installation (swap succeeded).
+if defined OLD_DIR if exist "%OLD_DIR%" rmdir /s /q "%OLD_DIR%" >nul 2>&1
 
 echo Creating Desktop and Start menu shortcuts...
 set "MINIMAX_INSTALL_TARGET=%INSTALL_DIR%"
@@ -175,6 +204,13 @@ exit /b 1
 :copy_incomplete
 echo [ERROR] The copied installation is incomplete.
 echo Check that there is at least 4 GB of free disk space and try again.
+pause
+exit /b 1
+
+:staging_incomplete
+echo [ERROR] The staged installation is incomplete.
+echo The existing installation was NOT modified.
+rmdir /s /q "%STAGING_DIR%" >nul 2>&1
 pause
 exit /b 1
 

@@ -118,7 +118,7 @@ test('write() clamps the cap to [20, 1000] even when the user passes a value out
   assert.equal(s.jobsArchiveCap, 20, 'cap is persisted as the clamped value');
 });
 
-test('write() is best-effort: a failing archive write does not block the main save', () => {
+test('write() is best-effort: a failing archive write does not block the main save (H-045 no-data-loss)', () => {
   const dir = makeTmpDir();
   process.env.MINIMAX_CONFIG_DIR = dir;
   const state = loadStateWithDir(dir);
@@ -127,10 +127,20 @@ test('write() is best-effort: a failing archive write does not block the main sa
   fs.mkdirSync(path.join(dir, 'state.jobs.archive.jsonl'));
   const snap = Array.from({ length: 30 }, (_, i) => writeSummary('j' + i));
   // Should NOT throw — the main save must succeed.
-  state.write({ tabs: {}, jobsSnapshot: snap, jobsArchiveCap: 5 });
-  // Verify the trimmed L2 was still persisted.
+  // H-045: archive-first transaction — when the archive append fails on
+  // the very first overflow entry, jobsArchived stays 0, the break fires,
+  // and ALL 30 entries remain in state.json (no data loss). The failure
+  // is reported via _archiveWarnings on the return value.
+  const result = state.write({ tabs: {}, jobsSnapshot: snap, jobsArchiveCap: 5 });
+  // The main save succeeded — all entries are persisted (NOT trimmed).
   const s = state.read();
-  assert.equal(s.jobsSnapshot.length, 20);
+  assert.equal(s.jobsSnapshot.length, 30, 'H-045: failed archive keeps all entries in L2 (no data loss)');
+  // The return value reports the failure.
+  assert.ok(Array.isArray(result._archiveWarnings), 'must report archive warnings');
+  assert.ok(result._archiveWarnings.length > 0, 'at least one warning');
+  assert.match(result._archiveWarnings[0], /append failed|unavailable/i);
+  // _jobsArchived must NOT be present (nothing was archived).
+  assert.equal(result._jobsArchived, undefined, 'nothing was archived');
 });
 
 test('a partial last line in the archive is dropped on the next append (crash safety)', () => {
@@ -143,10 +153,11 @@ test('a partial last line in the archive is dropped on the next append (crash sa
   // Now manually corrupt the archive: append a partial line.
   const archivePath = path.join(dir, 'state.jobs.archive.jsonl');
   fs.appendFileSync(archivePath, '{"id":"j1","title":"PARTIAL', 'utf8');
-  // Next save: cap=20 still triggers trimming (overflow = 5 entries).
-  // ArchiveService.append must drop the partial line before
-  // appending new entries.
-  state.write({ tabs: {}, jobsSnapshot: snap, jobsArchiveCap: 20 });
+  // H-045 dedupe: the second write must use NEW ids so the overflow
+  // entries are NOT in the _archivedIds session Set — forcing a real
+  // archive.append() call that triggers _trimPartialLastLine.
+  const snap2 = Array.from({ length: 25 }, (_, i) => writeSummary('k' + i));
+  state.write({ tabs: {}, jobsSnapshot: snap2, jobsArchiveCap: 20 });
   // Verify the archive file is well-formed (every line parses).
   const lines = fs.readFileSync(archivePath, 'utf8').split('\n').filter(Boolean);
   for (const line of lines) {
@@ -154,4 +165,9 @@ test('a partial last line in the archive is dropped on the next append (crash sa
       assert.fail(`archive line should be valid JSON: ${line} (${e.message})`);
     }
   }
+  // The partial line was dropped; we have 5 (j0-j4) + 5 (k0-k4) = 10 valid lines.
+  assert.equal(lines.length, 10, 'partial line dropped, 10 valid entries remain');
+  const ids = lines.map((l) => JSON.parse(l).id);
+  assert.deepEqual(ids.slice(0, 5), ['j0', 'j1', 'j2', 'j3', 'j4']);
+  assert.deepEqual(ids.slice(5), ['k0', 'k1', 'k2', 'k3', 'k4']);
 });

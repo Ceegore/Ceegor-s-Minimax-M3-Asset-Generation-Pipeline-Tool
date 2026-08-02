@@ -125,7 +125,16 @@ function showModal(build, opts) {
   _modalStack.push(stackEntry);
   _modalClose = close;
   _reapplyInert();
-  build(m, close);
+  // H-043 (_5 audit): wrap the builder in try/catch. If it throws, the
+  // half-built modal is cleaned up via close() (removes the stack entry,
+  // restores inert/focus) so the modal system is never permanently jammed.
+  try {
+    build(m, close);
+  } catch (buildErr) {
+    close(); // idempotent cleanup: pop stack, restore inert + focus
+    try { window.toast('Modal failed to open: ' + ((buildErr && buildErr.message) || buildErr), 'err', 6000); } catch (_) {}
+    return null;
+  }
 
   // H7-021: wire aria-labelledby to the first heading inside the modal (if
   // any) so screen readers announce a name for the dialog. Give the heading

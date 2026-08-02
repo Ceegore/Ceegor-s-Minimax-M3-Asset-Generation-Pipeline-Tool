@@ -97,7 +97,7 @@ test('antipattern: a comparison gate that returns ok:true while holding failures
 // blanked), NOT with a raw grep — a naive grep over-counted fileBrowser1.js.
 const BLOCKING_DIALOG_BASELINE = {
   'renderer/pipeline/pipelineOverlay.js': 1,              // showModal fallback, only if showModal is missing
-  'renderer/sections/section03_Settings_tab_panes.js': 4, // reset + archive error paths
+  'renderer/sections/section03_Settings_tab_panes.js': 3, // reset + archive error paths (B-009 moved the reset confirm into a Main-owned native dialog)
   'renderer/widgets/ArchiveViewer.js': 2,                 // delete-failed paths
 };
 test('antipattern: no NEW blocking alert()/confirm() in the renderer (ratchet)', () => {

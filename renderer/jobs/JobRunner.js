@@ -215,17 +215,20 @@
       outputPaths: Array.isArray(job.outputPaths) ? job.outputPaths.slice() : [],
       error: job.error || null,
     });
-    // Trim the in-memory L2 list to jobsArchiveCap right here, after every
-    // push. Without client-side trimming the array only ever grows, and
-    // saveAllStates() sends the full untrimmed array on every save, so
-    // src/state.js write() re-archives the same overflow entries on every
-    // save. Trimming client-side means the persisted array is already the
-    // post-trim shape, and the server-side trim becomes a defensive no-op
-    // for the normal path. The cap is clamped to [20, 1000] to match
-    // src/state.js write()'s clamp.
-    const cap = Math.max(20, Math.min(1000, Number(window.state.jobsArchiveCap) || 200));
-    if (window.state.jobsSnapshot.length > cap) {
-      window.state.jobsSnapshot = window.state.jobsSnapshot.slice(-cap);
+    // H-044: do NOT trim to jobsArchiveCap here. The old client-side
+    // pre-trim starved the Main-side archiver: overflow entries never
+    // reached src/state.js write(), so nothing was ever appended to the
+    // L3 archive — the oldest entries were silently DESTROYED on every
+    // push past the cap. Main now archives the overflow on every save
+    // and reports `jobsArchived`; saveAllStates drops exactly that many
+    // entries from the front of this array after a successful round
+    // trip. Only a generous runaway bound remains (covers a session
+    // where every save fails) so the array can't grow without limit —
+    // it sits well above the max cap (1000) so it never pre-empts the
+    // Main-side archiving in normal operation.
+    const HARD_BOUND = 5000;
+    if (window.state.jobsSnapshot.length > HARD_BOUND) {
+      window.state.jobsSnapshot = window.state.jobsSnapshot.slice(-HARD_BOUND);
     }
     if (typeof window.scheduleStateSave === 'function') {
       try { window.scheduleStateSave(); } catch (_) { /* ignore */ }

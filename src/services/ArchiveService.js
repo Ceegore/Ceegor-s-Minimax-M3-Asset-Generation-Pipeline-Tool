@@ -37,6 +37,7 @@
 const fs = require('fs');
 const path = require('path');
 const { randomUUID } = require('crypto');
+const { StringDecoder } = require('string_decoder');
 const { deepRedact } = require('../deepRedactor');
 
 function archivePath(configDir) {
@@ -107,6 +108,9 @@ function readChunk(configDir, opts) {
   let consumed = offset;  // byte position after the last fully-consumed line
   let leftover = '';      // partial line carried between chunks
   let hasMore = false;
+  // H-035 (_5 audit): StringDecoder buffers incomplete multi-byte UTF-8
+  // sequences at chunk boundaries so characters are never corrupted.
+  const decoder = new StringDecoder('utf8');
 
   const fd = fs.openSync(p, 'r');
   try {
@@ -118,7 +122,7 @@ function readChunk(configDir, opts) {
       if (bytesRead === 0) break;
       pos += bytesRead;
 
-      const text = leftover + buf.toString('utf8', 0, bytesRead);
+      const text = leftover + decoder.write(buf.slice(0, bytesRead));
       const parts = text.split('\n');
       // Last element is either '' (if text ended with \n) or a partial line
       leftover = parts.pop() || '';
@@ -193,12 +197,14 @@ function deleteOne(configDir, id) {
   let pos = 0;
   let removed = false;
   const chunk = Buffer.alloc(CHUNK_SIZE);
+  // H-035 (_5 audit): StringDecoder prevents UTF-8 corruption at chunk edges.
+  const decoder2 = new StringDecoder('utf8');
   try {
     while (pos < stat.size) {
       const bytesRead = fs.readSync(fd, chunk, 0, CHUNK_SIZE, pos);
       if (bytesRead === 0) break;
       pos += bytesRead;
-      buffer += chunk.toString('utf8', 0, bytesRead);
+      buffer += decoder2.write(chunk.slice(0, bytesRead));
       const lines = buffer.split('\n');
       buffer = lines.pop() || ''; // Keep incomplete line in buffer
       for (const line of lines) {
@@ -254,37 +260,41 @@ function size(configDir) {
 // Internal: detect a partial final line and rewrite the file
 // without it. Called by `append()` to recover from a crash.
 //
-// The partial line is anything after the last `\n`. We scan the
-// tail of the file (up to the last 8 KB) for the most recent
-// `\n` and truncate the file just after that byte. If the file
-// is empty or already ends in `\n`, no work is needed.
+// H-034 (_5 audit): search backward in fixed blocks until the last
+// newline is found or file start is reached. The old single-window
+// approach could truncate the entire archive when no newline fell
+// within the scan window. Now we walk backward in 64 KB blocks so
+// even an arbitrarily long partial tail only removes itself.
 function _trimPartialLastLine(p) {
   if (!fs.existsSync(p)) return;
   const stat = fs.statSync(p);
   if (stat.size === 0) return;
   const fd = fs.openSync(p, 'r+');
   try {
-    // Read the last 8 KB and scan for the last newline. If the
-    // file is smaller than 8 KB, the whole file is in the buffer.
-    const SCAN = 8 * 1024;
-    const start = Math.max(0, stat.size - SCAN);
-    const length = stat.size - start;
-    const buf = Buffer.alloc(length);
-    fs.readSync(fd, buf, 0, length, start);
-    let lastNl = -1;
-    for (let i = length - 1; i >= 0; i--) {
-      if (buf[i] === 0x0A) { lastNl = i; break; }
+    const BLOCK = MAX_LINE_BYTES; // 64 KB search blocks
+    let searchEnd = stat.size;
+    let found = false;
+    while (searchEnd > 0 && !found) {
+      const blockStart = Math.max(0, searchEnd - BLOCK);
+      const blockLen = searchEnd - blockStart;
+      const buf = Buffer.alloc(blockLen);
+      fs.readSync(fd, buf, 0, blockLen, blockStart);
+      for (let i = blockLen - 1; i >= 0; i--) {
+        if (buf[i] === 0x0A) {
+          const nlAbs = blockStart + i;
+          if (nlAbs === stat.size - 1) return; // file ends with \n — clean
+          // Truncate the partial tail after the last newline.
+          fs.ftruncateSync(fd, nlAbs + 1);
+          found = true;
+          break;
+        }
+      }
+      searchEnd = blockStart;
     }
-    if (lastNl === length - 1) return; // file already ends with \n
-    if (lastNl < 0) {
-      // No newline at all — the file is one big partial line. Truncate
-      // the entire file to zero.
+    if (!found) {
+      // No newline in the entire file — one big partial line.
       fs.ftruncateSync(fd, 0);
-      return;
     }
-    // Truncate to (start + lastNl + 1) bytes — the byte just after
-    // the last newline, which is the start of the partial line.
-    fs.ftruncateSync(fd, start + lastNl + 1);
   } finally {
     fs.closeSync(fd);
   }

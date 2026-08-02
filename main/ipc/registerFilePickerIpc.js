@@ -87,11 +87,23 @@ function register({ getMainWindow }) {
   // adapter (validates the 4 contract fields, preserves grantId/
   // capabilities, catches throws).
   // ---------------------------------------------------------------------
-  secureHandle('file:saveAs', { getMainWindow }, wrapFilePickerHandler(async (_e, srcPath) => {
+  secureHandle('file:saveAs', { getMainWindow }, wrapFilePickerHandler(async (_e, srcPath, sourceReadGrantId) => {
     if (!srcPath || typeof srcPath !== 'string') {
       return { ok: false, error: 'srcPath is required.' };
     }
-    if (!pathSecurity.isPathUnderAny(srcPath)) {
+    // H-037 (_5 audit): accept a source read grant from the picker instead
+    // of requiring the source to be under a global trust root. A file chosen
+    // via file:pick lives outside trust roots by design — its read grant IS
+    // the authorization. Fall back to trust-root check for backward compat.
+    if (sourceReadGrantId && typeof sourceReadGrantId === 'string') {
+      const srcAuth = pathGrantService.authorize(sourceReadGrantId, {
+        operation: 'read',
+        path: srcPath,
+      });
+      if (!srcAuth.ok) {
+        return { ok: false, error: 'Source read grant invalid: ' + srcAuth.error };
+      }
+    } else if (!pathSecurity.isPathUnderAny(srcPath)) {
       return { ok: false, error: 'Source path is outside the allowed directories.' };
     }
     const fs = require('fs');

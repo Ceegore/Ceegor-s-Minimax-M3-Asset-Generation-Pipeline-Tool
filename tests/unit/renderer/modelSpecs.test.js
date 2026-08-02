@@ -160,8 +160,17 @@ test('H7-020: validateValues rejects Hailuo-2.3-Fast + 512P', () => {
   bad('video', { model: 'MiniMax-Hailuo-2.3-Fast', resolution: '512P', duration: 6 }, /not supported by MiniMax-Hailuo-2.3-Fast/);
 });
 
-test('H7-020: validateValues accepts Hailuo-02 + 512P (first/last frame mode)', () => {
-  ok('video', { model: 'MiniMax-Hailuo-02', resolution: '512P', duration: 6, 'first-frame': 'a.png', 'last-frame': 'b.png' });
+// H-003 (_5 audit): FL2V mode (first+last frame) does NOT support 512P.
+// The old H7-020 test expected 512P to pass; the audit explicitly
+// requires it to be blocked.
+test('H-003: validateValues rejects Hailuo-02 + 512P in FL2V mode (first+last frame)', () => {
+  const { errors } = validateValues('video', { model: 'MiniMax-Hailuo-02', resolution: '512P', duration: 6, 'first-frame': 'a.png', 'last-frame': 'b.png' });
+  assert.ok(errors.length > 0, 'FL2V + 512P must be rejected');
+  assert.ok(errors.some((e) => /512P/.test(e) && /FL2V|first\+last/i.test(e)), 'error must mention 512P and FL2V');
+});
+
+test('H-003: validateValues accepts Hailuo-02 + 512P in I2V mode (first frame only)', () => {
+  ok('video', { model: 'MiniMax-Hailuo-02', resolution: '512P', duration: 6, 'first-frame': 'a.png' });
 });
 
 test('H7-020: resolutionsForVideoModel returns 768P for an unknown model', () => {

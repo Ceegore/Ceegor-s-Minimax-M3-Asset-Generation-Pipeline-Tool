@@ -42,9 +42,11 @@ function loadWithMocks(mockSpawn) {
     return realLoad.call(this, request, parent, isMain);
   };
   const inpaintPath = require.resolve(path.join(ROOT, 'src', 'inpaint', 'index.js'));
-  const regPath = require.resolve(path.join(ROOT, 'src', 'jobRegistry.js'));
+  const regPath = require.resolve(path.join(ROOT, 'src', 'services', 'jobRegistryCompat.js'));
+  const ctrlPath = require.resolve(path.join(ROOT, 'src', 'services', 'JobController.js'));
   delete require.cache[inpaintPath];
   delete require.cache[regPath];
+  delete require.cache[ctrlPath];
   try {
     const inpaint = require(inpaintPath);
     const jobRegistry = require(regPath);

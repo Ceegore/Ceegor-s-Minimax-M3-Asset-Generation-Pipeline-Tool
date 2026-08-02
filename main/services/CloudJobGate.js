@@ -20,6 +20,8 @@
 //   finally { gate.release(slot.id); }
 // ============================================================================
 'use strict';
+const fs = require('fs');
+const path = require('path');
 
 /** Maximum parallel cloud jobs across all providers. */
 const MAX_GLOBAL_CONCURRENCY = 4;
@@ -41,7 +43,39 @@ let _dailyCount = 0;
 let _dailyBudget = DEFAULT_DAILY_BUDGET;
 let _dailyResetDate = new Date().toDateString();
 
+// H-025 (_5 audit): separate counter for free metadata queries (model
+// listing). These must NOT consume the paid generation budget.
+let _metadataCount = 0;
+const MAX_METADATA_PER_DAY = 100;
+
 let _nextSlotId = 1;
+
+// H-025 (_5 audit): persist the daily counter so a restart does not
+// reset the budget. The file lives next to the app config.
+function _budgetFilePath() {
+  try {
+    const { configDir } = require('../../src/config');
+    return path.join(configDir(), 'daily-budget.json');
+  } catch (_) { return null; }
+}
+function _loadPersistedBudget() {
+  const fp = _budgetFilePath();
+  if (!fp) return;
+  try {
+    const raw = JSON.parse(fs.readFileSync(fp, 'utf8'));
+    if (raw.date === _dailyResetDate && typeof raw.count === 'number') {
+      _dailyCount = raw.count;
+    }
+  } catch (_) { /* first run or corrupt — start fresh */ }
+}
+function _persistBudget() {
+  const fp = _budgetFilePath();
+  if (!fp) return;
+  try {
+    fs.writeFileSync(fp, JSON.stringify({ date: _dailyResetDate, count: _dailyCount }));
+  } catch (_) { /* best-effort — never crash on persist failure */ }
+}
+_loadPersistedBudget();
 
 /**
  * Reset the daily counter if the date has changed.
@@ -51,6 +85,8 @@ function _maybeResetDaily() {
   if (today !== _dailyResetDate) {
     _dailyResetDate = today;
     _dailyCount = 0;
+    _metadataCount = 0;
+    _persistBudget();
   }
 }
 
@@ -60,10 +96,13 @@ function _maybeResetDaily() {
  * Two provider configs pointing at the same API host share a rate window,
  * preventing a user from bypassing the RPM cap by duplicating configs.
  * @param {string} providerOrOrigin - Provider identifier or baseUrl origin.
+ * @param {{metadata?: boolean}} [opts] - metadata:true for free queries
+ *   (model listing) that do NOT consume the paid generation budget.
  * @returns {{ok: true, id: number} | {ok: false, error: string, retryAfterMs?: number}}
  */
-function acquire(providerOrOrigin) {
+function acquire(providerOrOrigin, opts) {
   _maybeResetDaily();
+  const isMetadata = !!(opts && opts.metadata);
 
   // MED-040: normalize to origin. If the caller passes a URL-like string,
   // extract the host; otherwise use the provider ID as-is.
@@ -92,7 +131,13 @@ function acquire(providerOrOrigin) {
   }
 
   // 3. Daily budget check
-  if (_dailyBudget > 0 && _dailyCount >= _dailyBudget) {
+  // H-025 (_5 audit): metadata queries (model listing) use a separate
+  // free counter and do NOT consume the paid generation budget.
+  if (isMetadata) {
+    if (_metadataCount >= MAX_METADATA_PER_DAY) {
+      return { ok: false, error: `Daily metadata query limit reached (${MAX_METADATA_PER_DAY}). Try again tomorrow.` };
+    }
+  } else if (_dailyBudget > 0 && _dailyCount >= _dailyBudget) {
     return { ok: false, error: `Daily API budget exhausted (${_dailyBudget} calls). Reset at midnight or increase the limit in settings.` };
   }
 
@@ -100,7 +145,12 @@ function acquire(providerOrOrigin) {
   const id = _nextSlotId++;
   _activeSlots.set(String(id), { provider: rateKey, startedAt: now });
   fresh.push(now);
-  _dailyCount++;
+  if (isMetadata) {
+    _metadataCount++;
+  } else {
+    _dailyCount++;
+    _persistBudget();
+  }
 
   return { ok: true, id };
 }
@@ -124,6 +174,8 @@ function getStatus() {
     maxConcurrency: MAX_GLOBAL_CONCURRENCY,
     dailyCount: _dailyCount,
     dailyBudget: _dailyBudget,
+    metadataCount: _metadataCount,
+    maxMetadataPerDay: MAX_METADATA_PER_DAY,
   };
 }
 
@@ -151,4 +203,5 @@ module.exports = {
   MAX_GLOBAL_CONCURRENCY,
   MAX_PER_PROVIDER_RPM,
   DEFAULT_DAILY_BUDGET,
+  MAX_METADATA_PER_DAY,
 };

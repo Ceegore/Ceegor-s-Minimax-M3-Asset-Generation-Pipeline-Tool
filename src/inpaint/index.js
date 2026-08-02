@@ -15,7 +15,7 @@ const { spawn } = require('child_process');
 const { resolveModelKey, pickAutoModel, getModel } = require('./modelRegistry');
 const { getSafeProcessEnv } = require('../cpuGuard');
 const assetPaths = require('../assetPaths');
-const jobRegistry = require('../jobRegistry');
+const jobRegistry = require('../services/jobRegistryCompat');
 
 function findModelPath(modelFile) {
   const p = assetPaths.resolveAsset('models', modelFile);
@@ -23,6 +23,44 @@ function findModelPath(modelFile) {
   const fallback = assetPaths.resolveAsset('', modelFile);
   if (fallback && fs.existsSync(fallback)) return fallback;
   return null;
+}
+
+// H-021 (_5 audit): validate that the ONNX output is a real, non-truncated
+// PNG with non-zero dimensions. Exit 0 + file-exists alone is insufficient
+// because the child can crash after creating an empty/partial file, or the
+// model can produce garbage that sharp still writes as a 0×0 image.
+const PNG_MAGIC = Buffer.from([0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A]);
+const MIN_OUTPUT_BYTES = 64; // smallest valid PNG is ~67 bytes
+
+function validatePngOutput(filePath) {
+  try {
+    const stat = fs.statSync(filePath);
+    if (stat.size < MIN_OUTPUT_BYTES) {
+      return { ok: false, error: 'output file is too small (' + stat.size + ' bytes) — likely truncated' };
+    }
+    const fd = fs.openSync(filePath, 'r');
+    const header = Buffer.alloc(24); // 8 magic + 4 len + 4 type + 4 IHDR dims (partial)
+    const bytesRead = fs.readSync(fd, header, 0, 24, 0);
+    fs.closeSync(fd);
+    if (bytesRead < 24) return { ok: false, error: 'output file too short to contain PNG header' };
+    if (!header.slice(0, 8).equals(PNG_MAGIC)) {
+      return { ok: false, error: 'output file does not have a valid PNG signature' };
+    }
+    // IHDR starts at offset 16 (after 8 magic + 4 chunk-length + 4 'IHDR').
+    // Width and height are big-endian uint32 at offsets 16 and 20.
+    const width = header.readUInt32BE(16);
+    const height = header.readUInt32BE(20);
+    if (width === 0 || height === 0) {
+      return { ok: false, error: 'output PNG has zero dimensions (' + width + 'x' + height + ')' };
+    }
+    // Sanity: reject absurdly large outputs (> 32768 per axis).
+    if (width > 32768 || height > 32768) {
+      return { ok: false, error: 'output PNG dimensions exceed pixel budget (' + width + 'x' + height + ')' };
+    }
+    return { ok: true, width, height };
+  } catch (e) {
+    return { ok: false, error: 'output validation failed: ' + (e && e.message || e) };
+  }
 }
 
 // Run AI inpaint. `maskPath` is a grayscale PNG (white = fill).
@@ -93,7 +131,13 @@ function runOnnx(srcPath, maskPath, dstPath, opts) {
       try { proc.kill('SIGKILL'); } catch (_) {}
       resolveP({ ok: false, code: -1, stderr: 'inpaint_node timed out after ' + Math.round(timeoutMs / 1000) + 's and was killed.', outputPath: null });
     }, timeoutMs);
-    proc.stderr.on('data', (b) => { stderr += b.toString('utf8'); });
+    // H-021 (_5 audit): cap stderr at 1 MB to prevent memory exhaustion
+    // from a chatty or broken child process.
+    const STDERR_CAP = 1024 * 1024;
+    proc.stderr.on('data', (b) => {
+      if (stderr.length < STDERR_CAP) stderr += b.toString('utf8');
+      else if (stderr.length === STDERR_CAP) stderr += '\n[stderr truncated at 1 MB]';
+    });
     proc.on('error', (err) => {
       if (killed) return;
       clearTimeout(killTimer);
@@ -105,7 +149,14 @@ function runOnnx(srcPath, maskPath, dstPath, opts) {
       if (opts.jobId) jobRegistry.unregister(opts.jobId, proc);
       if (killed) return;
       if (code === 0 && fs.existsSync(dstPath)) {
-        resolveP({ ok: true, code, stderr, outputPath: dstPath });
+        // H-021 (_5 audit): validate the output is a real, decodable PNG
+        // with non-zero dimensions before reporting success.
+        const check = validatePngOutput(dstPath);
+        if (!check.ok) {
+          resolveP({ ok: false, code, stderr: stderr + '\nOutput validation: ' + check.error, outputPath: null });
+        } else {
+          resolveP({ ok: true, code, stderr, outputPath: dstPath });
+        }
       } else {
         resolveP({ ok: false, code, stderr: stderr || ('inpaint_node exited with code ' + code), outputPath: null });
       }

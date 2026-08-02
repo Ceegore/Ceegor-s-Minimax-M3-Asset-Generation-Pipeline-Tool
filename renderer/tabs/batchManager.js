@@ -326,7 +326,7 @@ async function startBatchGen(tabKey, opts) {
     log.scrollTop = log.scrollHeight;
   }
 
-  let ok = 0, fail = 0, skipped = 0;
+  let ok = 0, fail = 0, partial = 0, skipped = 0;
   let batchError = null;
   // Seed the per-tab "batch queue left" counter so the per-tab ETA
   // timer (section10) can include the remaining
@@ -568,9 +568,22 @@ async function startBatchGen(tabKey, opts) {
           });
           const vt = currentVariantsCount > 1 ? ` v${vi + 1}/${currentVariantsCount}` : '';
           if (d.ok) {
-            ok++; logLine(`✓ ${i + 1}/${items.length}${vt} OK`, 'ok'); batchResults.push({ status: 'ok' });
+            // H-056: status 'partial' = generated but a row-REQUESTED postprocess
+            // op failed. The raw deliverable is kept on disk, but the item must
+            // NOT count as a full success: itemAllVariantsOk stays false so the
+            // auto-remove below never deletes the queue row, and the history/
+            // summary records 'partial' so the failure is visible afterwards.
+            const ppFailed = d.status === 'partial' && Array.isArray(d.postprocessErrors) && d.postprocessErrors.length > 0;
+            if (ppFailed) {
+              itemAllVariantsOk = false; partial++;
+              logLine(`⚠ ${i + 1}/${items.length}${vt} partial — generated, but postprocess failed: ${d.postprocessErrors[0]}`, 'warn');
+              batchResults.push({ status: 'partial', error: `item ${i + 1}${vt}: postprocess failed: ${d.postprocessErrors.join('; ')}` });
+            } else {
+              ok++; logLine(`✓ ${i + 1}/${items.length}${vt} OK`, 'ok'); batchResults.push({ status: 'ok' });
+            }
             // T5: surface the just-generated asset in the Assets preview
-            // pane, exactly like an interactive Generate does.
+            // pane, exactly like an interactive Generate does. (Also for a
+            // partial — a raw/last-successful deliverable exists.)
             try {
               if (d.outFile) {
                 if (tabKey === 'image' && typeof window.notifyImageGenerated === 'function') window.notifyImageGenerated(d.outFile);
@@ -590,6 +603,11 @@ async function startBatchGen(tabKey, opts) {
         // DOM can't just be scraped.
         state.genLastResult = state.genLastResult || { image: null, speech: null, music: null, video: null };
         state.genLastResult[tabKey] = null;
+        // H-056 (DOM-fallback parity): reset the per-tab postprocess-error slot
+        // the gen handlers fill (imageTab/speechTab/musicTab) so THIS item's
+        // postprocess outcome is read, not a stale one from the previous item.
+        state.genLastPostprocessErrors = state.genLastPostprocessErrors || {};
+        state.genLastPostprocessErrors[tabKey] = null;
         // Trigger generation. The click handler is async — we poll
         // the per-tab running flag to detect when it has set the busy
         // signal (i.e. the handler started).
@@ -623,7 +641,17 @@ async function startBatchGen(tabKey, opts) {
         const looksOk = outcome === 'ok'
           || (outcome == null && preview && preview.querySelector('img, video, audio'));
         const variantTag = currentVariantsCount > 1 ? ` v${vi + 1}/${currentVariantsCount}` : '';
-        if (looksOk) { ok++; logLine(`✓ ${i + 1}/${items.length}${variantTag} OK`, 'ok'); batchResults.push({ status: 'ok' }); }
+        // H-056 (DOM-fallback parity): the gen handler records the postprocess
+        // errors for the row's requested ops on state.genLastPostprocessErrors.
+        // A generation that succeeded but whose requested postprocess failed is
+        // a PARTIAL — keep the row in the queue (no auto-remove) + record it.
+        const domPpErrs = (state.genLastPostprocessErrors && state.genLastPostprocessErrors[tabKey]) || null;
+        if (looksOk && Array.isArray(domPpErrs) && domPpErrs.length > 0) {
+          itemAllVariantsOk = false; partial++;
+          logLine(`⚠ ${i + 1}/${items.length}${variantTag} partial — generated, but postprocess failed: ${domPpErrs[0]}`, 'warn');
+          batchResults.push({ status: 'partial', error: `item ${i + 1}${variantTag}: postprocess failed: ${domPpErrs.join('; ')}` });
+        }
+        else if (looksOk) { ok++; logLine(`✓ ${i + 1}/${items.length}${variantTag} OK`, 'ok'); batchResults.push({ status: 'ok' }); }
         else { itemAllVariantsOk = false; fail++; logLine(`✗ ${i + 1}/${items.length}${variantTag} FAILED`, 'err'); batchResults.push({ status: 'err', error: `item ${i + 1}${variantTag} failed` }); }
         // Remove successful items from state.batches[tabKey] immediately
         // (when auto-remove is on). Done after the LAST variant of the
@@ -713,7 +741,7 @@ async function startBatchGen(tabKey, opts) {
     // Failed / skipped-defective / aborted runs KEEP the overlay (with a
     // Close button) so the per-item log — WHICH item failed or was
     // skipped — can still be inspected (same rule as the toast's 'warn').
-    if (!batchError && fail === 0 && skipped === 0 && !window._batchAbortByTab[tabKey]) {
+    if (!batchError && fail === 0 && partial === 0 && skipped === 0 && !window._batchAbortByTab[tabKey]) {
       overlay.remove();
     } else {
       stopBtn.textContent = 'Close';
@@ -750,11 +778,12 @@ async function startBatchGen(tabKey, opts) {
     if (styleSel) styleSel.value = savedStyle;
     if (variantsSel) variantsSel.value = savedVariants;
   });
+  const partialNote = partial > 0 ? `, ${partial} partial (postprocess failed)` : '';
   const skipNote = skipped > 0 ? `, ${skipped} skipped (defective)` : '';
   // H3-B9: the .lastcmd span was removed; the summary is shown via toast
   // (below) and in the job details (returned at the end of runFn).
 
-  toast(`BatchGen done: ${ok} ok, ${fail} failed${skipNote}.`, batchError ? 'err' : ((fail === 0 && skipped === 0) ? 'ok' : 'warn'), 6000);
+  toast(`BatchGen done: ${ok} ok, ${fail} failed${partialNote}${skipNote}.`, batchError ? 'err' : ((fail === 0 && partial === 0 && skipped === 0) ? 'ok' : 'warn'), 6000);
   // Refresh the per-tab batch buttons so the "Start BatchGen (N)" count
   // reflects any items auto-removed during this run (otherwise the count
   // stays stale until the next manual refresh / tab rebuild).

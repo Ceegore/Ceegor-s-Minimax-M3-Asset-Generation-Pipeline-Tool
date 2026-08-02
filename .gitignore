@@ -11,8 +11,10 @@ bin/
 config.txt
 batches.json
 state.json
+providers.json
 generated/
 output/
+test-output.txt
 
 # ---- build artifacts ----
 dist/

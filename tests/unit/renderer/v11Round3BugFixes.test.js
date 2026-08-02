@@ -257,9 +257,11 @@ test('M7 FIX: fileBrowser.moveTo falls back to copy+delete on EXDEV', () => {
   const s = src('src/fileBrowser.js');
   assert.ok(s.includes("'EXDEV'"),
     'moveTo must check for EXDEV (cross-device link error)');
-  assert.ok(/EXDEV[\s\S]{0,300}?fs\.cp/.test(s),
-    'on EXDEV, moveTo must fall back to fs.cp (copy) so cross-drive moves work');
-  assert.ok(/EXDEV[\s\S]{0,500}?fs\.rm/.test(s),
+  // H-032 hardened: moveTo now uses fs.link (atomic no-clobber) with
+  // COPYFILE_EXCL fallback for cross-device moves instead of fs.cp.
+  assert.ok(s.includes('COPYFILE_EXCL'),
+    'on EXDEV, moveTo must fall back to COPYFILE_EXCL (atomic no-clobber copy)');
+  assert.ok(/COPYFILE_EXCL[\s\S]{0,200}?fs\.rm/.test(s),
     'on EXDEV, moveTo must remove the source after the copy (completing the move semantics)');
 });
 

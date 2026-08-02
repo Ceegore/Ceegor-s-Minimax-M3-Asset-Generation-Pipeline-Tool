@@ -100,8 +100,12 @@ test('L8 FIX: startGenPolling has a _genPollActive flag', () => {
 // ============================================================================
 test('L9 FIX: fbSelectAll only selects visible items', () => {
   const s = src('renderer/services/fileBrowser1.js');
-  assert.ok(s.includes('const visibleItems = state._fbItems.filter((it) => isItemVisibleInList(it))'),
-    'fbSelectAll must filter state._fbItems through isItemVisibleInList so hidden items are not pre-checked');
+  // H-047 (_5 audit) extended the L9 gate: selection must honour BOTH the
+  // supported-types gate (isItemVisibleInList) AND the live text search +
+  // type filter (matchesFileBrowserFilters). Assert the combined predicate
+  // so neither gate can be dropped silently.
+  assert.ok(s.includes('isItemVisibleInList(it) && matchesFileBrowserFilters(it, fState)'),
+    'fbSelectAll must filter state._fbItems through isItemVisibleInList AND matchesFileBrowserFilters so hidden items are not pre-checked');
 });
 
 // ============================================================================
@@ -159,13 +163,20 @@ test('L12 FIX: InstallDownloadService extracts to a staging dir then moves', () 
 // ============================================================================
 test('L13 FIX: mmx.js cancel uses SIGKILL escalation', () => {
   const s = src('src/mmx.js');
+  // The kill/cancel implementation was extracted to src/mmxProcTracker.js
+  // to keep mmx.js under its frozen 542-LOC SIZE-BUDGET. mmx.js imports it.
+  assert.ok(s.includes('mmxProcTracker'),
+    'mmx.js must import the proc tracker from mmxProcTracker');
   assert.ok(s.includes('_killWithEscalation'),
-    'mmx.js must define a _killWithEscalation helper');
-  assert.ok(/_killWithEscalation[\s\S]{0,300}?SIGTERM[\s\S]{0,300}?SIGKILL/.test(s),
+    'mmx.js must reference _killWithEscalation (via import alias)');
+  const tracker = src('src/mmxProcTracker.js');
+  assert.ok(tracker.includes('_killWithEscalation'),
+    'mmxProcTracker.js must define a _killWithEscalation helper');
+  assert.ok(/_killWithEscalation[\s\S]{0,300}?SIGTERM[\s\S]{0,300}?SIGKILL/.test(tracker),
     '_killWithEscalation must send SIGTERM then SIGKILL after 2s');
-  assert.ok(/cancelOne[\s\S]{0,200}?_killWithEscalation/.test(s),
+  assert.ok(/cancelOne[\s\S]{0,200}?_killWithEscalation/.test(tracker),
     'cancelOne must use _killWithEscalation');
-  assert.ok(/cancelAll[\s\S]{0,200}?_killWithEscalation/.test(s),
+  assert.ok(/cancelAll[\s\S]{0,200}?_killWithEscalation/.test(tracker),
     'cancelAll must use _killWithEscalation');
 });
 

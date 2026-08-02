@@ -432,6 +432,7 @@ Wird vom `mmx:cancel`-Handler und vom Close-Confirm-Guard aufgerufen.
 | `app:resetAllData` | `resetAllData()` | `main/ipc/registerResetIpc.js` | — | `{ ok, results: [{file, ok, error?}] }` | löscht NUR Tool-eigene Dateien (config.txt, state.json, batches.json, archive) + mmx CLI api_key. NIEMALS Assets. |
 | `app:relaunch` | `relaunchApp()` | `main/ipc/registerResetIpc.js` | — | (app restartet) | Plain restart; preserves all local data. |
 | `app:resetAndRelaunch` | `resetAndRelaunch()` | `main/ipc/registerResetIpc.js` | — | (app restartet) | Deletes the tool's local config/state immediately before restarting. Used only by the explicit Reset flow. |
+| `app:confirmResetAndRelaunch` | `confirmResetAndRelaunch()` | `main/ipc/registerResetIpc.js` | — | `{ok:false, canceled:true}` \| `{ok:false, error, results}` \| (app restartet) | B-009: single Main-owned reset transaction. Main shows a FIXED native warning dialog, deletes + verifies on confirm, relaunches only on full success. Cancel mutates nothing. |
 
 ## F3 — M3 in-tool document generation
 

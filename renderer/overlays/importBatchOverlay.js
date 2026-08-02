@@ -114,8 +114,10 @@
             },
           };
 
-          const result = await window.M3DocPipeline.run(gddText, opts);
-          _cancelFn = result.cancelToken ? result.cancelToken.cancel.bind(result.cancelToken) : null;
+          // H-005: use start() so cancel is wired BEFORE the pipeline finishes.
+          const handle = window.M3DocPipeline.start(gddText, opts);
+          _cancelFn = handle.cancel;
+          const result = await handle.promise;
           if (result.ok) {
             m3Progress.textContent = 'Done! Opening import review…';
             window.BatchManager.importBatchFromContent(result.doc);

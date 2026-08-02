@@ -106,6 +106,7 @@ test('counter is shared across multiple invocations on the same counter object',
 // and on collision bumps the counter (never randomizes). Pure
 // re-implementation mirroring the app.js contract, with a fake
 // fbExists so the test has no Electron/IPC dependency.
+// H-050 (_5 audit): errors are now fail-CLOSED (exists = true).
 async function nextFreeForcePrefixPath(dir, counter, prefix, ext, fbExists) {
   const sep = dir.includes('\\') ? '\\' : '/';
   const base = dir.replace(/[\\/]+$/, '');
@@ -113,7 +114,7 @@ async function nextFreeForcePrefixPath(dir, counter, prefix, ext, fbExists) {
     const name = buildForcePrefixFileName(counter, prefix, ext);
     const full = base + sep + name;
     let exists = false;
-    try { exists = await fbExists(full); } catch { exists = false; }
+    try { exists = await fbExists(full); } catch { exists = true; } // H-050: fail-CLOSED
     if (!exists) return full;
   }
 }
@@ -138,8 +139,14 @@ test('nextFreeForcePrefixPath bumps the counter past existing files instead of r
   assert.equal(full, 'C:\\out\\temp000003.png');
 });
 
-test('nextFreeForcePrefixPath treats an fbExists rejection as "does not exist" (fail-open, not throw)', async () => {
+test('nextFreeForcePrefixPath treats an fbExists rejection as occupied (H-050 fail-CLOSED, bumps counter)', async () => {
   const c = { n: 0 };
-  const full = await nextFreeForcePrefixPath('C:\\out', c, 'temp', 'png', async () => { throw new Error('ipc down'); });
-  assert.equal(full, 'C:\\out\\temp000001.png');
+  let call = 0;
+  const full = await nextFreeForcePrefixPath('C:\\out', c, 'temp', 'png', async () => {
+    call++;
+    if (call === 1) throw new Error('ipc down');
+    return false; // 2nd call: free
+  });
+  // First path errored → treated as occupied → counter bumped to 2.
+  assert.equal(full, 'C:\\out\\temp000002.png');
 });

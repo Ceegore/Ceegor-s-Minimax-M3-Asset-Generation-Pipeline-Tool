@@ -586,6 +586,12 @@ window.TABS.image = {
           let outFile = await makeOutPath(v);
           const args = baseArgs.slice();
           if (!useOutDir) args.push('--out', outFile);
+          // B-002: mint a read grant for the local --subject-ref image (the
+          // composite's `image=` part) — the output write grant does not
+          // cover e.g. C:\refs\face.png. URL refs are skipped (no grant).
+          // GrantCache caches the mint, so per-variant calls are cheap.
+          const readGrantIds = (window.GrantHelper && window.GrantHelper.ensureMmxReadGrants)
+            ? await window.GrantHelper.ensureMmxReadGrants(args) : [];
           // H3-B9: log the command to the structured log (replaces the
           // removed .lastcmd span). The command is masked to hide the API key.
           const maskedCmd = maskLine(`mmx ${args.join(' ')}`);
@@ -606,7 +612,7 @@ window.TABS.image = {
           // pattern we see in the field is almost always a backend hiccup
           // that succeeds on retry. We also detect rate-limit messages and
           // wait longer for those.
-          let r = await window.api.mmxRunJob({ args, jobId: ctrl.jobId }, mmxGrant);
+          let r = await window.api.mmxRunJob({ args, jobId: ctrl.jobId, readGrantIds }, mmxGrant);
           if (!r.ok && !cancel.wasCancelled() && !isRetryableMmxError(r, formatMmxError(r))) {
             // Permanent errors (a missing --subject-ref image, or any
             // permanent input/auth/quota error) can't succeed on retry —
@@ -635,21 +641,18 @@ window.TABS.image = {
               await new Promise((res) => setTimeout(res, delay));
               if (cancel.wasCancelled()) break;
               setStatus(`Retrying image variant ${v}/${variantsCount} (attempt ${attempt + 1}/${maxRetries + 1})…`, true);
-              // FUNC-017: derive an attempt-isolated output path.
-              const attemptOutFile = useOutDir ? runDir : outFile.replace(/(\.\w+)$/, `_attempt_${attempt}$1`);
+              // FUNC-017 / H-010: per-attempt isolation (outDir → subdir, outFile → suffix).
+              const attemptOutFile = useOutDir ? runDir + '\\attempt_' + attempt : outFile.replace(/(\.\w+)$/, `_attempt_${attempt}$1`);
+              if (useOutDir && window.api && window.api.fbEnsureDir) { try { const _ag = window.GrantHelper ? await window.GrantHelper.ensureDirList(attemptOutFile) : undefined; await window.api.fbEnsureDir(attemptOutFile, _ag); } catch (_) {} }
               const retryArgs = args.slice();
-              if (!useOutDir) {
-                const outIdx = retryArgs.indexOf('--out');
-                if (outIdx !== -1) retryArgs[outIdx + 1] = attemptOutFile;
-              }
-              r = await window.api.mmxRunJob({ args: retryArgs, jobId: ctrl.jobId }, mmxGrant);
+              const _fi = retryArgs.indexOf(useOutDir ? '--out-dir' : '--out');
+              if (_fi !== -1) retryArgs[_fi + 1] = attemptOutFile;
+              r = await window.api.mmxRunJob({ args: retryArgs, jobId: ctrl.jobId, readGrantIds }, mmxGrant);
               if (r.ok) {
-                // Promote: the successful attempt's file becomes the canonical output.
-                if (!useOutDir) outFile = attemptOutFile;
+                if (useOutDir) runDir = attemptOutFile; else outFile = attemptOutFile;
                 toast(`Image variant ${v}/${variantsCount} succeeded on retry ${attempt}.`, 'ok', 2500);
                 break;
               }
-              // Inventory the failed attempt's partial file (best-effort).
               if (!useOutDir) failedAttemptPaths.push(attemptOutFile);
             }
             if (!r.ok) toast(`Image variant ${v}/${variantsCount} failed after ${maxRetries + 1} attempts: ${firstMsg}`, 'err', 6000);
@@ -860,9 +863,19 @@ window.TABS.image = {
             // R6.3: outputs is 1:1 with inputs; replace displayFiles.
             if (pp.outputs && pp.outputs.length) displayFiles = pp.outputs.slice();
             if (pp.applied.length) toast('Post-processed: ' + pp.applied.join(', '), 'ok', 4000);
-            if (pp.errors.length) toast('Post-process: ' + pp.errors.join('; '), 'warn', 6000);
+            if (pp.errors.length) {
+              toast('Post-process: ' + pp.errors.join('; '), 'warn', 6000);
+              // H-056: record the failed requested ops so the BatchGen runner
+              // (DOM-fallback path) reports this item as PARTIAL instead of a
+              // full success (which would auto-remove the queue row).
+              state.genLastPostprocessErrors = state.genLastPostprocessErrors || {};
+              state.genLastPostprocessErrors.image = pp.errors.slice();
+            }
           } catch (e) {
             console.error('Batch row postprocess failed', e);
+            // H-056: a throwing postprocess runner is also a failed requested step.
+            state.genLastPostprocessErrors = state.genLastPostprocessErrors || {};
+            state.genLastPostprocessErrors.image = ['postprocess runner threw: ' + (e && e.message || e)];
           }
         }
         // R6.4: pipeline enqueue AFTER postprocess.

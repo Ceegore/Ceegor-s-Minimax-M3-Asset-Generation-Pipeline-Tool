@@ -582,8 +582,19 @@ window.TABS.music = {
             const pp = await window.BatchPostprocess.runRowPostprocess(outFiles, state._batchRowPostprocess);
             if (pp.outputs && pp.outputs.length) finalOutFiles = pp.outputs.slice();
             if (pp.applied.length) toast('Post-processed: ' + pp.applied.join(', '), 'ok', 4000);
-            if (pp.errors.length) toast('Post-process: ' + pp.errors.join('; '), 'warn', 6000);
-          } catch (e) { console.error('Music batch postprocess failed', e); }
+            if (pp.errors.length) {
+              toast('Post-process: ' + pp.errors.join('; '), 'warn', 6000);
+              // H-056: record the failed requested ops so the BatchGen runner
+              // (DOM-fallback path) reports this item as PARTIAL, not full success.
+              state.genLastPostprocessErrors = state.genLastPostprocessErrors || {};
+              state.genLastPostprocessErrors.music = pp.errors.slice();
+            }
+          } catch (e) {
+            console.error('Music batch postprocess failed', e);
+            // H-056: a throwing postprocess runner is also a failed requested step.
+            state.genLastPostprocessErrors = state.genLastPostprocessErrors || {};
+            state.genLastPostprocessErrors.music = ['postprocess runner threw: ' + (e && e.message || e)];
+          }
         }
         return { status: 'ok', outputPaths: finalOutFiles };
       }

@@ -39,6 +39,11 @@ function writableAssetsDir(userDataPath = config.userDataPath) {
   return dir;
 }
 
+// H-065: READ-ONLY resolution. Returns the writable override when it exists,
+// otherwise the bundled asset, otherwise the (non-existent) override path.
+// This function must NEVER be used to compute a WRITE destination — if the
+// bundled asset exists, the returned path points into resources/bin, which is
+// read-only in packaged builds. Use resolveWritableOverride() for writes.
 function resolveAsset(kind, filename, { appRoot = config.appRoot, resourcesPath = config.resourcesPath, userDataPath = config.userDataPath } = {}) {
   const partsOverride = ['assets'];
   const partsBundled = [];
@@ -49,15 +54,11 @@ function resolveAsset(kind, filename, { appRoot = config.appRoot, resourcesPath 
   partsOverride.push(filename);
   partsBundled.push(filename);
 
-  // Check writable override first
+  // Check writable override first (pure read — H-065 removed the mkdir
+  // side-effect that used to create override dirs on every lookup).
   let overridePath = null;
   if (userDataPath) {
     overridePath = path.join(userDataPath, ...partsOverride);
-    // Ensure parent directory exists for write target (when resolving dest path)
-    const parentDir = path.dirname(overridePath);
-    if (!fs.existsSync(parentDir)) {
-      fs.mkdirSync(parentDir, { recursive: true });
-    }
     if (fs.existsSync(overridePath)) {
       return overridePath;
     }
@@ -73,10 +74,32 @@ function resolveAsset(kind, filename, { appRoot = config.appRoot, resourcesPath 
   return overridePath || bundledPath;
 }
 
+// H-065: WRITE-TARGET resolution. Always resolves into the writable override
+// directory (<userData>/assets/[kind/]filename), never into the bundled
+// resources tree. Creates the parent directory so the caller can write
+// immediately. Downloads, installs, and replace operations must use THIS
+// function — resolveAsset() would hand back the read-only bundled path
+// whenever a bundled copy of the asset exists.
+function resolveWritableOverride(kind, filename, { userDataPath = config.userDataPath } = {}) {
+  if (!userDataPath) {
+    throw new Error('userDataPath is required for resolveWritableOverride');
+  }
+  if (typeof filename !== 'string' || !filename) {
+    throw new Error('filename is required for resolveWritableOverride');
+  }
+  const parts = ['assets'];
+  if (kind) parts.push(kind);
+  parts.push(filename);
+  const dest = path.join(userDataPath, ...parts);
+  fs.mkdirSync(path.dirname(dest), { recursive: true });
+  return dest;
+}
+
 module.exports = {
   init,
   getConfig,
   bundledBinDir,
   writableAssetsDir,
-  resolveAsset
+  resolveAsset,
+  resolveWritableOverride
 };

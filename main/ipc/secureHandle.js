@@ -143,7 +143,37 @@ function secureHandle(channel, opts, handler) {
     }
 
     // --- Delegate to the actual handler ---
-    return handler(event, ...args);
+    // H-026 (_5 audit): central try/catch so NO handler — sync or async —
+    // can escape as an unhandled rejection. Every error is redacted and
+    // returned in the standard {ok:false} envelope. The wrapper stays
+    // synchronous so tests that call handlers directly still get plain
+    // values from sync handlers; async handlers return a Promise with
+    // .catch attached (Electron's ipcMain.handle awaits it in production).
+    try {
+      const result = handler(event, ...args);
+      if (result && typeof result.then === 'function') {
+        return result.catch((err) => {
+          const raw = String((err && err.message) || err || 'unknown error');
+          const redacted = raw
+            .replace(/sk-[a-zA-Z0-9_-]{8,}/g, 'sk-[REDACTED]')
+            .replace(/Bearer\s+[a-zA-Z0-9._-]{8,}/gi, 'Bearer [REDACTED]')
+            .replace(/--api-key[= ]\S+/gi, '--api-key=[REDACTED]')
+            .slice(0, 500);
+          try { console.error('[secureHandle] unhandled error on ' + channel + ':', err); } catch (_) {}
+          return { ok: false, error: redacted, code: 'HANDLER_ERROR' };
+        });
+      }
+      return result;
+    } catch (err) {
+      const raw = String((err && err.message) || err || 'unknown error');
+      const redacted = raw
+        .replace(/sk-[a-zA-Z0-9_-]{8,}/g, 'sk-[REDACTED]')
+        .replace(/Bearer\s+[a-zA-Z0-9._-]{8,}/gi, 'Bearer [REDACTED]')
+        .replace(/--api-key[= ]\S+/gi, '--api-key=[REDACTED]')
+        .slice(0, 500);
+      try { console.error('[secureHandle] unhandled error on ' + channel + ':', err); } catch (_) {}
+      return { ok: false, error: redacted, code: 'HANDLER_ERROR' };
+    }
   });
 }
 

@@ -13,7 +13,10 @@
       description: 'Generate on the active tab (same as clicking the big Generate button)',
       shortDescription: 'Generate on the active tab',
       allowInInput: true,
-      isAvailable: () => true,
+      // H-042 (_5 audit): block Ctrl+Enter when a modal/overlay is open —
+      // firing a paid generation job behind the user's back is a data-loss
+      // and billing hazard. Same gate as Ctrl+B / Ctrl+F / Ctrl+P.
+      isAvailable: () => !document.querySelector('#modal-root .modal, .image-editor-modal, .pipeline-overlay'),
       action: () => {
         const tab = state.currentTab;
         const genBtn = $(`#tab-${tab} .actions button.primary`);

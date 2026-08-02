@@ -91,7 +91,16 @@ window.TABS.video = {
         const sel = resolution.el || resolution.input;
         if (!sel || typeof window.resolutionsForVideoModel !== 'function') return;
         const currentModel = (model.el || model.input).value;
-        const allowed = window.resolutionsForVideoModel(currentModel);
+        // H-003 (_5 audit): use mode-aware resolution filtering. FL2V
+        // (first+last frame) excludes 512P even on Hailuo-02.
+        const hasFirst = !!(firstFrame.input.getValue && firstFrame.input.getValue().trim());
+        const hasLast = !!(lastFrame.input.getValue && lastFrame.input.getValue().trim());
+        const hasSubject = !!(subjectImage.input.getValue && subjectImage.input.getValue().trim());
+        const mode = (typeof window.deriveVideoMode === 'function')
+          ? window.deriveVideoMode(hasFirst, hasLast, hasSubject) : 'T2V';
+        const allowed = (typeof window.resolutionsForVideoMode === 'function')
+          ? window.resolutionsForVideoMode(currentModel, mode)
+          : window.resolutionsForVideoModel(currentModel);
         const prevValue = sel.value;
         // Friendly labels per resolution (kept in sync with the static list above).
         const labelFor = { '512P': '512P (Hailuo-02 only)', '768P': '768P (recommended, default)', '1080P': '1080P (6s only)' };
@@ -112,6 +121,11 @@ window.TABS.video = {
     // Rebuild on model change and once at build time so the initial option
     // list matches the default model (MiniMax-Hailuo-2.3 → 768P/1080P).
     (model.el || model.input).addEventListener('change', rebuildResolutionOptions);
+    // H-003: also rebuild when first/last frame or subject image changes
+    // (mode switch may add/remove resolutions).
+    if (firstFrame.input && firstFrame.input.addEventListener) firstFrame.input.addEventListener('change', rebuildResolutionOptions);
+    if (lastFrame.input && lastFrame.input.addEventListener) lastFrame.input.addEventListener('change', rebuildResolutionOptions);
+    if (subjectImage.input && subjectImage.input.addEventListener) subjectImage.input.addEventListener('change', rebuildResolutionOptions);
     rebuildResolutionOptions();
     const promptOpt = buildParamRow('--prompt-optimizer', {
       kind: 'boolean', default: true,
@@ -216,11 +230,22 @@ window.TABS.video = {
       // duration at 6s for 1080p). Without them, an invalid combo
       // slips through the renderer and gets rejected by mmx with a
       // generic 400.
+      // H-004 (_5 audit): compute the effective model BEFORE preflight so
+      // validation sees the same model that will actually be sent. Previously
+      // the preflight validated the form model, but the run switched to
+      // S2V-01/Hailuo-02 afterwards — allowing invalid combos through.
+      const preFirstFrame = firstFrame.input.getValue().trim();
+      const preLastFrame = lastFrame.input.getValue().trim();
+      const preSubjectImage = subjectImage.input.getValue().trim();
+      let preEffectiveModel = model.input.getValue();
+      const preIsDefault = !preEffectiveModel || preEffectiveModel === 'MiniMax-Hailuo-2.3';
+      if (preFirstFrame && preLastFrame && preIsDefault) preEffectiveModel = 'MiniMax-Hailuo-02';
+      else if (preSubjectImage && preIsDefault) preEffectiveModel = 'S2V-01';
       if (typeof mmxPreflightConfirm === 'function' && !(await mmxPreflightConfirm('video', {
-        model: model.input.getValue(), prompt: promptText,
-        'first-frame': firstFrame.input.getValue(),
-        'last-frame': lastFrame.input.getValue(),
-        'subject-image': subjectImage.input.getValue(),
+        model: preEffectiveModel, prompt: promptText,
+        'first-frame': preFirstFrame,
+        'last-frame': preLastFrame,
+        'subject-image': preSubjectImage,
         duration: duration.input.getValue(),
         resolution: resolution.input.getValue(),
       }))) return;
@@ -353,7 +378,13 @@ window.TABS.video = {
           // try/finally so the 1s interval is ALWAYS cleared — even if mmxRunJob rejects (IPC failure / crash);
           // clearing only on the happy path would leave it firing forever against a stale preview.
           try {
-            const r = await window.api.mmxRunJob({ args, jobId: ctrl.jobId }, mmxGrant);
+            // B-002: mint read grants for the local reference images
+            // (--first-frame / --last-frame / --subject-image) — the output
+            // write grant does not cover arbitrary ref paths. https:// URLs
+            // are skipped (no local grant needed).
+            const readGrantIds = (window.GrantHelper && window.GrantHelper.ensureMmxReadGrants)
+              ? await window.GrantHelper.ensureMmxReadGrants(args) : [];
+            const r = await window.api.mmxRunJob({ args, jobId: ctrl.jobId, readGrantIds }, mmxGrant);
             if (cancel.wasCancelled()) { allOk = false; break; }
             if (!r.ok) {
               const msg = formatMmxError(r);

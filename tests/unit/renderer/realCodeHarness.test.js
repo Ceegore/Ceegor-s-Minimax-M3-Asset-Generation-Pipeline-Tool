@@ -1696,8 +1696,10 @@ test('HARNESS 16: every tab generate handler is wrapped in JobRunner.run() with 
     // optional trailing arg — mmxRunJob({ args, jobId: ctrl.jobId }, mmxGrant).
     // Allow the optional ", <grant>" suffix so the jobId-routing guard still
     // pins the call shape without false-firing on the grant wiring.
-    assert.ok(/window\.api\.mmxRunJob\(\{\s*args,\s*jobId:\s*ctrl\.jobId\s*\}(,\s*[^)]*)?\)/.test(tabSrc),
-      `${tab}Tab.js: the generation call must use mmxRunJob({ args, jobId: ctrl.jobId }[, grantId]), not the legacy mmxRun(args) — without jobId, mmx:log lines can't be routed to this job (H4) and JobRunner.cancel(jobId) can't kill this specific proc`);
+    // B-002: the payload may also carry readGrantIds (read grants for local
+    // input reference paths) — allow the optional field before the brace.
+    assert.ok(/window\.api\.mmxRunJob\(\{\s*args,\s*jobId:\s*ctrl\.jobId\s*(,\s*readGrantIds\s*)?\}(,\s*[^)]*)?\)/.test(tabSrc),
+      `${tab}Tab.js: the generation call must use mmxRunJob({ args, jobId: ctrl.jobId[, readGrantIds] }[, grantId]), not the legacy mmxRun(args) — without jobId, mmx:log lines can't be routed to this job (H4) and JobRunner.cancel(jobId) can't kill this specific proc`);
     assert.ok(!/await window\.api\.mmxRun\(args\)/.test(tabSrc),
       `${tab}Tab.js: must not still call the legacy window.api.mmxRun(args) for the migrated generation path`);
     // The runFn must return a status for every exit path JobRunner needs

@@ -1,6 +1,16 @@
 // main/index.js — Electron main process composition root.
 // Configures global switches, registers all IPC handlers, and creates
 // the main BrowserWindow. Contains no business logic.
+//
+// H-049 (_5 audit): the entire boot is wrapped in an IIFE so the
+// single-instance loser can bail with an immediate `return` after
+// app.quit() — no IPC listeners, no log rotation, no crash handlers,
+// no whenReady, no lifecycle handlers are registered in the process
+// that is about to exit. Previously, app.quit() was called but
+// execution continued through ALL module-level init (async quit only
+// drains on the next tick), registering duplicate handlers and
+// rotating the first instance's log file.
+;(function bootstrap() {
 
 const path = require('path');
 const fs = require('fs');
@@ -8,6 +18,19 @@ const { app, BrowserWindow, ipcMain } = require('electron');
 
 const APP_ROOT = __dirname;
 const PARENT_ROOT = path.resolve(APP_ROOT, '..'); // __dirname = main/, parent = project root
+
+// P2-E (360° Audit M-025) + H-049 (_5 audit): single instance lock.
+// Prevents multiple app instances from corrupting shared state
+// (config.txt, providers.json, job archives). The loser quits
+// IMMEDIATELY — the IIFE `return` prevents ANY further boot code from
+// executing (assetPaths, log rotation, IPC listeners, crash handlers,
+// whenReady, lifecycle handlers). This MUST be the first executable
+// statement after the electron require.
+const _gotSingleInstanceLock = app.requestSingleInstanceLock();
+if (!_gotSingleInstanceLock) {
+  app.quit();
+  return; // H-049: bail — nothing below this line executes in the loser.
+}
 
 require('../src/assetPaths').init({
   appRoot: PARENT_ROOT,
@@ -87,21 +110,13 @@ if (RENDERER_LOG) {
   catch (_) {}
 }
 
-// P2-E (360° Audit M-025): single instance lock. Prevents multiple
-// app instances from corrupting shared state (config.txt, providers.json,
-// job archives). The second instance focuses the first window and quits.
-const _gotSingleInstanceLock = app.requestSingleInstanceLock();
-if (!_gotSingleInstanceLock) {
-  app.quit();
-} else {
-  app.on('second-instance', () => {
-    // Focus the existing window when a second instance is launched.
-    if (mainWindow) {
-      if (mainWindow.isMinimized()) mainWindow.restore();
-      mainWindow.focus();
-    }
-  });
-}
+app.on('second-instance', () => {
+  // Focus the existing window when a second instance is launched.
+  if (mainWindow) {
+    if (mainWindow.isMinimized()) mainWindow.restore();
+    mainWindow.focus();
+  }
+});
 
 // P1-H (360° Audit H-017): crash safety. On uncaughtException or
 // unhandledRejection, perform emergency cleanup (cancel jobs, clear
@@ -135,7 +150,7 @@ function _emergencyCrashCleanup(kind, err) {
     } catch (_) { /* best-effort */ }
     // 3. Cancel all active jobs
     try { require('../src/mmx').cancelAll(); } catch (_) {}
-    try { require('../src/jobRegistry').cancelAll(); } catch (_) {}
+    try { require('../src/services/jobRegistryCompat').cancelAll(); } catch (_) {}
     // 4. Clear secrets from memory
     try { require('./services/SessionCredentialStore').clearSessionCredential(); } catch (_) {}
   } catch (_) { /* last-resort: nothing more we can do */ }
@@ -193,6 +208,16 @@ app.whenReady().then(() => {
     console.error('[main] ensureOutputDir failed:', e);
   }
 
+  // H-024 (_5 audit): register the SecretStore with providersStore so provider
+  // API keys are migrated from plaintext to encrypted storage on first read.
+  try {
+    const providersStore = require('../src/providersStore');
+    const SecretStore = require('./services/SecretStore');
+    providersStore.registerSecretStore(SecretStore);
+  } catch (e) {
+    _queueLog('[main] SecretStore registration failed: ' + ((e && e.message) || e));
+  }
+
   for (const entry of ipcRegistrars) {
     try { entry.mod.register({ appRoot: PARENT_ROOT, getMainWindow }); }
     catch (e) {
@@ -215,7 +240,7 @@ app.whenReady().then(() => {
       try { require('../src/mmx').cancelAll(); } catch (_) {}
       // R6.6.1: also kill any backend processes registered with the
       // shared jobRegistry (Real-ESRGAN, IS-Net, Inpaint, Sharp).
-      try { require('../src/jobRegistry').cancelAll(); } catch (_) {}
+      try { require('../src/services/jobRegistryCompat').cancelAll(); } catch (_) {}
     },
   });
 
@@ -224,7 +249,7 @@ app.whenReady().then(() => {
       mainWindow = createMainWindow(PARENT_ROOT, {
         cancelActiveJobs: () => {
           try { require('../src/mmx').cancelAll(); } catch (_) {}
-          try { require('../src/jobRegistry').cancelAll(); } catch (_) {}
+          try { require('../src/services/jobRegistryCompat').cancelAll(); } catch (_) {}
         },
       });
     }
@@ -246,11 +271,13 @@ app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') app.quit();
 });
 
-// R2.1 (PP-1 mirror): wipe the store on window 'close' as well. The
-// window 'close' event fires BEFORE the renderer's last IPC handler
-// can race with the wipe, so a renderer-fired `mmx:run:job` cannot
-// re-set the credential after we've cleared it. We only register
-// this if mainWindow exists (it does after whenReady).
+// R2.1 (PP-1 mirror) + B-008: wipe the store on window 'closed' (NOT
+// 'close'). The 'close' event also fires for close attempts the user
+// then CANCELS in the confirm-before-close dialog — wiping there
+// destroyed the session-only credential on a canceled X-click, so the
+// very next generation failed with "no API key". 'closed' fires only
+// after the window is actually destroyed; at that point the renderer
+// is gone and can no longer race a `mmx:run:job` against the wipe.
 function _wipeSessionStoreBestEffort() {
   try {
     const sessionStore = require('./services/SessionCredentialStore');
@@ -259,7 +286,7 @@ function _wipeSessionStoreBestEffort() {
 }
 app.on('browser-window-created', (_e, win) => {
   if (!win || win.isDestroyed()) return;
-  win.on('close', _wipeSessionStoreBestEffort);
+  win.on('closed', _wipeSessionStoreBestEffort);
 });
 
 // Graceful shutdown: ask the renderer to flush in-flight job summaries,
@@ -267,20 +294,34 @@ app.on('browser-window-created', (_e, win) => {
 // doesn't respond or the procs don't exit in time, the app exits anyway.
 let _shuttingDown = false;
 app.on('before-quit', () => {
-  if (_shuttingDown) return;
-  _shuttingDown = true;
+  // B-008: `before-quit` also fires for quit REQUESTS that the user can
+  // still cancel (macOS Cmd+Q, external app.quit() while the window is
+  // open — the confirm-before-close guard runs AFTER this event and may
+  // preventDefault the close, aborting the quit). Running cancelAll()
+  // here killed every in-flight generation even when the user then
+  // picked "Cancel". While a live main window exists, the close guard
+  // owns the destructive shutdown work (hooks.cancelActiveJobs after
+  // explicit confirmation); we do nothing destructive here. Once the
+  // window is really gone, quit proceeds and this handler fires again
+  // with no live window — then the cleanup runs.
   try {
     const win = mainWindow;
     if (win && !win.isDestroyed()) {
+      // Non-destructive flush signal: the renderer persists in-flight
+      // job summaries + state.json (best-effort, quit not blocked).
+      // Harmless if the user then cancels the close dialog.
       try { win.webContents.send('app:before-quit', { graceMs: 500 }); } catch (_) {}
+      return;
     }
-  } catch (_) { /* best-effort */ }
+  } catch (_) { /* fall through to cleanup */ }
+  if (_shuttingDown) return;
+  _shuttingDown = true;
   try {
     const { cancelAll } = require('../src/mmx');
     cancelAll();
   } catch (_) { /* best-effort */ }
   // R6.6.1: also kill any backend processes registered with the shared jobRegistry.
-  try { require('../src/jobRegistry').cancelAll(); } catch (_) { /* best-effort */ }
+  try { require('../src/services/jobRegistryCompat').cancelAll(); } catch (_) { /* best-effort */ }
   // R2.1: defensively wipe the in-memory session credential so a
   // crash-dump / process snapshot taken after this point never
   // contains the user's API key. Best-effort; the store is Main-side
@@ -294,3 +335,5 @@ app.on('before-quit', () => {
 // could fire a `mmx:run:job` after the before-quit wipe but before
 // the window is destroyed.
 app.on('will-quit', _wipeSessionStoreBestEffort);
+
+})(); // end H-049 bootstrap IIFE

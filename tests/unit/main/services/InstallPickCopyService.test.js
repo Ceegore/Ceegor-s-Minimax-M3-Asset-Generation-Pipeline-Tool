@@ -5,6 +5,7 @@ const path = require('path');
 const fs = require('fs').promises;
 const os = require('os');
 const { pickAndCopy } = require('../../../../main/services/InstallPickCopyService');
+const assetPaths = require('../../../../src/assetPaths');
 
 test('pickAndCopy: successfully copies picked file to target', async () => {
   const tmpDir = path.join(os.tmpdir(), `install-pick-test-${Date.now()}`);
@@ -20,21 +21,30 @@ test('pickAndCopy: successfully copies picked file to target', async () => {
     filePaths: [srcFile]
   });
 
+  // H-065: the install destination is now EXCLUSIVELY the writable override
+  // dir (<userData>/assets/...), never <appRoot>/bin. Configure a temp
+  // userDataPath and restore the previous config afterwards.
   const appRoot = path.join(tmpDir, 'app');
-  const result = await pickAndCopy('isnetbg-model', showOpenDialogMock, appRoot);
+  const userData = path.join(tmpDir, 'userData');
+  const prevConfig = { ...assetPaths.getConfig() };
+  assetPaths.init({ userDataPath: userData });
+  try {
+    const result = await pickAndCopy('isnetbg-model', showOpenDialogMock, appRoot);
 
-  assert.ok(result.ok);
-  assert.equal(result.kind, 'isnetbg-model');
+    assert.ok(result.ok);
+    assert.equal(result.kind, 'isnetbg-model');
 
-  const expectedDest = path.join(appRoot, 'bin', 'models', 'isnet-general-use.onnx');
-  assert.equal(result.destPath, expectedDest);
+    const expectedDest = path.join(userData, 'assets', 'models', 'isnet-general-use.onnx');
+    assert.equal(result.destPath, expectedDest);
 
-  const copiedContent = await fs.readFile(expectedDest);
-  assert.equal(copiedContent[0], 0x08, 'ONNX header byte preserved');
-  assert.ok(copiedContent.includes(Buffer.from('dummy ONNX content')), 'content preserved');
-
-  // Clean up
-  try { await fs.rm(tmpDir, { recursive: true, force: true }); } catch (_) {}
+    const copiedContent = await fs.readFile(expectedDest);
+    assert.equal(copiedContent[0], 0x08, 'ONNX header byte preserved');
+    assert.ok(copiedContent.includes(Buffer.from('dummy ONNX content')), 'content preserved');
+  } finally {
+    assetPaths.init(prevConfig);
+    // Clean up
+    try { await fs.rm(tmpDir, { recursive: true, force: true }); } catch (_) {}
+  }
 });
 
 test('pickAndCopy: returns canceled: true when dialog is canceled', async () => {

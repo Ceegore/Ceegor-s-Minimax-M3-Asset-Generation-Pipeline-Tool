@@ -163,11 +163,15 @@ test('preload bridge exposes every tool function and maps to the expected channe
     'audioProbe',
     'audioTrimSilence',
     'authStatus',
+    'authTestDraft',
+    'batchesAcknowledgeRecovery',
     'batchesGenerateExamples',
     'batchesGet',
+    'batchesRecoveryStatus',
     'batchesSet',
     'configPath',
     'confirmRequest',
+    'confirmResetAndRelaunch',
     'defaultOutputDir',
     'diagnose',
     'externalToolsProbe',
@@ -207,6 +211,7 @@ test('preload bridge exposes every tool function and maps to the expected channe
     'jobCancelAll',
     'jobList',
     'logToFile',
+    'm3Cancel',
     'm3Chat',
     'mintGrant',
     'mmxCancel',
@@ -239,6 +244,7 @@ test('preload bridge exposes every tool function and maps to the expected channe
     'providersGenerate',
     'providersGetPublic',
     'providersListModels',
+    'providersPendingJobs',
     'providersSet',
     'quota',
     'realesrganAvailable',
@@ -274,12 +280,13 @@ test('preload bridge exposes every tool function and maps to the expected channe
     // bridge forwards a Main-minted grantId as the trailing arg so the --out /
     // --out-dir / cwd path is authorised in main. Assert it is included so a
     // future preload change that drops it fails this contract.
-    ['mmxRun', [['image', '--prompt', 'hello'], 'grant-id'], 'mmx:run'],
+    ['mmxRun', [['image', '--prompt', 'hello'], 'grant-id', ['read-grant-id']], 'mmx:run'], // B-002: trailing readGrantIds
     ['mmxRunJob', [{ args: ['image', 'generate'], jobId: 'j1' }, 'grant-id'], 'mmx:run:job'],
     ['mmxProfile', [], 'mmx:profile'],
     ['voices', [], 'mmx:voices'],
     ['quota', [], 'mmx:quota'],
     ['authStatus', [], 'mmx:authStatus'],
+    ['authTestDraft', [{ draftKey: 'sk-test' }], 'mmx:authTestDraft'],
     ['diagnose', [], 'mmx:diagnose'],
     ['mmxCancel', [], 'mmx:cancel'],
     ['fbList', ['C:\\work'], 'fb:list'],
@@ -299,8 +306,8 @@ test('preload bridge exposes every tool function and maps to the expected channe
     // it 1:1, so the sweep exercises it explicitly here.
     ['fbMove', ['C:\\work\\a.txt', 'C:\\work\\out', 'grant-id', 'dest-grant-id'], 'fb:move'],
     ['fbCopy', ['C:\\work\\a.txt', 'C:\\work\\out', 'grant-id', 'dest-grant-id'], 'fb:copy'],
-    ['fbReveal', ['C:\\work\\a.txt'], 'fb:reveal'],
-    ['fbOpenInExplorer', ['C:\\work\\a.txt'], 'fb:openInExplorer'],
+    ['fbReveal', ['C:\\work\\a.txt', 'grant-r1'], 'fb:reveal'],
+    ['fbOpenInExplorer', ['C:\\work\\a.txt', 'grant-r2'], 'fb:openInExplorer'],
     // v1.1.31: fbOpenDialog is a backward-compat alias for pickFile.
     // It maps to the same `file:pick` channel.
     ['fbOpenDialog', [{ title: 'Pick a file' }], 'file:pick'],
@@ -348,8 +355,11 @@ test('preload bridge exposes every tool function and maps to the expected channe
     ['audioAutocutDetect', ['C:\\tone.wav', {}, 'grant-id'], 'audio:autocutDetect'],
     ['batchesGet', [], 'batches:get'],
     ['batchesSet', [{ image: ['one'], speech: [], music: [], video: [] }], 'batches:set'],
+    // H-053: recovery status/acknowledge for corrupt batches.json.
+    ['batchesRecoveryStatus', [], 'batches:recoveryStatus'],
+    ['batchesAcknowledgeRecovery', [], 'batches:acknowledgeRecovery'],
     ['pickFile', [{ title: 'Pick a file' }], 'file:pick'],
-    ['fileSaveAs', ['C:\\in.png'], 'file:saveAs'],
+    ['fileSaveAs', ['C:\\in.png', undefined], 'file:saveAs'],
     ['stateGet', [], 'state:get'],
     ['stateSet', [{ currentTab: 'image' }], 'state:set'],
     ['batchesGenerateExamples', ['png'], 'batches:generateExamples'],
@@ -838,8 +848,11 @@ test('image, upscale, and background-removal handlers keep returning envelopes w
     // R1.5a.3: upscale:realesrgan:run now requires a grantId.
     // The grant covers BOTH srcPath and dstPath (directory grant for outputDir).
     // P4.1 (DB-H-002/008): the handler now validates the output artifact; the
-    // mocked run() writes nothing, so pre-create a valid PNG at dstPath.
-    fs.writeFileSync(dstPath, Buffer.concat([Buffer.from([0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A]), Buffer.alloc(120, 0)]));
+    // mocked run() writes nothing, so pre-create a REAL decodable 1x1 PNG at
+    // dstPath (H-064 made the full decode mandatory for image artifacts).
+    fs.writeFileSync(dstPath, Buffer.from(
+      'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==',
+      'base64'));
     const upscaleOk = await electron.handlers['upscale:realesrgan:run'](null, srcPath, dstPath, { model: 'realesrgan-x4plus' }, imgGrant.grantId);
     assert.equal(upscaleOk.ok, true);
 

@@ -26,9 +26,10 @@ module.exports = {
       } catch (e) { return { ok: false, error: e.message }; }
     })()`);
     check(examplesMd !== undefined && examplesMd !== null, 'batches:generateExamples (md) IPC was not invoked');
-    // The handler returns { ok, format, path, mdPath, txtPath }.
+    // H-054: the handler returns { ok, format, path } — only the chosen
+    // format is written (exclusive-create, never clobbering user files).
     if (examplesMd && examplesMd.ok !== false) {
-      const hasContent = !!(examplesMd.path || examplesMd.mdPath || examplesMd.format);
+      const hasContent = !!(examplesMd.path || examplesMd.format);
       check(hasContent, 'batches:generateExamples returned empty content');
     }
 

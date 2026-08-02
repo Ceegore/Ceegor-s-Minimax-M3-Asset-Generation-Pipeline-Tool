@@ -62,7 +62,10 @@ async function run({ apiKey, model, input, signal, onProgress }) {
   // FUNC-024: recursive output normalization for video/image/files objects.
   const out = pred.output;
   const urls = _normalizeOutput(out);
-  return urls.map((u) => ({ url: u, b64: null, ext: _ext(u), contentType: null }));
+  // H-014 (_5 audit): Replicate CDN output URLs are always unsigned/public.
+  // Explicitly mark authPolicy 'none' so the download layer never attaches
+  // Authorization to a non-API origin.
+  return urls.map((u) => ({ url: u, b64: null, ext: _ext(u), contentType: null, authPolicy: 'none', trustedOrigins: [] }));
 }
 
 /**

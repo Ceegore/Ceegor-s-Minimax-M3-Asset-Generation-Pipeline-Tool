@@ -46,9 +46,14 @@ function loadRegistryStub(t, entry) {
       isKnownModel: () => true,
     },
   };
-  // assetPaths.resolveAsset must return a real temp path.
+  // H-065: downloadModel now resolves its write target via
+  // resolveWritableOverride (never resolveAsset). Both are stubbed to the
+  // same temp path so the download lands in a writable test location.
   require.cache[require.resolve(assetPathsPath)] = {
-    exports: { resolveAsset: (_kind, filename) => path.join(os.tmpdir(), 'dl-test-' + filename) },
+    exports: {
+      resolveAsset: (_kind, filename) => path.join(os.tmpdir(), 'dl-test-' + filename),
+      resolveWritableOverride: (_kind, filename) => path.join(os.tmpdir(), 'dl-test-' + filename),
+    },
   };
   require.cache[require.resolve(binDiscoveryPath)] = { exports: { findModelPath: () => null } };
 }

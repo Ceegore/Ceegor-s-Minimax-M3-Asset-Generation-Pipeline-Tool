@@ -52,19 +52,33 @@ class JobController {
 
   /**
    * Register a spawned child process.
-   * HIGH-023: if a job with the same ID is already running, reject.
+   * HIGH-023 / H-061: if a job with the same ID still has a live process,
+   * registration is REJECTED (throws). The old behaviour (cancel + overwrite
+   * the map entry) displaced a still-running process from the registry: it
+   * kept running until kill escalation finished but was invisible to
+   * getJob/cancelAll/getActiveJobs. Every active process must stay observable
+   * and cancellable, so the caller must wait for the old handle's close event
+   * (handle.onClose) before re-registering the same jobId.
    *
    * @param {string} jobId
    * @param {import('child_process').ChildProcess} proc
    * @param {{ backend?: string, meta?: object }} [opts]
    * @returns {JobHandle}
+   * @throws {Error} If a handle for jobId is still alive (any pre-close state,
+   *   including cancel-requested/terminating/kill-failed).
    */
   registerProcess(jobId, proc, opts) {
     opts = opts || {};
     const existing = this._jobs.get(jobId);
-    if (existing && existing.state === STATE.RUNNING) {
-      // HIGH-023: duplicate active jobId — cancel the old one first.
-      existing.cancel();
+    if (existing && existing.isAlive) {
+      // H-061: never displace an active handle — the previous process would
+      // become an unregistered orphan. Reject until it actually closes.
+      const err = new Error(
+        `Job "${jobId}" is already active (state: ${existing.state}, runId: ${existing.runId}). ` +
+        'Wait for it to close (handle.onClose) or cancel it before starting a new run.'
+      );
+      err.code = 'EJOBACTIVE';
+      throw err;
     }
 
     const runId = this._nextRunId++;
@@ -75,6 +89,15 @@ class JobController {
     proc.on('close', (code, signal) => {
       handle._onClose(code, signal);
       // Only delete if this handle is still the registered one
+      if (this._jobs.get(jobId) === handle) {
+        this._jobs.delete(jobId);
+      }
+    });
+
+    // Spawn failures (ENOENT, EACCES) emit 'error' without always emitting
+    // 'close'. Treat 'error' as a close signal to avoid orphaned entries.
+    proc.on('error', (err) => {
+      handle._onClose(null, err && err.code ? err.code : 'error');
       if (this._jobs.get(jobId) === handle) {
         this._jobs.delete(jobId);
       }

@@ -484,37 +484,57 @@ function openFolderOptions() {
 }
 
 
+// H-047 (_5 audit): ONE shared predicate for "does this item match the
+// active search + type filters". applyFileSearch (rendered-row
+// visibility) and fbSelectAll (selection eligibility) both consume it,
+// so a row hidden by the text search or the type dropdown can never
+// silently enter the bulk selection and get deleted / moved.
+function currentFbFilterState() {
+  const query = ($('#fb-search')?.value || '').toLowerCase();
+  // The dropdown value is a comma-separated list of extensions (no
+  // dot, lower case); empty string = "All types" (no type filtering).
+  const raw = ($('#fb-type-filter')?.value || '').trim();
+  const typeSet = raw
+    ? new Set(raw.split(',').map((s) => s.trim().toLowerCase()).filter(Boolean))
+    : null;
+  return { query, typeSet };
+}
+function matchesFileBrowserFilters(it, filterState) {
+  if (!it) return false;
+  const fState = filterState || { query: '', typeSet: null };
+  // Asset-type filter: hide files whose extension isn't in the
+  // selected set. Directories always pass (their "type" is "folder",
+  // shown via the icon column); extensionless files pass too — the
+  // historical row logic only hid rows with a non-matching extension.
+  if (fState.typeSet && !it.isDir) {
+    // Extensions carry a leading dot on items and rows (".png"), but
+    // the dropdown's type set holds bare extensions ("png"). Strip
+    // the dot before comparing.
+    const ext = String(it.ext || '').toLowerCase().replace(/^\./, '');
+    if (ext && !fState.typeSet.has(ext)) return false;
+  }
+  // Free-text filter: empty query matches everything that survived
+  // the type filter. Applies to directories too (same as the rows).
+  if (fState.query) {
+    const name = String(it.name || '').toLowerCase();
+    if (!name.includes(fState.query)) return false;
+  }
+  return true;
+}
+
 function applyFileSearch() {
-  const q = ($('#fb-search')?.value || '').toLowerCase();
-  // Respect the asset-type filter (#fb-type-filter) too. The dropdown
-  // value is a comma-separated list of extensions (no dot, lower
-  // case); empty string = "All types" (no type filtering).
-  const typeSet = (() => {
-    const raw = ($('#fb-type-filter')?.value || '').trim();
-    if (!raw) return null;
-    return new Set(raw.split(',').map((s) => s.trim().toLowerCase()).filter(Boolean));
-  })();
+  const fState = currentFbFilterState();
   for (const item of $$('.fb-item')) {
     // The ".." parent row has no .name / .ext attribute; always
     // show it regardless of the filter (it's navigation, not a
     // real item).
     if (!item.dataset.name) { item.style.display = ''; continue; }
-    // Asset-type filter: if active, hide items whose extension
-    // isn't in the selected set. Directories always pass
-    // (their type is "folder", shown via the icon column).
-    if (typeSet) {
-      // item.dataset.ext is stored WITH a leading dot (e.g. ".png"),
-      // but the dropdown's type set holds bare extensions ("png").
-      // Strip the dot before comparing.
-      const ext = (item.dataset.ext || '').toLowerCase().replace(/^\./, '');
-      const isDir = item.dataset.isdir === '1';
-      if (!isDir && ext && !typeSet.has(ext)) { item.style.display = 'none'; continue; }
-    }
-    // Free-text filter: empty query = show everything that
-    // survived the type filter.
-    if (!q) { item.style.display = ''; continue; }
-    const name = (item.dataset.name || item.querySelector('.name')?.textContent || '').toLowerCase();
-    item.style.display = name.includes(q) ? '' : 'none';
+    const rowItem = {
+      name: item.dataset.name || item.querySelector('.name')?.textContent || '',
+      ext: item.dataset.ext || '',
+      isDir: item.dataset.isdir === '1',
+    };
+    item.style.display = matchesFileBrowserFilters(rowItem, fState) ? '' : 'none';
   }
 }
 // Expose the key functions on window after all declarations. Function
@@ -525,6 +545,8 @@ window.refreshBrowser = refreshBrowser;
 window.isItemVisibleInList = isItemVisibleInList;
 window.isSupportedAssetFile = isSupportedAssetFile;
 window.SUPPORTED_FILE_EXTS = SUPPORTED_FILE_EXTS;
+window.matchesFileBrowserFilters = matchesFileBrowserFilters; // H-047
+window.currentFbFilterState = currentFbFilterState; // H-047
 // Bare-name aliases (in addition to window.X) so every lookup path
 // works.
 var applyFileSearch = window.applyFileSearch;
@@ -554,13 +576,15 @@ function _toggleFbSelected(path, checked) {
 function fbSelectAll() {
   if (!Array.isArray(state._fbItems) || !state._fbItems.length) return;
   if (!state.fbSelected) state.fbSelected = new Set();
-  // Only select visible items. Iterating the full snapshot would let
-  // "Images only" filter + Select all + switch to "All types" reveal
-  // surprise pre-checked audio/text files in the bulk selection. The
-  // visible subset is what isItemVisibleInList + applyFileSearch
-  // already gate the rendered rows on; that exact filter is mirrored
-  // here.
-  const visibleItems = state._fbItems.filter((it) => isItemVisibleInList(it));
+  // Only select items that are actually visible RIGHT NOW: the
+  // supported-types gate (isItemVisibleInList) AND the live text
+  // search + type filter (matchesFileBrowserFilters — the same
+  // predicate applyFileSearch gates the rendered rows on). H-047:
+  // previously only the first gate applied, so files hidden by the
+  // search box or the type dropdown silently entered the bulk
+  // selection and could be deleted or moved.
+  const fState = currentFbFilterState();
+  const visibleItems = state._fbItems.filter((it) => isItemVisibleInList(it) && matchesFileBrowserFilters(it, fState));
   for (const it of visibleItems) state.fbSelected.add(it.path);
   // Re-render the list (so the checkboxes flip to checked) AND
   // the toolbar (so the count + master checkbox update).
@@ -935,7 +959,8 @@ async function openItem(it) {
     if (previewItem(it)) {
       return;
     } else {
-      await window.api.fbReveal(it.path);
+      const _rg = (window.GrantHelper) ? await window.GrantHelper.ensureRead(it.path) : undefined;
+      await window.api.fbReveal(it.path, _rg);
     }
   }
 }

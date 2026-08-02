@@ -24,6 +24,11 @@ function _archive() {
   }
   return _archiveService;
 }
+// H-045: session-scoped ids of already-archived overflow entries. A save
+// retried by the renderer (e.g. the previous round trip failed after the
+// archive append succeeded) carries the same overflow again — without this
+// set the same job would be appended to the JSONL archive twice.
+const _archivedIds = new Set();
 
 function statePath() {
   return path.join(configDir(), 'state.json');
@@ -391,26 +396,51 @@ function write(s) {
     // argv) or a dangling item. See src/stateSanitizers.js.
     pipeline: { image: sanitisePipelineBoard(s && s.pipeline && s.pipeline.image) },
   };
-  // Enforce the cap and move the overflow to the JSONL archive. The move is
-  // best-effort: a failing archive write (disk full, permission error) does
-  // NOT block the main state save — the trimmed list is still persisted, and
-  // the user-visible "file was saved" toast is honest about that.
+  // H-045: archive-first transaction. Previously the list was trimmed
+  // FIRST and the archive appends ran inside a swallowed try/catch — a
+  // failing append (disk full, permission error, archive path blocked)
+  // silently DESTROYED the overflow entries. Now each overflow entry is
+  // appended to the L3 archive BEFORE it is dropped from L2; entries whose
+  // append failed STAY in state.json (the list temporarily exceeds the cap
+  // rather than losing data) and the failure is reported to the caller via
+  // the non-persisted _archiveWarnings/_jobsArchived fields (attached
+  // AFTER the JSON is serialised, so they never land on disk).
+  const archiveWarnings = [];
+  let jobsArchived = 0;
   if (Array.isArray(clean.jobsSnapshot) && clean.jobsSnapshot.length > clean.jobsArchiveCap) {
-    const overflow = clean.jobsSnapshot.slice(0, clean.jobsSnapshot.length - clean.jobsArchiveCap);
-    clean.jobsSnapshot = clean.jobsSnapshot.slice(-clean.jobsArchiveCap);
+    const overflowCount = clean.jobsSnapshot.length - clean.jobsArchiveCap;
+    const overflow = clean.jobsSnapshot.slice(0, overflowCount);
     const archive = _archive();
     if (archive) {
-      try {
-        for (const entry of overflow) {
+      for (const entry of overflow) {
+        const id = (entry && typeof entry.id === 'string') ? entry.id : null;
+        if (id && _archivedIds.has(id)) { jobsArchived++; continue; } // retried save: already in L3
+        try {
           archive.append(configDir(), entry);
+          if (id) {
+            _archivedIds.add(id);
+            if (_archivedIds.size > 4000) {
+              // Bounded memory: keep the newest half (Set preserves insertion order).
+              const keep = Array.from(_archivedIds).slice(-2000);
+              _archivedIds.clear();
+              for (const k of keep) _archivedIds.add(k);
+            }
+          }
+          jobsArchived++;
+        } catch (e) {
+          archiveWarnings.push('jobs archive append failed after ' + jobsArchived + '/' + overflowCount
+            + ' overflow entries: ' + String((e && e.message) || e)
+            + ' — keeping the remaining entries in state.json.');
+          break; // disk full / permission error: stop, keep the rest in L2
         }
-      } catch (_) {
-        // Best-effort: a failing archive write (disk full,
-        // permission error) does NOT block the main state save.
-        // The trimmed entries are lost from L2 but the
-        // user-visible "the file was saved" toast is honest.
       }
+    } else {
+      archiveWarnings.push('jobs archive service unavailable — keeping ' + overflowCount + ' overflow entries in state.json.');
     }
+    // Drop ONLY the entries that made it into the archive (or were already
+    // there). On a clean run this trims exactly to the cap; on failure the
+    // unarchived tail stays in L2 until a later save can archive it.
+    if (jobsArchived > 0) clean.jobsSnapshot = clean.jobsSnapshot.slice(jobsArchived);
   }
   // Atomic write (tmp + rename) — temp name uses crypto.randomUUID()
   // (R0.1-006.Audit-Fix) to avoid same-ms collisions. A corrupt
@@ -423,6 +453,11 @@ function write(s) {
     try { fs.unlinkSync(tmp); } catch {}
     throw e;
   }
+  // H-044/H-045: report the archive outcome to the caller (state:set IPC →
+  // renderer). Attached AFTER the serialisation above so neither field is
+  // ever persisted to state.json.
+  if (jobsArchived > 0) clean._jobsArchived = jobsArchived;
+  if (archiveWarnings.length) clean._archiveWarnings = archiveWarnings;
   return clean;
 }
 

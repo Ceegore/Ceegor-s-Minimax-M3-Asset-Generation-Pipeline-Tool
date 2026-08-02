@@ -176,6 +176,18 @@ _register({
 
 // ---- LOOKUP HELPERS ----
 
+// M-059: an ISO-BMFF file whose ftyp brands don't definitively identify the
+// content. The major brand alone (isom/mp42/…) does NOT determine the
+// category — an AAC-audio M4A written by many encoders carries 'isom', and
+// classifying it as video/mp4 mis-routes it. Callers must use ffprobe (see
+// decoderHint) to determine the actual streams/codec. Deliberately NOT
+// registered in FORMATS: it is a detection result, not a producible format.
+const ISOBMFF_AMBIGUOUS = Object.freeze({
+  id: 'isobmff', category: 'ambiguous', apiValue: null, codec: null, container: 'isobmff',
+  ext: 'mp4', mime: 'application/octet-stream',
+  magicBytes: [], ffmpegMuxer: null, decoderHint: 'ffprobe', animated: false, selfDescribing: true,
+});
+
 /**
  * Get a format entry by its ID.
  * @param {string} id
@@ -198,8 +210,21 @@ function fromMagic(buf) {
     const brand = String.fromCharCode(buf[8], buf[9], buf[10], buf[11]);
     if (brand === 'avif' || brand === 'avis') return FORMATS.get('avif');
     if (brand === 'M4A ' || brand === 'M4B ') return FORMATS.get('m4a');
-    if (brand.startsWith('isom') || brand.startsWith('mp4') || brand === 'dash' || brand === 'MSNV') return FORMATS.get('mp4');
-    return FORMATS.get('mp4'); // default ISOBMFF → mp4
+    // M-059: the major brand is not definitive — scan the ftyp compatible
+    // brands (offset 16 onwards, 4 bytes each, within the box size at bytes
+    // 0-3) when the caller supplied more than the first 16 bytes.
+    const boxSize = (buf[0] << 24) | (buf[1] << 16) | (buf[2] << 8) | buf[3];
+    const scanEnd = Math.min(buf.length, boxSize >= 16 ? boxSize : buf.length);
+    for (let off = 16; off + 4 <= scanEnd; off += 4) {
+      const b = String.fromCharCode(buf[off], buf[off + 1], buf[off + 2], buf[off + 3]);
+      if (b === 'avif' || b === 'avis') return FORMATS.get('avif');
+      if (b === 'M4A ' || b === 'M4B ') return FORMATS.get('m4a');
+    }
+    // M-059: isom/mp4x/dash/MSNV and every other brand say "ISO-BMFF
+    // container" but NOT what's inside (an isom-brand M4A is audio, not
+    // video). Return the ambiguous entry instead of defaulting to mp4;
+    // ffprobe must decide the real category.
+    return ISOBMFF_AMBIGUOUS;
   }
 
   // Special: WEBP needs RIFF + offset-8 check
@@ -304,4 +329,5 @@ module.exports = {
   canStreamCopy,
   allFormats,
   FORMATS,
+  ISOBMFF_AMBIGUOUS,
 };

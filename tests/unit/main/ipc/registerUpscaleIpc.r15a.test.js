@@ -118,9 +118,11 @@ test('R1.5a.3: upscale:realesrgan:run with a directory grant covering both src+d
   const dst = path.join(TMP, 'upscale-dst.png');
   fs.writeFileSync(src, Buffer.from([0]));
   // P4.1 (DB-H-002/008): the handler now validates the output artifact
-  // (existence + size + PNG magic); the mocked run() writes nothing, so
-  // pre-create a valid PNG at dst.
-  fs.writeFileSync(dst, Buffer.concat([Buffer.from([0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A]), Buffer.alloc(120, 0)]));
+  // (existence + size + PNG magic + H-064 full decode); the mocked run()
+  // writes nothing, so pre-create a REAL decodable 1x1 PNG at dst.
+  fs.writeFileSync(dst, Buffer.from(
+    'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==',
+    'base64'));
   // A directory grant for TMP covers BOTH src and dst.
   const dirGrant = mintDirectoryGrant(defaultService, TMP);
   const r = await handlers.get('upscale:realesrgan:run')({ sender: { send() {} } }, src, dst, {}, dirGrant.grantId);

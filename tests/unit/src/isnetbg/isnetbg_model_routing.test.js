@@ -45,11 +45,24 @@ function withMocks({ withBinary, withNodeModel, modelPresentKey }, fn) {
     },
     renameSync: () => {},
     unlinkSync: () => {},
-    statSync: () => ({ isFile: () => true, size: 100 }),
+    statSync: () => ({ isFile: () => true, size: 1024 }),
+    // H-021: validatePngOutput reads the first 24 bytes for PNG magic + IHDR.
+    openSync: () => 99,
+    readSync: (_fd, buf) => {
+      // Write a valid PNG header: magic + IHDR with 64x64 dimensions.
+      const pngMagic = Buffer.from([0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A]);
+      pngMagic.copy(buf, 0);
+      buf.writeUInt32BE(13, 8);  // IHDR chunk length
+      buf.write('IHDR', 12, 'ascii');
+      buf.writeUInt32BE(64, 16); // width
+      buf.writeUInt32BE(64, 20); // height
+      return 24;
+    },
+    closeSync: () => {},
     promises: {
       rename: async () => {},
       writeFile: async () => {},
-      stat: async () => ({ isFile: () => true, size: 100 }),
+      stat: async () => ({ isFile: () => true, size: 1024 }),
     },
   };
 

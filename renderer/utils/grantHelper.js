@@ -308,6 +308,65 @@ async function ensureDirList(dir) {
   });
 }
 
+// B-002: input file flags an mmx argv may carry (mirrors
+// MMX_INPUT_FILE_FLAGS in main/ipc/mmxPathAuthz.js). Each local path
+// among them needs its own READ grant — the output write grant does
+// not cover e.g. C:\refs\face.png.
+const MMX_INPUT_FILE_FLAGS = [
+  '--text-file', '--lyrics-file', '--audio-file', '--first-frame',
+  '--last-frame', '--subject-image', '--subject-ref',
+  '--reference-image', '--mask', '--input',
+];
+
+/**
+ * B-002: scan an mmx argv for input file flags carrying LOCAL paths and
+ * mint a read grant for each. Returns an array of grantIds to pass as
+ * `readGrantIds` in the mmxRunJob payload (or mmxRun's trailing arg).
+ *
+ * - `--subject-ref` composites (`type=character,image=<path>`) are
+ *   unwrapped to the `image=` part (same rule as main's authoriser).
+ * - URL values (`https://…`) are skipped — they need no local grant
+ *   (main enforces the https-only policy, B-003).
+ * - A failed mint is skipped (best-effort): main then fails closed
+ *   with its clear "not authorised by the read grant" error.
+ *
+ * @param {string[]} args - the mmx argv about to be run
+ * @returns {Promise<string[]>} grantIds for every mintable local input path
+ */
+async function ensureMmxReadGrants(args) {
+  const ids = [];
+  if (!Array.isArray(args) || !window.GrantCache || !window.api || typeof window.api.mintGrant !== 'function') return ids;
+  const paths = [];
+  for (let i = 0; i < args.length; i++) {
+    const a = args[i];
+    if (typeof a !== 'string') continue;
+    let flag = a;
+    let value = null;
+    const eq = a.indexOf('=');
+    if (eq > 0) { flag = a.slice(0, eq); value = a.slice(eq + 1); }
+    if (!MMX_INPUT_FILE_FLAGS.includes(flag)) continue;
+    if (value === null) {
+      const next = args[i + 1];
+      if (typeof next !== 'string' || !next || next.startsWith('-')) continue;
+      value = next;
+      i++; // consume the value token
+    }
+    if (flag === '--subject-ref') {
+      const im = value.indexOf('image=');
+      if (im !== -1) value = value.slice(im + 'image='.length);
+    }
+    if (/^[a-z][a-z0-9+.-]*:\/\//i.test(value)) continue; // URL — no local grant
+    if (value && !paths.includes(value)) paths.push(value);
+  }
+  for (const p of paths) {
+    try {
+      const g = await ensureRead(p);
+      if (typeof g === 'string' && g) ids.push(g);
+    } catch (_) { /* best-effort — main fails closed without the grant */ }
+  }
+  return ids;
+}
+
 window.GrantHelper = {
   ensureRead,
   ensureWrite,
@@ -319,6 +378,7 @@ window.GrantHelper = {
   ensureCopy,
   ensureTransform,
   ensureExternalToolRead,
+  ensureMmxReadGrants,
 };
 
 // Node.js test compatibility.

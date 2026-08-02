@@ -192,13 +192,22 @@ function getRunId(jobId) {
  * Windows: proc.kill() uses TerminateProcess (can't be caught).
  * macOS/Linux: SIGTERM first, SIGKILL after 2s if still alive.
  *
+ * BUG FIX (same class as mmxProcTracker.js): the old code checked
+ * `proc.killed` to decide whether to escalate. Node.js sets
+ * proc.killed = true as soon as kill('SIGTERM') is successfully
+ * CALLED (signal dispatched), NOT when the process exits. A child
+ * that catches SIGTERM and keeps running has proc.killed === true,
+ * so SIGKILL never fired. Fix: track actual exit via 'exit' event.
+ *
  * @param {import('child_process').ChildProcess} proc
  */
 function _killWithEscalation(proc) {
+  let _exited = false;
+  proc.once('exit', () => { _exited = true; });
   try { proc.kill('SIGTERM'); } catch (_) {}
   setTimeout(() => {
     try {
-      if (!proc.killed) proc.kill('SIGKILL');
+      if (!_exited) proc.kill('SIGKILL');
     } catch (_) {}
   }, 2000).unref();
 }

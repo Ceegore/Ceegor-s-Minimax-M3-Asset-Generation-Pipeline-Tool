@@ -30,6 +30,11 @@
     return window.api.m3Chat(Object.assign({ messages }, opts || {}));
   }
 
+  // H-005: generate a unique run ID for cancel routing.
+  function mintRunId() {
+    return 'm3_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2, 8);
+  }
+
   // Attempt to extract a JSON array from M3's response. Handles the common
   // case where M3 wraps the JSON in a fenced code block or adds preamble text.
   function extractJsonArray(text) {
@@ -52,7 +57,8 @@
 
   // Run a single pass with validation + bounded repair retries.
   // Returns the parsed JSON array or throws on exhaustion / cancel.
-  async function runPass(label, systemPrompt, userPrompt, validate, cancelled) {
+  // H-008: accumulates token usage into opts.stats if provided.
+  async function runPass(label, systemPrompt, userPrompt, validate, cancelled, runId, stats) {
     const MAX_REPAIRS = 2;
     let lastError = null;
     for (let attempt = 0; attempt <= MAX_REPAIRS; attempt++) {
@@ -61,8 +67,12 @@
         { role: 'system', content: systemPrompt },
         { role: 'user', content: attempt === 0 ? userPrompt : userPrompt + '\n\nYour previous output was invalid: ' + lastError + '. Output ONLY the corrected JSON array, no prose.' },
       ];
-      const r = await m3Chat(messages, { jsonMode: true, temperature: 0.3, maxTokens: 4096 });
-      if (!r.ok) throw new Error(r.error || 'M3 request failed.');
+      const r = await m3Chat(messages, { jsonMode: true, temperature: 0.3, maxTokens: 4096, runId: runId });
+      if (!r.ok) {
+        if (r.cancelled) throw new Error('Cancelled.');
+        throw new Error(r.error || 'M3 request failed.');
+      }
+      if (stats && r.usage) { stats.totalTokens += (r.usage.total_tokens || 0); stats.calls++; }
       const arr = extractJsonArray(r.content);
       if (!arr) { lastError = 'Response is not a valid JSON array.'; continue; }
       const err = validate(arr);
@@ -135,34 +145,53 @@
       let prompt = '';
 
       if (type === 'image' || type === 'video') {
-        // Concatenate: [style] + scene (verbatim) + characters (verbatim) + action
-        const parts = [];
-        if (styleHeader) parts.push(styleHeader);
-        if (shot.sceneId && sceneMap[shot.sceneId]) parts.push(sceneMap[shot.sceneId]);
+        // H-007 (_5 audit): deterministic budget per prompt segment.
+        // Instead of only truncating the action (which fails when
+        // style+scene+characters already exceed the limit), allocate
+        // proportional budgets and truncate each segment at sentence
+        // boundaries.
+        const limit = LIMITS[type] || 2000;
+        const styleText = styleHeader || '';
+        const sceneText = (shot.sceneId && sceneMap[shot.sceneId]) || '';
+        const charTexts = [];
         if (Array.isArray(shot.characterIds)) {
           for (const cid of shot.characterIds) {
-            if (charMap[cid]) parts.push(charMap[cid]);
+            if (charMap[cid]) charTexts.push(charMap[cid]);
           }
         }
-        parts.push(shot.action || '');
-        prompt = parts.join(' ').replace(/\s+/g, ' ').trim();
-        // Enforce HARD limit: trim the action (last part) if over.
-        const limit = LIMITS[type] || 2000;
-        if (prompt.length > limit) {
-          // Rebuild without action, then append truncated action.
-          const baseParts = [];
-          if (styleHeader) baseParts.push(styleHeader);
-          if (shot.sceneId && sceneMap[shot.sceneId]) baseParts.push(sceneMap[shot.sceneId]);
-          if (Array.isArray(shot.characterIds)) {
-            for (const cid of shot.characterIds) {
-              if (charMap[cid]) baseParts.push(charMap[cid]);
-            }
-          }
-          const base = baseParts.join(' ').replace(/\s+/g, ' ').trim();
-          const remaining = limit - base.length - 1;
-          const action = (shot.action || '').slice(0, Math.max(remaining, 40));
-          prompt = (base + ' ' + action).trim();
+        const actionText = shot.action || '';
+        // Budget allocation: action gets a guaranteed minimum reserve,
+        // the rest is split proportionally among style/scene/characters.
+        const ACTION_RESERVE = Math.min(120, Math.floor(limit * 0.1));
+        const totalNonAction = styleText.length + sceneText.length + charTexts.reduce((a, c) => a + c.length, 0);
+        const budgetForNonAction = limit - ACTION_RESERVE;
+        function truncateAtSentence(text, maxLen) {
+          if (text.length <= maxLen) return text;
+          // Try to cut at a sentence boundary (period + space).
+          const cut = text.slice(0, maxLen);
+          const lastPeriod = cut.lastIndexOf('. ');
+          if (lastPeriod > maxLen * 0.5) return cut.slice(0, lastPeriod + 1);
+          return cut.trimEnd();
         }
+        let stylePart = styleText;
+        let scenePart = sceneText;
+        let charParts = charTexts;
+        if (totalNonAction > budgetForNonAction && totalNonAction > 0) {
+          const ratio = budgetForNonAction / totalNonAction;
+          stylePart = truncateAtSentence(styleText, Math.floor(styleText.length * ratio));
+          scenePart = truncateAtSentence(sceneText, Math.floor(sceneText.length * ratio));
+          charParts = charTexts.map((c) => truncateAtSentence(c, Math.floor(c.length * ratio)));
+        }
+        const baseParts = [];
+        if (stylePart) baseParts.push(stylePart);
+        if (scenePart) baseParts.push(scenePart);
+        for (const cp of charParts) { if (cp) baseParts.push(cp); }
+        const base = baseParts.join(' ').replace(/\s+/g, ' ').trim();
+        const remaining = limit - base.length - 1;
+        const action = truncateAtSentence(actionText, Math.max(remaining, 0));
+        prompt = (base + ' ' + action).replace(/\s+/g, ' ').trim();
+        // Hard guarantee: never exceed the limit.
+        if (prompt.length > limit) prompt = prompt.slice(0, limit);
       } else {
         // speech / music: prompt is the text/action directly.
         prompt = shot.action || shot.text || '';
@@ -200,10 +229,17 @@
   async function run(gddText, opts) {
     let _cancelled = false;
     const cancelled = () => _cancelled;
-    const cancelToken = { cancel() { _cancelled = true; } };
+    const runId = (opts && opts.runId) || mintRunId();
+    const cancelToken = {
+      cancel() {
+        _cancelled = true;
+        if (window.api && window.api.m3Cancel) window.api.m3Cancel(runId);
+      },
+    };
 
     const onProgress = (opts && opts.onProgress) || function () {};
-    const TOTAL_STEPS = 4; // scene, character, shots, compose
+    const TOTAL_STEPS = 5; // scene, character, shots, compose, self-check
+    const stats = { totalTokens: 0, calls: 0 }; // H-008: token statistics
 
     try {
       // Pass 1 — Scene bible.
@@ -216,7 +252,9 @@
         'Output ONLY the JSON array.',
         gddText,
         validateBible,
-        cancelled
+        cancelled,
+        runId,
+        stats
       );
 
       // Pass 2 — Character bible.
@@ -229,27 +267,34 @@
         'Output ONLY the JSON array.',
         gddText,
         validateBible,
-        cancelled
+        cancelled,
+        runId,
+        stats
       );
 
       // Pass 3 — Shot list.
+      // H-008 token optimization: send the compact intermediate model
+      // (scenes + characters) instead of the full GDD text again.
       onProgress(3, TOTAL_STEPS, 'Mapping shots…');
       const sceneIds = scenes.map((s) => s.id);
       const charIds = characters.map((c) => c.id);
+      const compactContext = 'SCENES:\n' + JSON.stringify(scenes) + '\nCHARACTERS:\n' + JSON.stringify(characters);
       // FUNC-006: pass valid IDs to the validator so it can reject
       // shots that reference non-existent bible entries.
       const shotsValidator = (arr) => validateShots(arr, sceneIds, charIds);
       const shots = await runPass(
         'Shot list',
-        'You are a game asset producer. Map every asset the GDD requires into shots. ' +
+        'You are a game asset producer. Map every asset the extracted scenes and characters require into shots. ' +
         'Return a JSON array: [{"type":"image|speech|music|video","sceneId":"S1|null","characterIds":["C1"],"action":"...","params":{}}]. ' +
         'Available scene IDs: ' + JSON.stringify(sceneIds) + '. Available character IDs: ' + JSON.stringify(charIds) + '. ' +
         'For speech/music/video, sceneId and characterIds may be null/[]. The "action" is the shot-specific description or text/lyrics. ' +
         'The "params" object holds optional --flags (e.g. {"--aspect-ratio":"16:9","--model":"image-01"}). ' +
         'Output ONLY the JSON array.',
-        gddText,
+        compactContext,
         shotsValidator,
-        cancelled
+        cancelled,
+        runId,
+        stats
       );
 
       // Pass 4 — Compose in code (deterministic, no M3 call).
@@ -271,7 +316,32 @@
         }
       }
 
-      return { ok: true, doc, cancelToken };
+      // Pass 5 — Self-check (H-008): validate the composed output against
+      // the intermediate model. Non-blocking: issues are reported in the
+      // result but do not prevent the import (the composition is deterministic).
+      onProgress(5, TOTAL_STEPS, 'Self-check…');
+      let selfCheckIssues = [];
+      try {
+        if (cancelled()) throw new Error('Cancelled.');
+        const checkPrompt = 'You are a QA reviewer. Given the extracted scenes, characters, and the final shot list, verify:\n' +
+          '1. Every scene ID is referenced by at least one shot.\n' +
+          '2. Every character ID is referenced by at least one shot.\n' +
+          '3. No duplicate shots (same type + sceneId + action).\n' +
+          '4. All params are valid --flags.\n' +
+          'Return a JSON array of issue strings: ["issue 1", ...]. Return [] if no issues.';
+        const checkInput = 'SCENES: ' + JSON.stringify(scenes) + '\nCHARACTERS: ' + JSON.stringify(characters) + '\nSHOTS: ' + JSON.stringify(shots);
+        const checkR = await m3Chat(
+          [{ role: 'system', content: checkPrompt }, { role: 'user', content: checkInput }],
+          { jsonMode: true, temperature: 0, maxTokens: 1024, runId: runId }
+        );
+        if (checkR.ok && checkR.usage) { stats.totalTokens += (checkR.usage.total_tokens || 0); stats.calls++; }
+        if (checkR.ok) {
+          const issues = extractJsonArray(checkR.content);
+          if (Array.isArray(issues)) selfCheckIssues = issues.filter(function (s) { return typeof s === 'string' && s.trim(); });
+        }
+      } catch (_) { /* self-check is advisory — never blocks the pipeline */ }
+
+      return { ok: true, doc, cancelToken, stats: stats, selfCheckIssues: selfCheckIssues };
     } catch (e) {
       if (cancelled()) return { ok: false, error: 'Cancelled.', cancelled: true, cancelToken };
       return { ok: false, error: String((e && e.message) || e), cancelToken };
@@ -287,5 +357,23 @@
     return result;
   }
 
-  window.M3DocPipeline = { run, runAndImport, composeBatchJson, extractJsonArray, LIMITS };
+  // H-005 (_5 audit): start() returns {promise, cancel} IMMEDIATELY so the
+  // caller can wire the cancel button BEFORE the pipeline finishes.
+  function start(gddText, opts) {
+    const runId = mintRunId();
+    let cancelFn;
+    const promise = run(gddText, Object.assign({}, opts, { runId: runId })).then(function (result) {
+      cancelFn = result.cancelToken ? result.cancelToken.cancel.bind(result.cancelToken) : null;
+      return result;
+    });
+    // Expose the cancelToken's cancel via the runId immediately.
+    const cancel = function () {
+      if (cancelFn) { cancelFn(); return; }
+      // Pipeline hasn't resolved yet — cancel via IPC directly.
+      if (window.api && window.api.m3Cancel) window.api.m3Cancel(runId);
+    };
+    return { promise: promise, cancel: cancel, runId: runId };
+  }
+
+  window.M3DocPipeline = { run, runAndImport, start, composeBatchJson, extractJsonArray, LIMITS };
 })();

@@ -140,30 +140,25 @@ function register(deps) {
           results.push({ ok: false, src: it.srcAbsPath, error: 'Read grant required: ' + readAuthz.error });
           continue;
         }
-        // MED-013: validate that the source file is actually an image.
-        // Check magic bytes to prevent importing non-image files.
+        // MED-013 + H-059 (_5 audit): validate that the source file is
+        // actually an image via FormatRegistry.fromMagic(). The old inline
+        // check treated ANY ISO-BMFF ftyp box as an image — accepting
+        // MP4/MOV/M4A video/audio containers. fromMagic() inspects the
+        // major + compatible brands and only returns category:'image' for
+        // HEIF/AVIF, rejecting video/audio brands.
         try {
           const fd = fs.openSync(it.srcAbsPath, 'r');
-          const header = Buffer.alloc(12);
-          const bytesRead = fs.readSync(fd, header, 0, 12, 0);
+          const header = Buffer.alloc(32);
+          const bytesRead = fs.readSync(fd, header, 0, 32, 0);
           fs.closeSync(fd);
           if (bytesRead < 4) {
             results.push({ ok: false, src: it.srcAbsPath, error: 'File too small to be a valid image.' });
             continue;
           }
-          // Check common image magic bytes: PNG, JPEG, GIF, WebP, BMP, TIFF, AVIF
-          const isImage =
-            (header[0] === 0x89 && header[1] === 0x50 && header[2] === 0x4E && header[3] === 0x47) || // PNG
-            (header[0] === 0xFF && header[1] === 0xD8 && header[2] === 0xFF) || // JPEG
-            (header[0] === 0x47 && header[1] === 0x49 && header[2] === 0x46) || // GIF
-            (header[0] === 0x52 && header[1] === 0x49 && header[2] === 0x46 && header[3] === 0x46 &&
-             header[8] === 0x57 && header[9] === 0x45 && header[10] === 0x42 && header[11] === 0x50) || // WebP (RIFF....WEBP)
-            (header[0] === 0x42 && header[1] === 0x4D) || // BMP
-            (header[0] === 0x49 && header[1] === 0x49 && header[2] === 0x2A && header[3] === 0x00) || // TIFF (little-endian)
-            (header[0] === 0x4D && header[1] === 0x4D && header[2] === 0x00 && header[3] === 0x2A) || // TIFF (big-endian)
-            (header[4] === 0x66 && header[5] === 0x74 && header[6] === 0x79 && header[7] === 0x70); // AVIF/HEIF (ftyp box)
-          if (!isImage) {
-            results.push({ ok: false, src: it.srcAbsPath, error: 'Source file is not a recognized image format (PNG, JPEG, GIF, WebP, BMP, TIFF, or AVIF required).' });
+          const { fromMagic } = require('../../src/services/FormatRegistry');
+          const detected = fromMagic(header);
+          if (!detected || detected.category !== 'image') {
+            results.push({ ok: false, src: it.srcAbsPath, error: 'Source file is not a recognized image format (PNG, JPEG, GIF, WebP, BMP, TIFF, HEIF, or AVIF required).' });
             continue;
           }
         } catch (validateErr) {
@@ -173,7 +168,10 @@ function register(deps) {
         const column = model.STORAGE_COLUMNS.includes(it.destColumn) ? it.destColumn : 'original';
         // Validate a caller-supplied imageId charset (no path separators) so a
         // hostile/buggy payload can't create nested subdirs under the column.
-        const id = (typeof it.imageId === 'string' && /^[^\\/]+$/.test(it.imageId)) ? it.imageId : model.newItemId();
+        // H-060 (_5 audit): strict imageId charset — only [A-Za-z0-9_-]{1,64}.
+        // The old /^[^\\/]+$/ allowed ':', '*', '?', '"', '<', '>', '|' which
+        // are illegal in Windows filenames and could corrupt the workspace.
+        const id = (typeof it.imageId === 'string' && /^[A-Za-z0-9_-]{1,64}$/.test(it.imageId)) ? it.imageId : model.newItemId();
         const name = it.displayName || path.basename(it.srcAbsPath);
         const dstDir = path.join(ws, column);
         const dst = model.outPath(ws, id, name, column, { ext: path.extname(it.srcAbsPath).slice(1) || undefined });
@@ -222,12 +220,14 @@ function register(deps) {
         return { ok: false, error: 'Read grant required for source: ' + readAuthz.error };
       }
       // SEC-003: validate source is an image (magic bytes). Reject non-image
-      // files before copying them into the workspace.
-      const srcBuf = Buffer.alloc(16);
+      // files before copying them into the workspace. M-059: read 32 bytes so
+      // fromMagic can scan ftyp compatible brands (an AVIF with major brand
+      // 'mif1' only reveals itself via the compatible-brands list).
+      const srcBuf = Buffer.alloc(32);
       let fd;
       try {
         fd = fs.openSync(payload.srcAbsPath, 'r');
-        fs.readSync(fd, srcBuf, 0, 16, 0);
+        fs.readSync(fd, srcBuf, 0, 32, 0);
       } catch (e) {
         return { ok: false, error: 'Cannot read source file: ' + ((e && e.message) || e) };
       } finally {
@@ -245,7 +245,7 @@ function register(deps) {
       }
       // Validate imageId charset (no path separators) so a hostile payload can't
       // create arbitrary nested subdirs under the column folder.
-      const id = (typeof payload.imageId === 'string' && /^[^\\/]+$/.test(payload.imageId)) ? payload.imageId : model.newItemId();
+      const id = (typeof payload.imageId === 'string' && /^[A-Za-z0-9_-]{1,64}$/.test(payload.imageId)) ? payload.imageId : model.newItemId(); // H-060
       const wsRes = resolveWorkspace(payload);
       if (!wsRes.ok) {
         return { ok: false, error: wsRes.error, reauthorizationRequired: !!wsRes.reauthorizationRequired };
@@ -290,7 +290,7 @@ function register(deps) {
   // renderer purges .trash on board close.
   secureHandle('pipeline:trash', { getMainWindow }, async (_e, payload) => {
     try {
-      if (!payload || typeof payload.imageId !== 'string' || !/^[^\\/]+$/.test(payload.imageId)) {
+      if (!payload || typeof payload.imageId !== 'string' || !/^[A-Za-z0-9_-]{1,64}$/.test(payload.imageId)) { // H-060
         return { ok: false, error: 'A valid imageId is required.' };
       }
       const wsRes = resolveWorkspace(payload);

@@ -58,6 +58,18 @@ function buildSettingsGeneralPane() {
     const lbl = apiKeyRow.row.querySelector('label');
     if (lbl) lbl.appendChild(helpButton('settings.apiKey'));
   } catch (_) {}
+  // B-007: deleting the stored key is an EXPLICIT action, never implied
+  // by an empty text field (the field always renders empty — the DTO is
+  // secretless). The button toggles a pending-clear flag that collect()
+  // reports as apiKeyAction:'clear' on Save.
+  let _clearKeyRequested = false;
+  const clearKeyBtn = el('button', { class: 'btn-mini', title: 'Remove the stored API key from config.txt and ~/.mmx/config.json on Save' }, 'Clear stored key');
+  clearKeyBtn.addEventListener('click', () => {
+    _clearKeyRequested = !_clearKeyRequested;
+    clearKeyBtn.textContent = _clearKeyRequested ? 'Will clear on Save — undo' : 'Clear stored key';
+    clearKeyBtn.classList.toggle('danger', _clearKeyRequested);
+  });
+  try { apiKeyRow.row.appendChild(clearKeyBtn); } catch (_) {}
   // "Don't save" checkbox on the API-key row. When checked, the
   // entered key is kept in memory (so the current session works) but
   // is NOT written to config.txt on Save, and the next launch starts
@@ -83,14 +95,10 @@ function buildSettingsGeneralPane() {
     apiKeyRow.input.classList.toggle('api-key-no-save-active', noSaveCb.checked);
   }
   noSaveCb.addEventListener('change', () => {
-    state.apiKeyNoSave = noSaveCb.checked;
+    // H-038 (_5 audit): buffer in a local draft — do NOT write to
+    // state on change. commitState() (called by the Save handler)
+    // applies the draft so Cancel truly discards the change.
     syncNoSaveStyle();
-    // Persist immediately so the checkbox state survives a restart
-    // even if the user clicks Cancel (which doesn't go through the
-    // Save button's collect() path). The sibling settings all call
-    // scheduleStateSave() in their change handlers; without it here,
-    // the checkbox would silently revert on the next launch.
-    if (typeof scheduleStateSave === 'function') scheduleStateSave();
   });
   syncNoSaveStyle();
   root.appendChild(apiKeyRow.row);
@@ -98,7 +106,10 @@ function buildSettingsGeneralPane() {
 
   // ---- Section 2: Storage ----
   root.appendChild(el('h4', { class: 'settings-group-title' }, '📁 Storage'));
-  const outInput = el('input', { type: 'text', value: state.config.output_dir || '', placeholder: '(default: ./generated/)' });
+  // H-041 (_5 audit): output/report path inputs are READONLY — Main only
+  // accepts picker-granted paths, so free-text editing always fails. The
+  // Browse button mints the grant; typing would be silently rejected.
+  const outInput = el('input', { type: 'text', value: state.config.output_dir || '', placeholder: '(default: ./generated/)', readonly: '', title: 'Use Browse… to change — typed paths are rejected (security: grant-based path authorization)' });
   // R1.2a: store the grantId from the native folder picker so the
   // Save handler can pass it to config:set (which requires a grant
   // for output_dir / report_dir changes).
@@ -113,7 +124,7 @@ function buildSettingsGeneralPane() {
   ]));
   // Report folder — where Pipeline "clear/export with report" .md files
   // land. Empty = use the asset destination folder (next to the exported files).
-  const reportInput = el('input', { type: 'text', value: state.config.report_dir || '', placeholder: '(default: next to the assets)', title: 'Where Pipeline clear/export reports are written. Leave blank to write the report next to the exported assets.' });
+  const reportInput = el('input', { type: 'text', value: state.config.report_dir || '', placeholder: '(default: next to the assets)', readonly: '', title: 'Use Browse… to change — typed paths are rejected (security: grant-based path authorization)' });
   root.appendChild(el('div', { class: 'row' }, [
     el('label', {}, ['Report folder', helpButton('settings.reportDir')]),
     el('div', { class: 'combo' }, [reportInput, el('button', { class: 'btn-mini', onclick: async () => {
@@ -144,12 +155,23 @@ function buildSettingsGeneralPane() {
   const diag = el('button', { class: 'btn-mini' }, 'Diagnose');
   test.addEventListener('click', async () => {
     test.disabled = true; test.innerHTML = '<span class="spinner"></span> Testing…';
-    const r = await window.api.authStatus();
-    test.disabled = false; test.textContent = 'Test connection';
-    if (r.ok) {
-      toast((r.message || 'Authentication OK.') + (r.command ? `  (via ${r.command})` : ''), 'ok', 4000);
-    } else {
-      toast('Auth failed: ' + (r.error || 'unknown error'), 'err', 6000);
+    try {
+      // H-040 (_5 audit): test the DRAFT key (what the user typed) rather
+      // than the previously-saved key. Falls back to authStatus (saved
+      // key) when the field is empty.
+      const draft = apiKeyRow.getValue().trim();
+      const r = draft
+        ? await window.api.authTestDraft({ draftKey: draft })
+        : await window.api.authStatus();
+      if (r.ok) {
+        toast((r.message || 'Authentication OK.') + (r.command ? `  (via ${r.command})` : ''), 'ok', 4000);
+      } else {
+        toast('Auth failed: ' + (r.error || 'unknown error'), 'err', 6000);
+      }
+    } catch (e) {
+      toast('Test failed: ' + ((e && e.message) || e), 'err', 6000);
+    } finally {
+      test.disabled = false; test.textContent = 'Test connection';
     }
   });
   diag.addEventListener('click', () => { showDiagnose(); });
@@ -159,10 +181,20 @@ function buildSettingsGeneralPane() {
     root,
     instance: {
       collect() {
+        // B-007: the key is a typed command, never a config text field.
+        // Empty field = keep. Non-empty field = replace. Clear button =
+        // clear. Under "Don't save", the entered value goes to the
+        // session channel and the persisted key is cleared by Main
+        // (apiKeyNoSave contract) — action stays 'keep' here.
+        const entered = apiKeyRow.getValue().trim();
+        const action = _clearKeyRequested ? 'clear'
+          : (entered && !noSaveCb.checked) ? 'replace'
+          : 'keep';
         return {
-          api_key: noSaveCb.checked ? '' : apiKeyRow.getValue().trim(),
+          _apiKeyAction: action,
+          _apiKeyNewValue: action === 'replace' ? entered : '',
           _apiKeyNoSave: noSaveCb.checked,
-          _apiKeyValue: noSaveCb.checked ? apiKeyRow.getValue().trim() : '',
+          _apiKeyValue: noSaveCb.checked ? entered : '',
           output_dir: outInput.value.trim(),
           // report_dir is persisted (sanitize() whitelists it) so the
           // Pipeline report writer can drop .md files here without a trust round-trip.
@@ -173,6 +205,10 @@ function buildSettingsGeneralPane() {
           // The Save handler strips this and passes it as a sibling of cfg.
           _grants: { output_dir: _outDirGrantId, report_dir: _reportDirGrantId },
         };
+      },
+      // H-038 (_5 audit): commit state-side fields only on Save.
+      commitState() {
+        state.apiKeyNoSave = noSaveCb.checked;
       },
     },
   };
@@ -209,8 +245,7 @@ function buildSettingsImageAddonsPane() {
     modelSel.appendChild(opt);
   }
   modelSel.addEventListener('change', () => {
-    state.realesrganModel = modelSel.value;
-    scheduleStateSave();
+    // H-038 (_5 audit): buffer locally — commitState() applies on Save.
   });
   // ---- Section 2: Upscale model ----
   root.appendChild(el('h4', { class: 'settings-group-title' }, '🔍 Upscale model'));
@@ -325,7 +360,9 @@ function buildSettingsImageAddonsPane() {
   // The pane does not modify config.txt directly — its writes
   // go to state.json (realesrganModel), so collect() returns
   // an empty object. The save button still works.
-  return { root, instance: { collect: () => ({}) } };
+  // H-038 (_5 audit): commitState() applies the buffered model
+  // selection only when the user clicks Save.
+  return { root, instance: { collect: () => ({}), commitState() { state.realesrganModel = modelSel.value; } } };
 }
 
 function buildSettingsStylesPane() {
@@ -498,7 +535,7 @@ function buildSettingsPopupsPane() {
     ['always',      'Always show (even after dismissal)'],
   ]) polSel.appendChild(el('option', { value: val }, lbl));
   polSel.value = state.popupPolicy || 'never';
-  polSel.addEventListener('change', () => { state.popupPolicy = polSel.value; scheduleStateSave(); });
+  polSel.addEventListener('change', () => { /* H-038: buffered — commitState() applies on Save */ });
   root.appendChild(el('div', { class: 'row' }, [
     el('label', {}, ['Popup behaviour', helpButton('settings.popupPolicy')]),
     polSel,
@@ -535,36 +572,37 @@ function buildSettingsPopupsPane() {
     style: 'background: var(--danger); color: #fff; font-weight: 600; border: none; padding: 6px 14px; border-radius: 4px; cursor: pointer;',
   }, 'Delete all local data…');
   dangerBtn.addEventListener('click', async () => {
-    // KGO8-001: both confirm steps run INSIDE the try — window.prompt() THROWS in Electron.
+    // B-009: the whole reset is ONE Main-owned transaction
+    // (app:confirmResetAndRelaunch). Main shows the fixed native warning
+    // dialog, deletes, verifies, and relaunches only on full success.
+    // The renderer keeps a lightweight typed-DELETE pre-gate so an
+    // accidental click never even reaches the native dialog, but the
+    // authoritative confirmation is Main's.
     try {
-      if (!await asyncConfirm('This will permanently delete:\n\n• config.txt (API key, output dir, region, theme, styles)\n• state.json (all UI/layout/pipeline state)\n• batches.json (batch queues)\n• state.jobs.archive.jsonl (job history)\n• ~/.mmx/config.json api_key field\n\nYour generated assets (images, audio, video) are NOT touched.\n\nContinue?')) return;
-      const typed = await asyncPrompt('Type DELETE to confirm irreversible data deletion:', 'DELETE', '⚠ Delete all local data');
+      const typed = await asyncPrompt('Type DELETE to confirm irreversible data deletion:', '', '⚠ Delete all local data');
       if (typed !== 'DELETE') { toast('Deletion cancelled.', 'warn'); return; }
       dangerBtn.disabled = true;
       dangerBtn.textContent = 'Deleting…';
-      const result = await window.api.resetAllData();
-      // Show per-file results honestly.
-      const failed = (result.results || []).filter((r) => !r.ok && !r.skipped);
-      if (failed.length) {
-        toast(`Reset partially failed: ${failed.map((f) => f.file).join(', ')}`, 'err', 8000);
-        // Show detail in a follow-up confirm so the user sees what failed.
-        alert('Some files could not be deleted (likely locked by another process):\n\n' + failed.map((f) => `  ${f.file}: ${f.error}`).join('\n'));
+      const result = await window.api.confirmResetAndRelaunch();
+      // On full success the app relaunches before this resolves; every
+      // path we CAN observe is a cancel or a failure.
+      if (result && result.canceled) {
+        toast('Deletion cancelled.', 'warn');
         dangerBtn.disabled = false;
         dangerBtn.textContent = 'Delete all local data…';
         return;
       }
-      // Issue 3: stop any pending debounced state save and wipe the
-      // in-memory config so nothing can write the just-deleted data back
-      // to disk in the reset→relaunch window. (The main process also
-      // re-deletes at the very last moment in app:resetAndRelaunch as a final guard.)
+      if (!result || result.ok !== true) {
+        const failed = ((result && result.results) || []).filter((r) => !r.ok && !r.skipped);
+        const detail = failed.length ? ': ' + failed.map((f) => `${f.file} (${f.error || 'error'})`).join(', ') : '';
+        toast('Reset failed' + detail + ' — nothing was relaunched. Files may be locked by another process.', 'err', 8000);
+        dangerBtn.disabled = false;
+        dangerBtn.textContent = 'Delete all local data…';
+        return;
+      }
+      // Defensive: full success but relaunch didn't terminate us yet.
       try { if (typeof window.cancelPendingStateSave === 'function') window.cancelPendingStateSave(); } catch (_) {}
-      try {
-        state.config = { api_key: '', output_dir: '', report_dir: '', region: 'global', theme: 'dark', styles: [], external_tools: [], raw: '' };
-      } catch (_) {}
-      // Issue 2: clear success toast once the deletion has finished.
       toast('Local data successfully deleted. Restarting the tool now…', 'ok', 4000);
-      // Brief delay so the toast is visible before relaunch.
-      setTimeout(() => { window.api.resetAndRelaunch(); }, 1500);
     } catch (e) {
       toast('Reset failed: ' + ((e && e.message) || e), 'err', 6000);
       dangerBtn.disabled = false;
@@ -576,7 +614,8 @@ function buildSettingsPopupsPane() {
     dangerBtn,
   ]));
 
-  return { root, instance: { collect: () => ({}) /* popupPolicy lives in state.json */ } };
+  // H-038 (_5 audit): commitState() applies popupPolicy on Save.
+  return { root, instance: { collect: () => ({}), commitState() { state.popupPolicy = polSel.value; } } };
 }
 
 function buildSettingsBatchgenPane() {
@@ -603,13 +642,8 @@ function buildSettingsBatchgenPane() {
     ['txt', '📄 Plain text (.txt) — pipe-separated rows, no formatting'],
   ]) fmtSel.appendChild(el('option', { value: val }, lbl));
   fmtSel.value = state.batchesExportFormat || 'md';
-  // Apply immediately on change so the next click on "Gen
-  // Examples" uses the new format even if the user doesn't
-  // hit Save in the meantime. scheduleStateSave persists the
-  // pick to state.json so a restart uses the same format.
+  // H-038 (_5 audit): buffer locally — commitState() applies on Save.
   fmtSel.addEventListener('change', () => {
-    state.batchesExportFormat = fmtSel.value;
-    scheduleStateSave();
   });
   root.appendChild(el('div', { class: 'row' }, [
     el('label', {}, ['Example export format', helpButton('settings.batchesExportFormat')]),
@@ -628,8 +662,7 @@ function buildSettingsBatchgenPane() {
   });
   autoRemoveCb.checked = state.batchesAutoRemove !== false;  // default true
   autoRemoveCb.addEventListener('change', () => {
-    state.batchesAutoRemove = autoRemoveCb.checked;
-    scheduleStateSave();
+    // H-038 (_5 audit): buffer locally — commitState() applies on Save.
   });
   root.appendChild(el('div', { class: 'row batches-auto-remove-row' }, [
     el('label', { for: 'batches-auto-remove-cb' }, [
@@ -647,11 +680,15 @@ function buildSettingsBatchgenPane() {
     instance: {
       collect() {
         // Both batchesExportFormat and batchesAutoRemove live
-        // in state.json (persisted via scheduleStateSave on
-        // change), not in config.txt — so the collect() returns
-        // an empty partial and the Save handler merges state
-        // JSON + config in-place without re-writing these.
+        // in state.json (persisted via commitState on Save),
+        // not in config.txt — so the collect() returns an
+        // empty partial.
         return {};
+      },
+      // H-038 (_5 audit): commit buffered state on Save.
+      commitState() {
+        state.batchesExportFormat = fmtSel.value;
+        state.batchesAutoRemove = autoRemoveCb.checked;
       },
     },
   };
@@ -675,11 +712,10 @@ function buildSettingsHistoryPane() {
   capBox.append(capLabel, capInput);
   root.appendChild(capBox);
   capInput.addEventListener('change', () => {
+    // H-038 (_5 audit): clamp + display immediately, but do NOT
+    // write to state — commitState() applies on Save.
     const v = Math.max(20, Math.min(1000, Math.round(Number(capInput.value) || 200)));
     capInput.value = v;
-    state.jobsArchiveCap = v;
-    if (typeof scheduleStateSave === 'function') scheduleStateSave();
-    if (typeof toast === 'function') toast(`Recent job cap set to ${v}. Existing overflow will be moved to the archive on the next save.`, 'info', 4000);
   });
 
   root.appendChild(el('h4', { style: 'margin-top: 16px;' }, 'Archive (L3 — JSONL)'));
@@ -727,10 +763,14 @@ function buildSettingsHistoryPane() {
     root,
     instance: {
       collect() {
-        // L2 cap is persisted to state.json via scheduleStateSave
-        // on the change event. We don't need to return anything
-        // here; the Save handler reads state.jobsArchiveCap.
+        // L2 cap is persisted to state.json via commitState()
+        // on Save. We don't need to return anything here.
         return {};
+      },
+      // H-038 (_5 audit): commit buffered cap on Save.
+      commitState() {
+        const v = Math.max(20, Math.min(1000, Math.round(Number(capInput.value) || 200)));
+        state.jobsArchiveCap = v;
       },
       onShow() {
         // Re-read the size every time the user opens this pane.
@@ -797,6 +837,18 @@ function buildSettingsShortcutsPane() {
 // launchable.
 function buildSettingsExternalToolsPane() {
   const root = el('div', {});
+  // H-052 (_5 audit): when the feature flag is off (packaged build),
+  // show a clear "development-only" notice instead of a fully interactive
+  // editor that can never execute any tool. No misleading active UI path.
+  if (state.config && state.config.externalToolsEnabled === false) {
+    root.appendChild(el('h4', { class: 'settings-group-title' }, '🔧 External tools'));
+    root.appendChild(el('p', { style: 'color: var(--fg-2); font-size: 13px; margin: 12px 0;' },
+      'External tools execution is disabled in this build.'));
+    root.appendChild(el('p', { style: 'color: var(--fg-3); font-size: 12px;' },
+      'This feature is available only in development builds (security review pending). ' +
+      'Tool configurations are preserved and will become active once the feature is enabled in a future release.'));
+    return root;
+  }
   root.appendChild(el('p', { style: 'color: var(--fg-2); font-size: 12px; margin-top: 0;' },
     '3rd-party programs (GIMP, Photoshop, Notepad++, Audacity, …) reachable from the file-browser context menu and the image editor\'s hand-off. Each tool launches with the selected file path(s) appended as the last argument(s).'));
 

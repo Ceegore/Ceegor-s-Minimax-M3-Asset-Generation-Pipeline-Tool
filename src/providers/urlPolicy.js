@@ -220,10 +220,42 @@ function validateOutputUrl(urlStr) {
   return { ok: true };
 }
 
+/**
+ * H-018 (_5 audit): Async output-URL validation with DNS resolution check.
+ * Combines the synchronous validateOutputUrl (HTTPS-only, IP-block) with an
+ * async DNS resolution step to detect DNS-rebinding attacks on output URLs.
+ *
+ * @param {string} urlStr - The output URL to validate.
+ * @returns {Promise<{ok: true} | {ok: false, error: string}>}
+ */
+async function validateOutputUrlWithDns(urlStr) {
+  const syncResult = validateOutputUrl(urlStr);
+  if (!syncResult.ok) return syncResult;
+
+  let parsed;
+  try { parsed = new URL(urlStr); } catch (_) { return { ok: false, error: 'Invalid output URL' }; }
+  const hostname = parsed.hostname;
+  // Skip DNS check for IP literals (already validated synchronously).
+  if (/^[\d.]+$/.test(hostname) || hostname.includes(':')) return { ok: true };
+
+  try {
+    const addresses = await dns.promises.resolve4(hostname);
+    for (const addr of addresses) {
+      if (isPrivateIPv4(addr) || isLoopback(addr)) {
+        return { ok: false, error: `Output URL DNS rebinding detected: ${hostname} resolves to private IP ${addr}` };
+      }
+    }
+  } catch (_) {
+    return { ok: false, error: `DNS resolution failed for output URL host ${hostname} (SSRF protection)` };
+  }
+  return { ok: true };
+}
+
 module.exports = {
   validateProviderUrl,
   validateProviderUrlWithDns,
   validateOutputUrl,
+  validateOutputUrlWithDns,
   isLoopback,
   isPrivateIPv4,
   isPrivateIPv6,

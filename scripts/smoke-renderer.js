@@ -363,7 +363,17 @@ async function run() {
   check(sawBothWipTogether,
     'music and image were never simultaneously wip — cross-tab parallelism is broken (one tab is serialized behind the other)');
 
-  await sleep(DELAY + 900);
+  // Poll until BOTH parallel jobs finish (fixed sleep was flaky under load).
+  for (let i = 0; i < 200; i++) {
+    const snap = await exec(`(() => ({
+      m: (window.JobRunner ? window.JobRunner.isTabRunning('music') : false),
+      g: (window.JobRunner ? window.JobRunner.isTabRunning('image') : false),
+    }))()`);
+    if (!snap.m && !snap.g) break;
+    await sleep(25);
+  }
+  // Small settle so the generate handler's finally{} clears state.generating.
+  await sleep(150);
 
   const parallelAfter = await exec(`(() => ({
     generating: (typeof state!=='undefined' ? state.generating : 'undefined'),
@@ -417,7 +427,11 @@ async function run() {
       if (b) b.click();
       return true;
     })()`);
-    await sleep(DELAY + 900);
+    // Poll until the fake backend records the output (fixed sleep was flaky).
+    for (let i = 0; i < 200; i++) {
+      if (lastOutPaths[key]) break;
+      await sleep(25);
+    }
     const outFile = lastOutPaths[key];
     check(!!outFile, `file-prefix: tab ${key}: fake mmx backend never saw a resolvable --out/--download path`);
     if (outFile) {
@@ -474,7 +488,11 @@ async function run() {
     if (b) b.click();
     return !!fmtSel;
   })()`);
-  await sleep(DELAY + 900);
+  // Poll until the fake backend records the speech output (fixed sleep was flaky).
+  for (let i = 0; i < 200; i++) {
+    if (lastOutPaths.speech) break;
+    await sleep(25);
+  }
   const speechOut = lastOutPaths.speech;
   const speechArgs = lastFullArgs.speech || [];
   check(!!speechOut, 'speech generation did not produce an output file');

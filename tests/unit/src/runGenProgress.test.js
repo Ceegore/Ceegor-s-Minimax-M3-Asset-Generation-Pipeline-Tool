@@ -66,7 +66,12 @@ test('R6.6.6.A: registerUpscaleIpc forwards runGen in progress event', async () 
   // nothing.
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'rungen-'));
   const dstPng = path.join(tmpDir, 'dst.png');
-  fs.writeFileSync(dstPng, Buffer.concat([Buffer.from([0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A]), Buffer.alloc(120, 0)]));
+  // H-064: the finalizer now fully decodes image artifacts, so the dst must
+  // be a REAL decodable PNG (1x1 transparent, ~70 bytes ≥ minSize 64).
+  fs.writeFileSync(dstPng, Buffer.from(
+    'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==',
+    'base64'
+  ));
   try {
     const mod = require(ipcPath);
     mod.register({ appRoot: 'C:\\fake' });

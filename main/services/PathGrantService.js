@@ -21,23 +21,26 @@ const OPERATION_TO_CAPABILITY = Object.freeze({
 // NEVER be granted. A grant on these paths would allow a compromised
 // renderer to read/write system files.
 // HIGH-013: completed blocklist with additional system/credential paths.
-const SENSITIVE_ROOTS = (() => {
+// H-028 (_5 audit): split into DEEP (root + all descendants blocked) and
+// SELF (only the exact root blocked, descendants like Documents are fine).
+// DEEP: credential stores + critical system dirs — NO descendant is ever
+// a legitimate grant target.
+const SENSITIVE_DEEP = (() => {
   const roots = [
-    'C:\\',
+    'C:\\Recovery',
+    'C:\\System Volume Information',
+    'C:\\$Recycle.Bin',
+    // QA-fix (H-028 completion): system directories where NO subdirectory
+    // is ever a legitimate grant target. The audit explicitly requires
+    // C:\Windows\Temp\asset.png to be blocked — SELF-only was insufficient.
     'C:\\Windows',
     'C:\\Program Files',
     'C:\\Program Files (x86)',
     'C:\\ProgramData',
-    'C:\\Recovery',
-    'C:\\System Volume Information',
-    'C:\\$Recycle.Bin',
   ];
-  // Add user profile paths
   try {
     const userProfile = process.env.USERPROFILE || process.env.HOME;
     if (userProfile) {
-      roots.push(userProfile);
-      roots.push(path.join(userProfile, 'AppData'));
       roots.push(path.join(userProfile, '.ssh'));
       roots.push(path.join(userProfile, '.gnupg'));
       roots.push(path.join(userProfile, '.aws'));
@@ -45,17 +48,32 @@ const SENSITIVE_ROOTS = (() => {
       roots.push(path.join(userProfile, '.docker'));
     }
   } catch (_) {}
-  // Add system root
   try {
     const sysRoot = process.env.SYSTEMROOT || process.env.SystemRoot;
     if (sysRoot) {
-      roots.push(sysRoot);
       roots.push(path.join(sysRoot, 'System32'));
       roots.push(path.join(sysRoot, 'SysWOW64'));
     }
   } catch (_) {}
-  // POSIX sensitive paths (for portability / CI)
-  roots.push('/etc', '/private', '/var/lib', '/root', '/boot', '/dev');
+  roots.push('/etc', '/root', '/boot', '/dev', '/private', '/var/lib');
+  return roots.map((r) => path.resolve(r).toLowerCase());
+})();
+
+// SELF-only: block granting the exact root, but allow user-chosen
+// subdirectories (e.g. C:\Users\me\Documents\MyAssets, or temp dirs
+// under AppData\Local\Temp). These are too broad for descendant blocking
+// because the tool legitimately needs temp/output paths under them.
+const SENSITIVE_SELF = (() => {
+  const roots = [
+    'C:\\',
+  ];
+  try {
+    const userProfile = process.env.USERPROFILE || process.env.HOME;
+    if (userProfile) {
+      roots.push(userProfile);
+      roots.push(path.join(userProfile, 'AppData'));
+    }
+  } catch (_) {}
   return roots.map((r) => path.resolve(r).toLowerCase());
 })();
 
@@ -63,18 +81,33 @@ const SENSITIVE_ROOTS = (() => {
 const DEFAULT_READ_TTL_MS = 5 * 60 * 1000;
 /** Default TTL for write grants (10 minutes). */
 const DEFAULT_WRITE_TTL_MS = 10 * 60 * 1000;
+// H-027 (_5 audit): provider jobs can poll for up to 10 minutes PLUS
+// submit time, download time, and retries. A 10-minute write grant can
+// expire between a successful paid generation and the local save.
+// Extended TTL for provider-bound grants: 30 minutes.
+const PROVIDER_JOB_TTL_MS = 30 * 60 * 1000;
 
 /**
- * Check if a canonical path is a sensitive root or directly under one.
+ * Check if a canonical path IS a sensitive root or is INSIDE one.
+ * H-028 (_5 audit): DEEP roots block the root AND every descendant
+ * (system dirs, credential dirs). SELF roots block only the exact
+ * root (user profile, drive root) — subdirectories are allowed.
+ * Uses path.relative() for boundary-safe containment: a similarly-
+ * named path (e.g. C:\WindowsBackup) is NOT a descendant of C:\Windows.
  * @param {string} canonicalPath - Lowercase canonical path.
  * @returns {boolean}
  */
 function isSensitiveRoot(canonicalPath) {
   const lower = canonicalPath.toLowerCase();
-  for (const root of SENSITIVE_ROOTS) {
+  // DEEP: block root + all descendants.
+  for (const root of SENSITIVE_DEEP) {
     if (lower === root) return true;
-    // Block granting the root itself (e.g. C:\ or %USERPROFILE%)
-    // but allow subdirectories (e.g. C:\Users\me\Documents)
+    const rel = path.relative(root, lower);
+    if (rel && !rel.startsWith('..') && !path.isAbsolute(rel)) return true;
+  }
+  // SELF: block only the exact root.
+  for (const root of SENSITIVE_SELF) {
+    if (lower === root) return true;
   }
   return false;
 }
@@ -394,6 +427,24 @@ class PathGrantService {
   _resetForTest() {
     this._grants.clear();
   }
+
+  /**
+   * H-027 (_5 audit): extend a grant's expiry. Used by the provider
+   * generate handler to keep the write grant alive during long-running
+   * remote jobs (polling can take 10+ minutes). Only extends — never
+   * shortens. Returns false if the grant doesn't exist or is revoked.
+   * @param {string} grantId
+   * @param {number} newExpiresAt - Absolute timestamp (ms).
+   * @returns {boolean}
+   */
+  extendGrant(grantId, newExpiresAt) {
+    const grant = this._grants.get(grantId);
+    if (!grant || grant.revoked) return false;
+    if (typeof newExpiresAt === 'number' && (grant.expiresAt == null || newExpiresAt > grant.expiresAt)) {
+      grant.expiresAt = newExpiresAt;
+    }
+    return true;
+  }
 }
 
 // Module-level default instance. IPC handlers share THIS instance so a
@@ -404,4 +455,5 @@ module.exports = {
   PathGrantService,
   OPERATION_TO_CAPABILITY,
   defaultService,
+  PROVIDER_JOB_TTL_MS,
 };

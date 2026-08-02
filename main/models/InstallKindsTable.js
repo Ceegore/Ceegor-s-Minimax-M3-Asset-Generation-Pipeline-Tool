@@ -61,15 +61,25 @@ function getSpec(kind) {
 
 /**
  * Berechnet den absoluten Ziel-Pfad für ein Kind.
+ * H-065: Das Install-Ziel ist AUSSCHLIESSLICH das beschreibbare Override-
+ * Verzeichnis (<userData>/assets/...). resolveAsset() würde den gebundelten
+ * resources/bin-Pfad liefern (read-only in gepackten Builds), sobald eine
+ * gebundelte Kopie existiert. `appRoot` bleibt aus Kompatibilitätsgründen
+ * in der Signatur, wird aber nicht mehr verwendet.
  * @param {string} kind
  * @param {string} appRoot
  * @returns {string|null}
  */
-function getDestPath(kind, appRoot) {
+function getDestPath(kind, appRoot) { // eslint-disable-line no-unused-vars
   const spec = getSpec(kind);
   if (!spec) return null;
   const assetPaths = require('../../src/assetPaths');
-  return assetPaths.resolveAsset(spec.destSubdir || '', spec.destName, { appRoot });
+  try {
+    return assetPaths.resolveWritableOverride(spec.destSubdir || '', spec.destName);
+  } catch (_) {
+    // No userDataPath configured — caller reports "Failed to resolve destination".
+    return null;
+  }
 }
 
 module.exports = { INSTALL_KINDS, getSpec, getDestPath };
