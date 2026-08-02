@@ -11,71 +11,13 @@
 const crypto = require('crypto');
 const path = require('path');
 const fs = require('fs');
+const { relation, isEqualOrDescendant, isStrictDescendant } = require('./pathRelation');
+const { SENSITIVE_DEEP, SENSITIVE_SELF, isSensitiveRoot } = require('./sensitivePaths');
 
 const OPERATION_TO_CAPABILITY = Object.freeze({
   read: 'read', write: 'write', delete: 'delete', mkdir: 'mkdir',
   rename: 'rename', copy: 'copy', move: 'move',
 });
-
-// P1-E (360° Audit H-002, H-003, H-021): sensitive roots that must
-// NEVER be granted. A grant on these paths would allow a compromised
-// renderer to read/write system files.
-// HIGH-013: completed blocklist with additional system/credential paths.
-// H-028 (_5 audit): split into DEEP (root + all descendants blocked) and
-// SELF (only the exact root blocked, descendants like Documents are fine).
-// DEEP: credential stores + critical system dirs — NO descendant is ever
-// a legitimate grant target.
-const SENSITIVE_DEEP = (() => {
-  const roots = [
-    'C:\\Recovery',
-    'C:\\System Volume Information',
-    'C:\\$Recycle.Bin',
-    // QA-fix (H-028 completion): system directories where NO subdirectory
-    // is ever a legitimate grant target. The audit explicitly requires
-    // C:\Windows\Temp\asset.png to be blocked — SELF-only was insufficient.
-    'C:\\Windows',
-    'C:\\Program Files',
-    'C:\\Program Files (x86)',
-    'C:\\ProgramData',
-  ];
-  try {
-    const userProfile = process.env.USERPROFILE || process.env.HOME;
-    if (userProfile) {
-      roots.push(path.join(userProfile, '.ssh'));
-      roots.push(path.join(userProfile, '.gnupg'));
-      roots.push(path.join(userProfile, '.aws'));
-      roots.push(path.join(userProfile, '.kube'));
-      roots.push(path.join(userProfile, '.docker'));
-    }
-  } catch (_) {}
-  try {
-    const sysRoot = process.env.SYSTEMROOT || process.env.SystemRoot;
-    if (sysRoot) {
-      roots.push(path.join(sysRoot, 'System32'));
-      roots.push(path.join(sysRoot, 'SysWOW64'));
-    }
-  } catch (_) {}
-  roots.push('/etc', '/root', '/boot', '/dev', '/private', '/var/lib');
-  return roots.map((r) => path.resolve(r).toLowerCase());
-})();
-
-// SELF-only: block granting the exact root, but allow user-chosen
-// subdirectories (e.g. C:\Users\me\Documents\MyAssets, or temp dirs
-// under AppData\Local\Temp). These are too broad for descendant blocking
-// because the tool legitimately needs temp/output paths under them.
-const SENSITIVE_SELF = (() => {
-  const roots = [
-    'C:\\',
-  ];
-  try {
-    const userProfile = process.env.USERPROFILE || process.env.HOME;
-    if (userProfile) {
-      roots.push(userProfile);
-      roots.push(path.join(userProfile, 'AppData'));
-    }
-  } catch (_) {}
-  return roots.map((r) => path.resolve(r).toLowerCase());
-})();
 
 /** Default TTL for read grants (5 minutes). */
 const DEFAULT_READ_TTL_MS = 5 * 60 * 1000;
@@ -86,31 +28,6 @@ const DEFAULT_WRITE_TTL_MS = 10 * 60 * 1000;
 // expire between a successful paid generation and the local save.
 // Extended TTL for provider-bound grants: 30 minutes.
 const PROVIDER_JOB_TTL_MS = 30 * 60 * 1000;
-
-/**
- * Check if a canonical path IS a sensitive root or is INSIDE one.
- * H-028 (_5 audit): DEEP roots block the root AND every descendant
- * (system dirs, credential dirs). SELF roots block only the exact
- * root (user profile, drive root) — subdirectories are allowed.
- * Uses path.relative() for boundary-safe containment: a similarly-
- * named path (e.g. C:\WindowsBackup) is NOT a descendant of C:\Windows.
- * @param {string} canonicalPath - Lowercase canonical path.
- * @returns {boolean}
- */
-function isSensitiveRoot(canonicalPath) {
-  const lower = canonicalPath.toLowerCase();
-  // DEEP: block root + all descendants.
-  for (const root of SENSITIVE_DEEP) {
-    if (lower === root) return true;
-    const rel = path.relative(root, lower);
-    if (rel && !rel.startsWith('..') && !path.isAbsolute(rel)) return true;
-  }
-  // SELF: block only the exact root.
-  for (const root of SENSITIVE_SELF) {
-    if (lower === root) return true;
-  }
-  return false;
-}
 
 /**
  * @typedef {Object} Grant
@@ -329,12 +246,9 @@ class PathGrantService {
       }
     } else if (grant.kind === 'directory') {
       // Strict descendants only. S1 §2.5: the root itself is never
-      // covered. path.relative returns '' for the same path, an
-      // absolute path for cross-drive, and a leading '..' for any
-      // escape. The dir-bypass + isAbsolute + startsWith('..')
-      // triple-check covers all three failure modes.
-      const rel = path.relative(grant.canonicalPath, candidateCanonical);
-      if (rel === '' || rel.startsWith('..') || path.isAbsolute(rel)) {
+      // covered. AUD-017 fix: use segment-aware relation check.
+      // '..foo', '...cache' are valid descendants, not escapes.
+      if (!isStrictDescendant(grant.canonicalPath, candidateCanonical)) {
         return { ok: false, error: 'directory grant covers only strict descendants, not the root itself' };
       }
     } else if (grant.kind === 'directory-root') {
@@ -344,11 +258,9 @@ class PathGrantService {
       // inside the directory are also authorised). This is the
       // explicit "app-output" branch of the S1 §3 table where
       // "Root löschen/umbenennen" is allowed.
-      if (!this._pathsEqual(candidateCanonical, grant.canonicalPath)) {
-        const rel = path.relative(grant.canonicalPath, candidateCanonical);
-        if (rel === '' || rel.startsWith('..') || path.isAbsolute(rel)) {
-          return { ok: false, error: 'directory-root grant covers only the root itself and its strict descendants' };
-        }
+      // AUD-017 fix: use segment-aware relation check.
+      if (!isEqualOrDescendant(grant.canonicalPath, candidateCanonical)) {
+        return { ok: false, error: 'directory-root grant covers only the root itself and its strict descendants' };
       }
     } else {
       return { ok: false, error: 'unknown grant kind: ' + grant.kind };
@@ -444,6 +356,94 @@ class PathGrantService {
       grant.expiresAt = newExpiresAt;
     }
     return true;
+  }
+
+  /**
+   * AUD-003 fix: Non-consuming preflight check for output authorization.
+   * This validates a grant without consuming single-use grants or extending expiry.
+   * Must be called BEFORE any filesystem operation, write probe, or provider submission.
+   * 
+   * @param {string} grantId
+   * @param {{
+   *   operation: string,
+   *   path: string,
+   *   requiredOrigin?: string,
+   *   requireExactRoot?: boolean,
+   *   consume?: boolean
+   * }} spec
+   * @returns {{ok: true, canonicalPath: string, grantSnapshot: object} | {ok: false, error: string, code?: string}}
+   */
+  preflight(grantId, spec) {
+    if (!grantId || typeof grantId !== 'string') return { ok: false, error: 'grantId required', code: 'PATH_GRANT_REQUIRED' };
+    if (!spec || typeof spec !== 'object') return { ok: false, error: 'spec required', code: 'INVALID_ARGUMENT' };
+    const { operation, path: candidatePath, requiredOrigin, requireExactRoot = false, consume = false } = spec;
+    if (!operation) return { ok: false, error: 'operation required', code: 'INVALID_ARGUMENT' };
+    if (!candidatePath || typeof candidatePath !== 'string') return { ok: false, error: 'path required', code: 'INVALID_ARGUMENT' };
+
+    const grant = this._grants.get(grantId);
+    if (!grant) return { ok: false, error: 'grant not found', code: 'PATH_GRANT_REQUIRED' };
+    if (grant.revoked) return { ok: false, error: 'grant revoked', code: 'PATH_GRANT_REQUIRED' };
+    if (!consume && grant.consumed) return { ok: false, error: 'grant already consumed (single-use)', code: 'PATH_GRANT_REQUIRED' };
+    if (grant.expiresAt != null && this._now() > grant.expiresAt) {
+      return { ok: false, error: 'grant expired', code: 'PATH_GRANT_REQUIRED' };
+    }
+    
+    // Check origin if required
+    if (requiredOrigin && grant.origin !== requiredOrigin) {
+      return { ok: false, error: 'grant origin mismatch', code: 'PATH_GRANT_SCOPE_MISMATCH' };
+    }
+    
+    const requiredCap = OPERATION_TO_CAPABILITY[operation];
+    if (!requiredCap) return { ok: false, error: 'unknown operation: ' + operation, code: 'INVALID_ARGUMENT' };
+    if (!grant.capabilities.includes(requiredCap)) {
+      return { ok: false, error: 'operation "' + operation + '" not permitted by grant capabilities', code: 'PATH_GRANT_SCOPE_MISMATCH' };
+    }
+    
+    const candidateCanonical = this._canonicalize(candidatePath);
+    if (!candidateCanonical) return { ok: false, error: 'path could not be canonicalized: ' + candidatePath, code: 'INVALID_ARGUMENT' };
+
+    // Check path relationship based on grant kind
+    if (grant.kind === 'file') {
+      if (!this._pathsEqual(candidateCanonical, grant.canonicalPath)) {
+        return { ok: false, error: 'file grant covers only its exact canonical path', code: 'PATH_GRANT_SCOPE_MISMATCH' };
+      }
+    } else if (grant.kind === 'directory') {
+      if (!isStrictDescendant(grant.canonicalPath, candidateCanonical)) {
+        return { ok: false, error: 'directory grant covers only strict descendants', code: 'PATH_GRANT_SCOPE_MISMATCH' };
+      }
+    } else if (grant.kind === 'directory-root') {
+      if (requireExactRoot) {
+        // Require exact root match for output-root identity
+        if (!this._pathsEqual(candidateCanonical, grant.canonicalPath)) {
+          return { ok: false, error: 'exact root required but candidate is not the root', code: 'PATH_GRANT_SCOPE_MISMATCH' };
+        }
+      } else {
+        if (!isEqualOrDescendant(grant.canonicalPath, candidateCanonical)) {
+          return { ok: false, error: 'directory-root grant covers only the root and its descendants', code: 'PATH_GRANT_SCOPE_MISMATCH' };
+        }
+      }
+    } else {
+      return { ok: false, error: 'unknown grant kind: ' + grant.kind, code: 'INVALID_ARGUMENT' };
+    }
+
+    // Only consume if explicitly requested
+    if (consume && grant.singleUse) {
+      grant.consumed = true;
+      grant.consumedAt = this._now();
+    }
+
+    return {
+      ok: true,
+      canonicalPath: candidateCanonical,
+      grantSnapshot: {
+        id: grant.id,
+        origin: grant.origin,
+        kind: grant.kind,
+        canonicalPath: grant.canonicalPath,
+        capabilities: [...grant.capabilities],
+        expiresAt: grant.expiresAt,
+      },
+    };
   }
 }
 

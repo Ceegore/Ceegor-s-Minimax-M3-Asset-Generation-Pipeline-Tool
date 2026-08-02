@@ -44,5 +44,5 @@ test('mkdir does NOT false-positive "escapes parent" for a drive-root parent', a
 
 test('mkdir rejects a name containing a path separator', async () => {
   await assert.rejects(() => fb.mkdir(os.tmpdir(), 'a/b'), /separator/i);
-  await assert.rejects(() => fb.mkdir(os.tmpdir(), '..'), /"\."|cannot be/i);
+  await assert.rejects(() => fb.mkdir(os.tmpdir(), '..'), /dot path|not allowed/i);
 });

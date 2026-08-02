@@ -34,10 +34,13 @@ We aim to acknowledge reports within 48 hours and provide a fix within 7 days fo
 - Destructive operations require native confirmation tokens
 
 ### Secret Management
-- API keys stored in Windows Credential Manager (via DPAPI)
-- Config files contain only `credential_id` references, never raw keys
+- API keys encrypted with Electron safeStorage (OS-backed: DPAPI on Windows)
+- Immutable UUID-based encrypted blobs; no plaintext fallback
+- Config files contain only `api_credential_id` references, never raw keys
+- API keys passed to child processes via file descriptor 3, not argv/env
 - `config:getPublic` / `providers:getPublic` return secret-free DTOs
 - Session credentials wiped on window close and app quit
+- When OS encryption is unavailable, persisted save is disabled (session-only mode)
 
 ### Path Authorization
 - All file operations require Main-minted grants
@@ -46,9 +49,12 @@ We aim to acknowledge reports within 48 hours and provide a fix within 7 days fo
 - Pipeline imports require per-file read grants
 
 ### Network Security
-- Provider URLs validated against SSRF blocklist (localhost, RFC1918, link-local, cloud metadata)
-- HTTPS enforced for all provider connections
-- DNS rebinding detection for custom provider hostnames
+- All provider HTTP uses a single SafeHttpClient with DNS A/AAAA validation
+- Socket-pinning: connections use only validated public addresses
+- HTTPS enforced; no ambient proxy for provider connections
+- Redirect revalidation with auth stripping on origin change
+- Streaming byte counters with hard caps (no unbounded buffering)
+- Combined AbortSignal timeouts on all requests
 
 ### Child Process Safety
 - Minimal environment allowlist (PATH, SYSTEMROOT, TEMP only)

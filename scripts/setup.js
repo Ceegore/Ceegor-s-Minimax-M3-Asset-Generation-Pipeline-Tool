@@ -29,9 +29,11 @@ const fs = require('fs');
 const fsp = fs.promises;
 const crypto = require('crypto');
 const path = require('path');
-const https = require('https');
-const { spawn } = require('child_process');
-const { promisify } = require('util');
+
+// AUD-007/AUD-014 fix: Use shell-free extraction and bounded download client
+// instead of PowerShell interpolation and raw https with no timeouts.
+const { extractZip } = require('./lib/safeExtract');
+const { downloadFile } = require('./lib/downloadClient');
 
 const ROOT = path.resolve(__dirname, '..');
 const BIN = path.join(ROOT, 'bin');
@@ -65,99 +67,31 @@ function fail(msg) {
   process.exit(1);
 }
 
-function followRedirects(url, maxRedirects = 5) {
-  return new Promise((resolve, reject) => {
-    function get(target) {
-      https.get(target, (res) => {
-        if ([301, 302, 303, 307, 308].includes(res.statusCode)) {
-          const next = res.headers.location;
-          res.resume();
-          if (!next || maxRedirects <= 0) return reject(new Error('Too many redirects'));
-          get(new URL(next, target).toString());
-          return;
-        }
-        resolve(res);
-      }).on('error', reject);
-    }
-    get(url);
-  });
-}
-
-// Download a URL to a target file. Streams the response so
-// even the 176 MB ONNX model doesn't OOM a 4 GB-RAM dev box.
+// AUD-014 fix: Bounded download with timeouts, redirect validation,
+// streaming byte cap, and SHA-256 verification.
 async function download(url, destPath, expectedSha256) {
   log('  → ' + url);
-  const res = await followRedirects(url);
-  if (res.statusCode !== 200) {
-    throw new Error(`HTTP ${res.statusCode} from ${url}`);
-  }
-  const total = parseInt(res.headers['content-length'] || '0', 10);
-  const tmp = destPath + '.tmp-' + process.pid + '-' + Date.now();
-  await fsp.mkdir(path.dirname(destPath), { recursive: true });
-  const hash = crypto.createHash('sha256');
-  await new Promise((resolve, reject) => {
-    const out = fs.createWriteStream(tmp);
-    let downloaded = 0;
-    let lastPct = -1;
-    res.on('data', (chunk) => {
-      downloaded += chunk.length;
-      hash.update(chunk);
-      if (total > 0) {
-        const pct = Math.floor((downloaded / total) * 100);
-        if (pct !== lastPct && pct % 10 === 0) {
-          process.stdout.write(`     ${(downloaded / 1024 / 1024).toFixed(1)} / ${(total / 1024 / 1024).toFixed(1)} MB (${pct}%)\r`);
-          lastPct = pct;
-        }
-      }
-    });
-    res.pipe(out);
-    out.on('finish', () => {
-      out.close(() => {
-        process.stdout.write('\n');
-        resolve();
-      });
-    });
-    out.on('error', reject);
-    res.on('error', reject);
+  const result = await downloadFile(url, destPath, {
+    expectedSha256,
+    maxBytes: 2 * 1024 * 1024 * 1024, // 2 GiB cap
+    overallTimeoutMs: 600_000, // 10 minutes
+    onProgress: ({ downloaded, total }) => {
+      const pct = Math.floor((downloaded / total) * 100);
+      process.stdout.write(`     ${(downloaded / 1024 / 1024).toFixed(1)} / ${(total / 1024 / 1024).toFixed(1)} MB (${pct}%)\r`);
+    },
   });
-  const actualSha256 = hash.digest('hex');
-  if (!expectedSha256 || actualSha256 !== expectedSha256) {
-    try { await fsp.unlink(tmp); } catch (_) {}
-    throw new Error(`SHA-256 mismatch for ${path.basename(destPath)}; the download was not installed.`);
+  if (!result.ok) {
+    throw new Error(result.error);
   }
-  // Atomic rename — a kill mid-download leaves the previous
-  // good file in place instead of a half-written one.
-  try {
-    await fsp.rename(tmp, destPath);
-  } catch (e) {
-    try { await fsp.unlink(tmp); } catch (_) {}
-    throw e;
-  }
+  process.stdout.write('\n');
 }
 
-// Extract a zip into destDir. Uses PowerShell's Expand-Archive
-// on Windows (the project ships a Windows .exe, so this is
-// the only target we need to support here; on POSIX, the
-// `unzip` CLI is used as a portable fallback).
-async function extractZip(zipPath, destDir) {
-  await fsp.mkdir(destDir, { recursive: true });
-  if (process.platform === 'win32') {
-    await new Promise((resolve, reject) => {
-      const ps = spawn('powershell.exe', [
-        '-NoProfile', '-ExecutionPolicy', 'Bypass',
-        '-Command', `Expand-Archive -Path "${zipPath}" -DestinationPath "${destDir}" -Force`,
-      ], { windowsHide: true });
-      let stderr = '';
-      ps.stderr.on('data', (b) => { stderr += b.toString('utf8'); });
-      ps.on('close', (code) => code === 0 ? resolve() : reject(new Error(`Expand-Archive exit ${code}: ${stderr}`)));
-      ps.on('error', reject);
-    });
-  } else {
-    await new Promise((resolve, reject) => {
-      const u = spawn('unzip', ['-o', zipPath, '-d', destDir]);
-      u.on('close', (code) => code === 0 ? resolve() : reject(new Error(`unzip exit ${code}`)));
-      u.on('error', reject);
-    });
+// AUD-007 fix: Shell-free extraction using 7zip-bin (no PowerShell).
+// Archive entries are validated before extraction (no traversal, no device names).
+async function extractZipSafe(zipPath, destDir) {
+  const result = await extractZip(zipPath, destDir);
+  if (!result.ok) {
+    throw new Error(result.error);
   }
 }
 
@@ -173,7 +107,7 @@ async function downloadRealEsrgan() {
   try {
     await download(RE_ESRGAN_URL, tmpZip, RE_ESRGAN_ZIP_SHA256);
     log('  → extracting into ./bin/');
-    await extractZip(tmpZip, BIN);
+    await extractZipSafe(tmpZip, BIN);
   } finally {
     try { await fsp.unlink(tmpZip); } catch (_) {}
   }

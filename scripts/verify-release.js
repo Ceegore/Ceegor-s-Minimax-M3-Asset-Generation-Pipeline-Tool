@@ -29,6 +29,11 @@ function parseArgs(argv) {
   return {
     requireArchive: argv.includes('--require-archive'),
     requireSignature: argv.includes('--require-signature'),
+    // AUD-015 fix: Separate Authenticode and Minisign manifest signature gates.
+    requireAuthenticode: argv.includes('--require-authenticode'),
+    requireManifestSignature: argv.includes('--require-manifest-signature'),
+    requireProvenance: argv.includes('--require-provenance'),
+    requireSbom: argv.includes('--require-sbom'),
     writeManifest: argv.includes('--write-manifest'),
     // Skip the 7za integrity probe (slow on huge archives; tests default to skipping).
     skipIntegrity: argv.includes('--skip-integrity'),
@@ -234,6 +239,52 @@ function evaluate(root, opts = {}) {
   }
   if (opts.requireSignature && signature.status !== 'Valid') {
     errors.push(`Executable is not validly code signed: ${signature.status}`);
+  }
+  // AUD-015 fix: Separate Authenticode gate checks ALL required binaries.
+  if (opts.requireAuthenticode) {
+    const binariesToCheck = [paths.executable, ...archives.filter((a) => /\.(exe|dll)$/i.test(a))];
+    for (const bin of binariesToCheck) {
+      if (!fs.existsSync(bin)) continue;
+      const sig = signatureFor(bin);
+      if (sig.status !== 'Valid') {
+        errors.push(`Authenticode check failed for ${path.basename(bin)}: ${sig.status}`);
+      }
+    }
+  }
+  // AUD-015 fix: Minisign manifest signature verification.
+  if (opts.requireManifestSignature) {
+    const manifestPath = paths.manifest;
+    const sigPath = manifestPath + '.minisig';
+    if (!fs.existsSync(manifestPath)) {
+      errors.push('Manifest file missing; cannot verify Minisign signature.');
+    } else if (!fs.existsSync(sigPath)) {
+      errors.push('Minisign signature file (.minisig) is missing.');
+    } else {
+      // Attempt verification using minisign if available
+      try {
+        const pubKeyPath = path.join(root, 'minisign.pub');
+        if (!fs.existsSync(pubKeyPath)) {
+          errors.push('Minisign public key (minisign.pub) not found in repository.');
+        } else {
+          const result = childProcess.spawnSync('minisign', [
+            '-V', '-p', pubKeyPath, '-m', manifestPath, '-x', sigPath,
+          ], { encoding: 'utf8', windowsHide: true });
+          if (result.status !== 0) {
+            errors.push(`Minisign verification failed: ${(result.stderr || '').trim()}`);
+          }
+        }
+      } catch (e) {
+        errors.push(`Minisign verification error: ${e.message}`);
+      }
+    }
+  }
+  // AUD-015 fix: SBOM presence check.
+  if (opts.requireSbom) {
+    const sbomPath = path.join(paths.output, 'sbom.spdx.json');
+    const sbomAlt = path.join(paths.output, 'sbom.cyclonedx.json');
+    if (!fs.existsSync(sbomPath) && !fs.existsSync(sbomAlt)) {
+      errors.push('SBOM file is missing from release output.');
+    }
   }
   return { paths, exe, archives: archiveInfo, signature, integrity, manifest, provenance, freshness, errors };
 }

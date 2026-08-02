@@ -4,39 +4,18 @@ const fs = require('fs').promises;
 const fssync = require('fs');
 const path = require('path');
 const { shell } = require('electron');
+// AUD-018 fix: Use centralized Windows name policy instead of incomplete local regex.
+const { assertSinglePathSegment } = require('./windowsNamePolicy');
 
 async function safeStat(p) {
   try { return await fs.stat(p); } catch { return null; }
 }
 
-// Reject names that could escape the parent directory or that contain
-// characters Windows / POSIX reserve. This guards against path-traversal
-// (`..`, slashes) and shell metachars even though our renderer's UI is
-// already constrained.
+// AUD-018 fix: Delegate to the centralized windowsNamePolicy module which
+// correctly handles device stems with extensions (CON.txt, NUL.png),
+// superscript aliases (COM¹.txt), and trailing dot/space rejection.
 function validateName(name) {
-  if (typeof name !== 'string' || name.length === 0) {
-    throw new Error('Name is required.');
-  }
-  if (name.length > 255) {
-    throw new Error('Name is too long (max 255 chars).');
-  }
-  if (name === '.' || name === '..') {
-    throw new Error('Name cannot be "." or "..".');
-  }
-  if (/[\\/]/.test(name)) {
-    throw new Error('Name cannot contain path separators (/ or \\).');
-  }
-  if (/[<>:"|?*\x00-\x1f]/.test(name)) {
-    throw new Error('Name contains characters that are not allowed: < > : " | ? * or control chars.');
-  }
-  if (/^(con|prn|aux|nul|com[1-9]|lpt[1-9])$/i.test(name)) {
-    throw new Error('"' + name + '" is a reserved Windows name.');
-  }
-  // Trim trailing dots/spaces — Windows strips these on disk, which would
-  // make the new file appear under a different name than the user typed.
-  if (/[. ]$/.test(name)) {
-    throw new Error('Name cannot end with a dot or space.');
-  }
+  assertSinglePathSegment(name);
 }
 
 async function list(dir) {

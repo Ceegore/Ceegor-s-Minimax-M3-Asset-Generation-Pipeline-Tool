@@ -81,13 +81,17 @@ test('H-026: secureHandle passes through sync handler results unchanged', () => 
 // ---------------------------------------------------------------------------
 test('H-028: isSensitiveRoot blocks descendants of credential dirs', () => {
   const src = fs.readFileSync(path.join(ROOT, 'main', 'services', 'PathGrantService.js'), 'utf8');
-  // Must have DEEP + SELF split
+  const sensSrc = fs.readFileSync(path.join(ROOT, 'main', 'services', 'sensitivePaths.js'), 'utf8');
+  // Must have DEEP + SELF split (imported or defined)
   assert.ok(src.includes('SENSITIVE_DEEP'), 'SENSITIVE_DEEP list must exist');
   assert.ok(src.includes('SENSITIVE_SELF'), 'SENSITIVE_SELF list must exist');
-  // Must use path.relative for descendant check
-  assert.ok(src.includes('path.relative(root, lower)'), 'descendant check via path.relative');
+  // Must use path.relative for descendant check (via pathRelation helper)
+  assert.ok(
+    sensSrc.includes('path.relative(root, lower)') || sensSrc.includes('isStrictDescendant(root, lower)'),
+    'descendant check via path.relative or isStrictDescendant'
+  );
   // .ssh must be in DEEP (blocks descendants)
-  assert.ok(src.includes(".ssh"), '.ssh must be in sensitive list');
+  assert.ok(sensSrc.includes('.ssh'), '.ssh must be in sensitive list');
 });
 
 test('H-028: PathGrantService blocks grants inside .ssh', () => {

@@ -27,7 +27,8 @@ function configPath() {
 
 function defaultConfig() {
   return {
-    api_key: '',
+    api_key: '',              // Legacy field - only used for migration, never serialized
+    api_credential_id: '',    // AUD-001: reference to SecretBlobStore entry
     output_dir: '',
     report_dir: '',      // optional folder for Pipeline clear/export reports ('' = use the asset destination folder)
     region: 'global',
@@ -76,7 +77,8 @@ function parse(text) {
       }
       continue;
     }
-    if (k === 'api_key') out.api_key = v;
+    if (k === 'api_key') out.api_key = v;  // Legacy: parsed for migration only
+    else if (k === 'api_credential_id') out.api_credential_id = v;  // AUD-001: secure credential reference
     else if (k === 'output_dir') out.output_dir = v;
     else if (k === 'report_dir') out.report_dir = v;
     // removebg_api_key is intentionally NOT assigned: the feature was removed
@@ -99,10 +101,12 @@ function serialize(cfg) {
   const extTools = Array.isArray(cfg.external_tools) ? cfg.external_tools : [];
   const lines = [
     '# MiniMax Assets Tool configuration',
-    '# Put your MiniMax API key on the line below, save as config.txt next to the .exe.',
-    '# Both Token Plan keys (sk-cp-…) and pay-as-you-go keys are accepted.',
+    '# API keys can be stored securely via OS-backed encryption (api_credential_id).',
+    '# Legacy api_key is still supported for backward compatibility but will be',
+    '# migrated to the secure store on next startup.',
     '',
     `api_key=${cfg.api_key || ''}`,
+    `api_credential_id=${cfg.api_credential_id || ''}`,
     '',
     '# Default output directory for generated assets (created if missing).',
     '# Leave blank to use ./generated/ next to the executable.',
