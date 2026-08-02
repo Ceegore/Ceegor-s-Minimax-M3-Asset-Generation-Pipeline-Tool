@@ -9,8 +9,6 @@ const { ipcMain } = require('electron');
 const fs = require('fs');
 const path = require('path');
 const { randomUUID } = require('crypto');
-const { Readable, Transform } = require('stream');
-const { pipeline } = require('stream/promises');
 const providersStore = require('../../src/providersStore');
 const openaiCompat = require('../../src/providers/openaiCompatible');
 const replicate = require('../../src/providers/replicate');
@@ -30,60 +28,17 @@ const { checkProviderUnits } = require('../services/batchUnitsGate');
 const { defaultService: pathGrantService, PROVIDER_JOB_TTL_MS } = require('../services/PathGrantService');
 // H-012 (_5 audit): persistent remote job ledger for resume after restart/timeout.
 const remoteJobLedger = require('../../src/services/remoteJobLedger');
+// H-001/H-002/H-003 (hhhhu2 audit): DNS-pinned HTTP, unified finalizer, transaction journal.
+const SafeHttpClient = require('../services/SafeHttpClient');
+const { finalize } = require('../services/ArtifactFinalizer');
+const { OutputTransactionService } = require('../services/OutputTransactionService');
+const { app } = require('electron');
 
 const ADAPTERS = { openrouter: openaiCompat, 'custom-openai': openaiCompat, replicate };
 const inflight = new Map();   // jobId -> AbortController (for cancel)
 
-// Hard cap for provider output downloads. Streams to disk (never buffers the
-// whole body in main-process memory) and aborts past this size so a runaway or
-// huge URL cannot OOM the main process.
-const MAX_PROVIDER_DOWNLOAD = 512 * 1024 * 1024; // 512 MB (video outputs can be large)
-// H-014/H-018 (_5 audit): max redirect hops for output downloads.
-const MAX_REDIRECTS = 5;
 // H-016 (_5 audit): per-job output budget (file count + total bytes).
 const MAX_OUTPUT_FILES = 10;
-const MAX_TOTAL_OUTPUT_BYTES = 1024 * 1024 * 1024; // 1 GB aggregate
-
-// H-016: magic byte signatures for output validation.
-const MAGIC = {
-  jpg: [Buffer.from([0xFF, 0xD8, 0xFF])],
-  png: [Buffer.from([0x89, 0x50, 0x4E, 0x47])],
-  gif: [Buffer.from('GIF87a'), Buffer.from('GIF89a')],
-  webp: [Buffer.from('RIFF')],
-  mp4: [Buffer.from('ftyp', 'ascii')], // offset 4
-  mp3: [Buffer.from('ID3'), Buffer.from([0xFF, 0xFB]), Buffer.from([0xFF, 0xF3])],
-};
-
-/**
- * H-016: validate that a file's leading bytes match the expected format.
- * @param {string} filePath
- * @param {string} ext - e.g. 'png', 'jpg', 'mp4'
- * @returns {{ ok: boolean, error?: string }}
- */
-function validateMagicBytes(filePath, ext) {
-  const sigs = MAGIC[ext];
-  if (!sigs) return { ok: true }; // unknown ext — skip validation
-  let fd;
-  try {
-    fd = fs.openSync(filePath, 'r');
-    const buf = Buffer.alloc(12);
-    const bytesRead = fs.readSync(fd, buf, 0, 12, 0);
-    if (bytesRead < 4) return { ok: false, error: 'file too small (' + bytesRead + ' bytes)' };
-    if (ext === 'mp4') {
-      // ftyp box: bytes 4-7 are 'ftyp'
-      if (buf.slice(4, 8).equals(sigs[0])) return { ok: true };
-      return { ok: false, error: 'mp4 magic mismatch' };
-    }
-    for (const sig of sigs) {
-      if (buf.slice(0, sig.length).equals(sig)) return { ok: true };
-    }
-    return { ok: false, error: ext + ' magic mismatch' };
-  } catch (e) {
-    return { ok: false, error: 'read failed: ' + (e.message || e) };
-  } finally {
-    if (fd != null) try { fs.closeSync(fd); } catch (_) {}
-  }
-}
 
 /**
  * H-016: write-probe — verify the output directory is actually writable
@@ -103,86 +58,10 @@ function writeProbe(dir) {
   }
 }
 
-/**
- * Download a provider output URL to a local file.
- * H-014: supports authPolicy — attaches Authorization only when the URL's
- * origin is in the output's trustedOrigins list.
- * H-018: uses redirect:'manual' and validates each hop against SSRF policy.
- *
- * @param {string} url - The output URL to download.
- * @param {string} dest - Local file path to write.
- * @param {AbortSignal} signal - Caller abort signal.
- * @param {{ authPolicy?: string, apiKey?: string, trustedOrigins?: string[] }} [authOpts]
- */
-async function downloadToFile(url, dest, signal, authOpts) {
-  const { validateOutputUrlWithDns } = require('../../src/providers/urlPolicy');
-  let currentUrl = url;
-  let response = null;
-  let hops = 0;
-  // Determine the initial origin for auth attachment.
-  let currentOrigin = '';
-  try { currentOrigin = new URL(currentUrl).origin; } catch (_) {}
-
-  for (;;) {
-    // H-018: validate every URL (initial + redirects) against SSRF policy
-    // with async DNS resolution (detects rebinding to private IPs).
-    const urlCheck = await validateOutputUrlWithDns(currentUrl);
-    if (!urlCheck.ok) throw new Error('download blocked: ' + urlCheck.error);
-
-    // H-014: attach Authorization ONLY when authPolicy is 'bearer' and the
-    // current URL's origin is in the trusted list. Strip on origin change.
-    const headers = {};
-    if (authOpts && authOpts.authPolicy === 'bearer' && authOpts.apiKey) {
-      const trusted = Array.isArray(authOpts.trustedOrigins) ? authOpts.trustedOrigins : [];
-      if (trusted.includes(currentOrigin)) {
-        headers['Authorization'] = 'Bearer ' + authOpts.apiKey;
-      }
-    }
-
-    const res = await fetch(currentUrl, { signal, redirect: 'manual', headers });
-
-    // H-018: handle redirects manually with re-validation.
-    if (res.status >= 300 && res.status < 400) {
-      const location = res.headers.get('location');
-      if (!location) throw new Error('download redirect with no Location header');
-      // Resolve relative redirects.
-      currentUrl = new URL(location, currentUrl).href;
-      let newOrigin = '';
-      try { newOrigin = new URL(currentUrl).origin; } catch (_) {}
-      // If origin changed, update currentOrigin (auth will be stripped unless
-      // the new origin is also trusted).
-      currentOrigin = newOrigin;
-      hops++;
-      if (hops > MAX_REDIRECTS) throw new Error('download exceeded ' + MAX_REDIRECTS + ' redirects');
-      continue; // re-validate the new URL at the top of the loop
-    }
-
-    response = res;
-    break;
-  }
-
-  if (!response.ok) throw new Error('download HTTP ' + response.status);
-  if (!response.body) throw new Error('download returned no body');
-  const declared = Number(response.headers.get('content-length') || 0);
-  if (declared > MAX_PROVIDER_DOWNLOAD) {
-    throw new Error('download too large (' + declared + ' bytes, cap ' + MAX_PROVIDER_DOWNLOAD + ')');
-  }
-  let written = 0;
-  const counter = new Transform({
-    transform(chunk, _enc, cb) {
-      written += chunk.length;
-      if (written > MAX_PROVIDER_DOWNLOAD) { cb(new Error('download exceeded ' + MAX_PROVIDER_DOWNLOAD + ' bytes')); return; }
-      cb(null, chunk);
-    },
-  });
-  const ws = fs.createWriteStream(dest);
-  try {
-    await pipeline(Readable.fromWeb(response.body), counter, ws);
-  } catch (e) {
-    try { fs.unlinkSync(dest); } catch (_) { /* best-effort cleanup of the partial file */ }
-    throw e;
-  }
-}
+// hhhhu2 audit H-001/H-002: the legacy downloadToFile + validateMagicBytes
+// helpers were replaced by ArtifactFinalizer + SafeHttpClient (see the
+// providers:generate handler below); they were removed to keep this module
+// within the 500-line hard limit.
 
 function register({ getMainWindow }) {
   // ---- Config persistence ----
@@ -386,57 +265,78 @@ function register({ getMainWindow }) {
       if (outputs.length > MAX_OUTPUT_FILES) {
         return { ok: false, error: 'Too many outputs (' + outputs.length + ', cap ' + MAX_OUTPUT_FILES + ').' };
       }
-      // H-016: transactional save — write to temp dir, validate, then promote.
-      const tmpDir = path.join(req.outDir, '.tmp-' + (req.jobId || randomUUID()));
+
+      // H-001/H-002/H-003 (hhhhu2 audit): Route ALL provider outputs through
+      // ArtifactFinalizer (strict base64, type-from-bytes, semantic validation)
+      // and OutputTransactionService (journaled crash-consistent promotion).
+      // SafeHttpClient provides DNS-pinned downloads for URL-based outputs.
+      const finalizerModality = (req.modality === 'speech' || req.modality === 'music') ? 'audio' : req.modality;
+      const resolvedOut = path.resolve(req.outDir);
+
+      // Authorize the output root for writing.
+      const rootAuth = authorizePath(req.grantId, 'write', path.join(resolvedOut, 'probe'));
+      if (!rootAuth.ok) return { ok: false, error: 'grant: ' + rootAuth.error };
+
+      // Begin a journaled transaction.
+      const journalDir = path.join(app.getPath('userData'), 'output-transactions');
+      const txnService = new OutputTransactionService({ journalDir });
+      const { transactionId, stageDir } = txnService.begin({ canonicalRoot: resolvedOut, leaseId: req.jobId || null });
+
       const files = [];
-      const tmpFiles = [];
-      let totalBytes = 0;
-      let dirCreated = false;
       try {
         for (let i = 0; i < outputs.length; i++) {
           const o = outputs[i];
-          const ext = o.ext || 'bin';
-          const name = req.modality + '_' + randomUUID() + (outputs.length > 1 ? '_' + (i + 1) : '') + '.' + ext;
-          const dest = path.join(req.outDir, name);
-          const auth = authorizePath(req.grantId, 'write', dest);
-          if (!auth.ok) return { ok: false, error: 'grant: ' + auth.error };
-          if (!dirCreated) { fs.mkdirSync(tmpDir, { recursive: true }); dirCreated = true; }
-          const tmpPath = path.join(tmpDir, name);
+          // Build the source descriptor for ArtifactFinalizer.
+          let descriptor;
           if (o.b64) {
-            const buf = Buffer.from(o.b64, 'base64');
-            totalBytes += buf.length;
-            if (totalBytes > MAX_TOTAL_OUTPUT_BYTES) throw new Error('total output exceeds ' + MAX_TOTAL_OUTPUT_BYTES + ' bytes');
-            fs.writeFileSync(tmpPath, buf);
+            // H-003: strict base64 decoding is handled inside finalize().
+            descriptor = { data: o.b64 };
           } else {
+            // H-001: URL downloads go through SafeHttpClient (DNS-pinned).
             const urlCheck = validateOutputUrl(o.url);
             if (!urlCheck.ok) return { ok: false, error: 'Output URL blocked: ' + urlCheck.error };
-            await downloadToFile(o.url, tmpPath, ctrl.signal, {
-              authPolicy: o.authPolicy || 'none',
-              apiKey: p.apiKey,
-              trustedOrigins: o.trustedOrigins || [],
-            });
-            totalBytes += fs.statSync(tmpPath).size;
-            if (totalBytes > MAX_TOTAL_OUTPUT_BYTES) throw new Error('total output exceeds ' + MAX_TOTAL_OUTPUT_BYTES + ' bytes');
+            descriptor = { url: o.url };
+            // Attach auth headers if the output requires bearer auth.
+            if (o.authPolicy === 'bearer' && p.apiKey) {
+              const trusted = Array.isArray(o.trustedOrigins) ? o.trustedOrigins : [];
+              let urlOrigin = '';
+              try { urlOrigin = new URL(o.url).origin; } catch (_) {}
+              if (trusted.includes(urlOrigin)) {
+                descriptor.headers = { authorization: 'Bearer ' + p.apiKey };
+              }
+            }
           }
-          // H-016: validate magic bytes for downloaded files (b64 is pre-validated by adapter).
-          if (!o.b64) {
-            const magic = validateMagicBytes(tmpPath, ext);
-            if (!magic.ok) throw new Error('output ' + (i + 1) + ' failed validation: ' + magic.error);
-          }
-          tmpFiles.push({ tmpPath, dest });
-          files.push(dest);
+
+          // H-002: finalize through the unified validator.
+          const result = await finalize(descriptor, {
+            modality: finalizerModality,
+            stageDirectory: stageDir,
+            signal: ctrl.signal,
+            http: SafeHttpClient,
+          });
+
+          // Determine the final filename.
+          const finalName = req.modality + '_' + randomUUID() + (outputs.length > 1 ? '_' + (i + 1) : '') + '.' + result.extension;
+          const finalPath = path.join(resolvedOut, finalName);
+
+          // Register with the transaction journal.
+          txnService.addFile(transactionId, {
+            stagedPath: result.stagedPath,
+            finalPath,
+            bytes: result.bytes,
+            sha256: result.sha256,
+          });
+          files.push(finalPath);
         }
-        // H-016: atomic promotion — all outputs validated, rename to final paths.
-        for (const { tmpPath, dest } of tmpFiles) {
-          fs.renameSync(tmpPath, dest);
-        }
+
+        // H-002: commit through the transaction service (verify hashes, journal,
+        // install, verify installed, mark committed, clean stage).
+        txnService.commit(transactionId);
       } catch (e) {
-        // H-016: rollback — clean up temp files on any failure.
-        for (const { tmpPath } of tmpFiles) { try { fs.unlinkSync(tmpPath); } catch (_) {} }
-        try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch (_) {}
+        // Rollback: cancel the transaction (removes stage + journal).
+        try { txnService.cancel(transactionId); } catch (_) {}
         throw e;
       }
-      try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch (_) {}
       send({ stage: 'done' });
       // H-012: mark ledger entry completed.
       if (req.jobId) remoteJobLedger.update(req.jobId, { status: 'completed', resultUrls: files });

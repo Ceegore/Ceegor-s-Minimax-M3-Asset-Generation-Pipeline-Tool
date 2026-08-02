@@ -31,6 +31,11 @@ class ProviderCredentialRepository {
     if (!providersPath) throw new TypeError('providersPath is required');
     this.blobStore = blobStore;
     this.providersPath = providersPath;
+    // M-006 (hhhhu2 audit): in-memory map for session-only keys.
+    // Session keys are never persisted to disk; they live here until
+    // the process exits or the key is explicitly cleared/replaced.
+    /** @type {Map<string, string>} providerId -> apiKey */
+    this._sessionKeys = new Map();
   }
 
   /**
@@ -70,7 +75,9 @@ class ProviderCredentialRepository {
         } catch (_) {
           credentialState = 'corrupt';
         }
-      } else if (p.sessionKey) {
+      } else if (this._sessionKeys.has(p.id)) {
+        // M-007 (hhhhu2 audit): check the in-memory session map, not a
+        // field on the disk object that was never persisted.
         credentialState = 'session';
       }
       return {
@@ -108,8 +115,8 @@ class ProviderCredentialRepository {
       }
     }
 
-    // Session-only key (in-memory, not persisted)
-    if (provider._sessionKey) return provider._sessionKey;
+    // M-006 (hhhhu2 audit): resolve session-only key from the in-memory map.
+    if (this._sessionKeys.has(providerId)) return this._sessionKeys.get(providerId);
     return null;
   }
 
@@ -148,6 +155,8 @@ class ProviderCredentialRepository {
 
   /**
    * Use a session-only key (not persisted to disk).
+   * M-006 (hhhhu2 audit): stores the key in the repository-owned in-memory
+   * map so that resolveKey() can find it on subsequent calls.
    * @param {string} providerId
    * @param {string} apiKey
    */
@@ -157,8 +166,16 @@ class ProviderCredentialRepository {
     if (!provider) {
       throw new AppError(CODES.INVALID_ARGUMENT, `Provider "${providerId}" not found.`);
     }
-    provider._sessionKey = apiKey;
-    // Do NOT write to disk — session keys are memory-only
+    // Store in the in-memory session map (never written to disk).
+    this._sessionKeys.set(providerId, apiKey);
+    // Remove any persisted credential reference — session mode replaces it.
+    if (provider.credential_id) {
+      const oldId = provider.credential_id;
+      delete provider.credential_id;
+      delete provider.apiKey;
+      this._writeStore(store);
+      try { this.blobStore.remove(oldId); } catch (_) {}
+    }
   }
 
   /**
@@ -175,6 +192,9 @@ class ProviderCredentialRepository {
     delete provider.apiKey;
     delete provider._sessionKey;
     this._writeStore(store);
+
+    // M-006: also clear the in-memory session key.
+    this._sessionKeys.delete(providerId);
 
     // Clean old blob
     if (oldId) {

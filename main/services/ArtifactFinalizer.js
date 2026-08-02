@@ -76,6 +76,9 @@ const MAGIC_BYTES = Object.freeze({
   wav: Buffer.from('RIFF'), // + 'WAVE' at offset 8
   ogg: Buffer.from('OggS'),
   flac: Buffer.from('fLaC'),
+  // M-002 (hhhhu2 audit): AAC ADTS sync word and WebM/Matroska EBML header.
+  aac: Buffer.from([0xFF, 0xF1]), // ADTS sync (also 0xFF 0xF9)
+  webm: Buffer.from([0x1A, 0x45, 0xDF, 0xA3]), // EBML header (Matroska/WebM)
 });
 
 /** Types belonging to each modality. */
@@ -97,9 +100,14 @@ function detectType(header) {
   if (header.length >= 12 && header.slice(0, 4).equals(MAGIC_BYTES.webp) &&
       header.slice(8, 12).toString('ascii') === 'WEBP') return 'webp';
   if (header.slice(0, 4).equals(MAGIC_BYTES.gif)) return 'gif';
+  // M-002 (hhhhu2 audit): AAC ADTS detection (sync word 0xFFF with
+  // layer bits = 00 → 0xFFF1 or 0xFFF9 in first two bytes).
+  if (header[0] === 0xFF && (header[1] & 0xF6) === 0xF0) return 'aac';
   if ((header[0] === 0xFF && (header[1] & 0xE0) === 0xE0) ||
       header.slice(0, 3).toString('ascii') === 'ID3') return 'mp3';
   if (header.length >= 8 && header.slice(4, 8).equals(MAGIC_BYTES.mp4)) return 'mp4';
+  // M-002 (hhhhu2 audit): WebM/Matroska EBML header detection.
+  if (header.length >= 4 && header.slice(0, 4).equals(MAGIC_BYTES.webm)) return 'webm';
   if (header.length >= 12 && header.slice(0, 4).equals(MAGIC_BYTES.wav) &&
       header.slice(8, 12).toString('ascii') === 'WAVE') return 'wav';
   if (header.slice(0, 4).equals(MAGIC_BYTES.ogg)) return 'ogg';
@@ -162,13 +170,14 @@ async function finalize(descriptor, opts) {
   if (descriptor.data) {
     // Base64 path: strict decode BEFORE allocation
     const buffer = decodeBase64Strict(descriptor.data, limits.maxBytes);
+    // M-001 (hhhhu2 audit): hash BEFORE zeroing the buffer.
+    bytes = buffer.length;
+    sha256 = crypto.createHash('sha256').update(buffer).digest('hex');
     try {
       fs.writeFileSync(rawStagePath, buffer, { flag: 'wx', mode: 0o600 });
     } finally {
       buffer.fill(0); // best effort zeroing
     }
-    bytes = buffer.length;
-    sha256 = crypto.createHash('sha256').update(buffer).digest('hex');
   } else if (descriptor.url && http) {
     // URL download path: stream to stage file via SafeHttpClient
     const result = await http.toFile(descriptor.url, rawStagePath, {
@@ -317,10 +326,15 @@ async function validateImageDecode(filePath, opts) {
   }
   try {
     const maxPixels = opts.maxPixels || SHARP_PIXEL_LIMIT;
-    const meta = await sharp(filePath, {
+    // M-003 (hhhhu2 audit): perform a FULL pixel decode, not metadata-only.
+    // .metadata() alone does not force decompression of truncated images.
+    // raw().toBuffer() forces full pixel/frame decoding and will throw on
+    // corrupt or truncated data. The pixel limit prevents OOM.
+    const img = sharp(filePath, {
       limitInputPixels: maxPixels,
       animated: true,
-    }).metadata();
+    });
+    const meta = await img.metadata();
     if (!meta || !meta.width || !meta.height) {
       return { ok: false, error: 'Image decode produced zero dimensions — file is likely corrupt.' };
     }
@@ -335,6 +349,12 @@ async function validateImageDecode(filePath, opts) {
     if (opts.maxFrames && frames > opts.maxFrames) {
       return { ok: false, error: `Image has ${frames} frames, exceeding maximum ${opts.maxFrames}.` };
     }
+    // M-003: Force full pixel decode to catch truncated/corrupt images that
+    // expose valid metadata but fail during actual decompression.
+    await sharp(filePath, {
+      limitInputPixels: maxPixels,
+      animated: true,
+    }).raw().toBuffer();
     return { ok: true, width: meta.width, height: meta.height, frames };
   } catch (e) {
     return { ok: false, error: `Image full-decode failed (corrupt or unsupported): ${e.message || e}` };

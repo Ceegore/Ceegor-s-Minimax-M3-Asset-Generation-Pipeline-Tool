@@ -45,18 +45,20 @@ jobs:
       - name: Contract tests
         run: npm run test:contract
 
+      - name: Assert release identity
+        run: npm run assert:identity
+
       - name: Build portable release
         run: node scripts/zip-portable.js
 
-      - name: Verify release (manifest, archives, provenance, size limits)
-        run: node scripts/verify-release.js --require-archive
+      - name: Generate SBOM
+        run: node scripts/generate-sbom.js
 
       - name: Installer smoke test
         run: npm run test:installer
-        continue-on-error: true
 
-      - name: Generate SBOM
-        run: node scripts/generate-sbom.js
+      - name: Verify release (strict: archive, authenticode, manifest, provenance, SBOM)
+        run: npm run verify:release
 
       - name: Upload release artifacts
         uses: actions/upload-artifact@v7

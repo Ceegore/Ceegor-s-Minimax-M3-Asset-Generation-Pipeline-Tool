@@ -88,10 +88,23 @@ function loadIpc() {
     exports: {
       ipcMain: { handle: (ch, fn) => handlers.set(ch, fn) },
       app: { getPath: () => TMP },
+      // H-013 (hhhhu2 audit): fb:confirmDestructive shows a native
+      // confirmation box. Auto-confirm so the intent-token flow runs.
+      dialog: { showMessageBox: async () => ({ response: 1 }) },
     },
   };
   require(FB_IPC).register({ appRoot: ROOT });
   return { handlers, calls };
+}
+
+// ---- Helper: mint a one-shot intent token via fb:confirmDestructive.
+// H-013 (hhhhu2 audit): destructive handlers (delete/move/rename) consume
+// a token bound to operation + paths + grants + sender. ----
+const FAKE_EVENT = { sender: { id: 1 } };
+async function mintIntent(handlers, spec) {
+  const r = await handlers.get('fb:confirmDestructive')(FAKE_EVENT, spec);
+  assert.equal(r.ok, true, 'fb:confirmDestructive must mint an intent token');
+  return r.intentId;
 }
 
 // ---- Helper: mint a directory grant for tests. ----
@@ -234,8 +247,13 @@ test('R1.3.E: fb:delete on the grant root is rejected (S1 §2.5); a strict desce
   const r1 = await handlers.get('fb:delete')({}, root, minted.grantId);
   assert.equal(r1.ok, false, 'fb:delete on the grant root must be rejected (S1 §2.5)');
   assert.match(r1.error, /root itself|descendant/i);
-  // Child delete is allowed.
-  const r2 = await handlers.get('fb:delete')({}, child, minted.grantId);
+  // Child delete is allowed (H-013: with a consumed intent token).
+  const childIntent = await mintIntent(handlers, {
+    operation: 'delete',
+    sourcePath: child,
+    sourceGrantId: minted.grantId,
+  });
+  const r2 = await handlers.get('fb:delete')(FAKE_EVENT, child, minted.grantId, childIntent);
   assert.equal(r2.ok, true, 'fb:delete on a strict descendant must be allowed');
   // The file was actually deleted.
   assert.equal(fs.existsSync(child), false);
@@ -254,9 +272,19 @@ test('R1.3.F: a coversRoot (directory-root) grant authorises delete on the root'
   fs.writeFileSync(child, 'x');
   const minted = mintOutputGrant(defaultService, root, { coversRoot: true });
   // Delete the child first (so rmdir of the root works on Windows).
-  await handlers.get('fb:delete')({}, child, minted.grantId);
+  const childIntent = await mintIntent(handlers, {
+    operation: 'delete',
+    sourcePath: child,
+    sourceGrantId: minted.grantId,
+  });
+  await handlers.get('fb:delete')(FAKE_EVENT, child, minted.grantId, childIntent);
   // Delete the root.
-  const r = await handlers.get('fb:delete')({}, root, minted.grantId);
+  const rootIntent = await mintIntent(handlers, {
+    operation: 'delete',
+    sourcePath: root,
+    sourceGrantId: minted.grantId,
+  });
+  const r = await handlers.get('fb:delete')(FAKE_EVENT, root, minted.grantId, rootIntent);
   assert.equal(r.ok, true, 'a directory-root grant must authorise delete on the root');
   assert.equal(fs.existsSync(root), false);
 });
@@ -369,7 +397,15 @@ test('R1.3.G: fb:move and fb:copy authorise source AND destination separately', 
     path: TMP, capabilities: ['read', 'write', 'delete', 'mkdir', 'rename', 'move', 'copy'],
     coversRoot: true,
   });
-  const r2 = await handlers.get('fb:move')({}, file, dstDir, allGrant.grantId);
+  // H-013: move needs a consumed intent token bound to the exact paths.
+  const moveIntent = await mintIntent(handlers, {
+    operation: 'move',
+    sourcePath: file,
+    destinationPath: path.join(dstDir, 'a.txt'),
+    sourceGrantId: allGrant.grantId,
+    destinationGrantId: allGrant.grantId,
+  });
+  const r2 = await handlers.get('fb:move')(FAKE_EVENT, file, dstDir, allGrant.grantId, allGrant.grantId, moveIntent);
   assert.equal(r2.ok, true, 'fb:move with a grant that covers both source and dest must succeed');
   assert.equal(fs.existsSync(path.join(dstDir, 'a.txt')), true, 'moved file must exist at destination');
   assert.equal(fs.existsSync(file), false, 'moved file must NOT exist at source after move');

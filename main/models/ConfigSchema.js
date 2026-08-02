@@ -78,6 +78,10 @@ function sanitize(cfg) {
     // scalars do not. Strip CR/LF (and other control chars) from every scalar
     // here.
     api_key: cleanScalar(cfg.api_key),
+    // B-002 (hhhhu2 audit): the encrypted-credential reference written by
+    // CredentialRepository.replacePersisted(). Whitelisted so the config:set
+    // final write (sanitize -> cfgMod.write) never drops it.
+    api_credential_id: cleanScalar(cfg.api_credential_id),
     output_dir: cleanScalar(cfg.output_dir),
     // report_dir is a persisted path setting for the Pipeline clear/export
     // reports. Whitelisted here so config:set keeps it.

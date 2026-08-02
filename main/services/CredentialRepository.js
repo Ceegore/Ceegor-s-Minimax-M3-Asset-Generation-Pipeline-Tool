@@ -97,10 +97,15 @@ function replacePersisted(value) {
   }
 
   session.clearSessionCredential();
+  // M-008 (hhhhu2 audit): separate transaction success from cleanup status.
+  // Cleanup failures must never convert a committed replacement into a
+  // generic failure. Wrap all cleanup in try/catch and report via
+  // cleanupPending.
+  let cleanupPending = false;
   if (oldId && oldId !== newId) {
-    try { blobs.remove(oldId); } catch (_) { queueCleanup(oldId); }
+    try { blobs.remove(oldId); } catch (_) { queueCleanup(oldId); cleanupPending = true; }
   }
-  const cleanupPending = clearApiKeyFromMmxCliConfig() !== true;
+  if (clearApiKeyFromMmxCliConfig() !== true) cleanupPending = true;
   return { hasApiKey: true, persisted: true, cleanupPending };
 }
 
@@ -125,10 +130,13 @@ function useSessionOnly(value) {
     session.clearSessionCredential();
     throw error;
   }
+  let cleanupPending = false;
   if (oldId) {
-    try { blobs.remove(oldId); } catch (_) { queueCleanup(oldId); }
+    // M-008/M-009 (hhhhu2 audit): cleanup failures are reported via
+    // cleanupPending, never thrown. Deferred blob cleanup is included.
+    try { blobs.remove(oldId); } catch (_) { queueCleanup(oldId); cleanupPending = true; }
   }
-  const cleanupPending = clearApiKeyFromMmxCliConfig() !== true;
+  if (clearApiKeyFromMmxCliConfig() !== true) cleanupPending = true;
   return { hasApiKey: true, persisted: false, cleanupPending };
 }
 

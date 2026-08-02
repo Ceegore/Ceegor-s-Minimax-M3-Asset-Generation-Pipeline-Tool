@@ -35,11 +35,14 @@ const MAX_DIRECTORY_ENTRIES = 200_000; // Reject directories larger than this
 
 /**
  * Bounded concurrency stat helper.
+ * M-013 (hhhhu2 audit): uses fs.promises.lstat for real async I/O so the
+ * event loop is not blocked. The worker pool genuinely yields between stats.
  * @param {string[]} paths
  * @param {number} concurrency
  * @returns {Promise<Array<{path: string, stat: fs.Stats|null}>>}
  */
 async function boundedLstat(paths, concurrency) {
+  const fsp = require('fs').promises;
   const results = new Array(paths.length);
   let index = 0;
 
@@ -47,7 +50,7 @@ async function boundedLstat(paths, concurrency) {
     while (index < paths.length) {
       const i = index++;
       try {
-        results[i] = { path: paths[i], stat: fs.lstatSync(paths[i]) };
+        results[i] = { path: paths[i], stat: await fsp.lstat(paths[i]) };
       } catch (_) {
         results[i] = { path: paths[i], stat: null };
       }
@@ -88,7 +91,12 @@ class DirectoryListingService {
    */
   async listStart(opts) {
     const { dir, senderId, sort = 'name', direction = 'asc', pageSize: rawPageSize } = opts;
-    const pageSize = Math.min(Math.max(rawPageSize || DEFAULT_PAGE_SIZE, 1), MAX_PAGE_SIZE);
+    // L-002 (hhhhu2 audit): validate pageSize as a safe integer. NaN,
+    // Infinity, non-numbers are rejected and the default is used.
+    let pageSize = DEFAULT_PAGE_SIZE;
+    if (typeof rawPageSize === 'number' && Number.isSafeInteger(rawPageSize) && rawPageSize >= 1) {
+      pageSize = Math.min(rawPageSize, MAX_PAGE_SIZE);
+    }
 
     // Validate sort parameter — only expose what we implement
     if (!['name', 'mtime', 'size'].includes(sort)) {
@@ -125,6 +133,14 @@ class DirectoryListingService {
     if (dirents.length > MAX_DIRECTORY_ENTRIES) {
       throw new AppError(CODES.RESPONSE_TOO_LARGE,
         'Directory too large for interactive listing. Use search/filter to narrow results.');
+    }
+
+    // L-003 (hhhhu2 audit): enforce MAX_TOTAL_ENTRIES across all active
+    // sessions for this sender to prevent unbounded memory growth.
+    const currentTotal = this._totalItemsForSender(senderId);
+    if (currentTotal + dirents.length > MAX_TOTAL_ENTRIES) {
+      throw new AppError(CODES.RESPONSE_TOO_LARGE,
+        `Cumulative listing size would exceed ${MAX_TOTAL_ENTRIES} entries. Close other listing sessions first.`);
     }
 
     // Collect names and dirent type
@@ -297,6 +313,24 @@ class DirectoryListingService {
       this.senderSessions.set(senderId, new Set());
     }
     this.senderSessions.get(senderId).add(sessionId);
+  }
+
+  /**
+   * L-003 (hhhhu2 audit): compute total items held across all sessions
+   * for a sender, used to enforce MAX_TOTAL_ENTRIES.
+   * @private
+   * @param {number} senderId
+   * @returns {number}
+   */
+  _totalItemsForSender(senderId) {
+    const ids = this.senderSessions.get(senderId);
+    if (!ids) return 0;
+    let total = 0;
+    for (const id of ids) {
+      const s = this.sessions.get(id);
+      if (s && Array.isArray(s.items)) total += s.items.length;
+    }
+    return total;
   }
 
   /** @private */

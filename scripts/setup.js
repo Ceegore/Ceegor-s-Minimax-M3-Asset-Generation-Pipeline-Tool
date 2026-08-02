@@ -34,6 +34,9 @@ const path = require('path');
 // instead of PowerShell interpolation and raw https with no timeouts.
 const { extractZip } = require('./lib/safeExtract');
 const { downloadFile } = require('./lib/downloadClient');
+// H-010 (hhhhu2 audit): Use the RuntimeInstaller state machine so setup
+// writes only to a stage until verification passes, then atomically activates.
+const { RuntimeInstaller } = require('./lib/RuntimeInstaller');
 
 const ROOT = path.resolve(__dirname, '..');
 const BIN = path.join(ROOT, 'bin');
@@ -164,61 +167,118 @@ const { verifyRuntimeAssets } = require('./lib/runtimeAssets');
   log('=========================================');
   log('');
 
-  await fsp.mkdir(BIN, { recursive: true });
-  await fsp.mkdir(MODELS, { recursive: true });
+  // H-010 (hhhhu2 audit): All downloads/extractions go into a transaction
+  // stage directory. Only after full verification does the stage activate
+  // (atomically replacing the live bin/). Interruption at any point leaves
+  // the previous runtime intact.
+  const installer = new RuntimeInstaller({ projectRoot: ROOT, runtimeDir: 'bin' });
+  const { transactionId, stagePath } = installer.begin();
+  const STAGE_MODELS = path.join(stagePath, 'models');
 
-  await downloadRealEsrgan();
-  log('');
-  await downloadIsnetModel();
-  log('');
-  await checkIsnetBinary();
+  try {
+    await fsp.mkdir(stagePath, { recursive: true });
+    await fsp.mkdir(STAGE_MODELS, { recursive: true });
 
-  if (dlLite) {
+    // Download Real-ESRGAN into stage
+    log('Real-ESRGAN binary (BSD-3-Clause)');
+    const tmpZip = path.join(stagePath, '.tmp-realesrgan.zip');
+    try {
+      await download(RE_ESRGAN_URL, tmpZip, RE_ESRGAN_ZIP_SHA256);
+      log('  → extracting into stage');
+      await extractZipSafe(tmpZip, stagePath);
+    } finally {
+      try { await fsp.unlink(tmpZip); } catch (_) {}
+    }
     log('');
-    log('BiRefNet Lite model (~224 MB, MIT)');
-    const r = await downloadModel('birefnet-general-lite', ({ downloaded, total }) => {
-      process.stdout.write(`     ${(downloaded / 1024 / 1024).toFixed(1)} / ${(total / 1024 / 1024).toFixed(1)} MB\r`);
+
+    // Download IS-Net model into stage
+    log('IS-Net ONNX model (~176 MB, Apache-2.0)');
+    await download(ISNET_MODEL_URL, path.join(STAGE_MODELS, 'isnet-general-use.onnx'), ISNET_MODEL_SHA256);
+    log('');
+
+    // Check optional isnetbg binary (informational only)
+    const exe = process.platform === 'win32' ? 'isnetbg.exe' : 'isnetbg';
+    const existingIsnetbg = path.join(BIN, exe);
+    try {
+      await fsp.access(existingIsnetbg);
+      log(`isnetbg binary: present at ./bin/${exe} (custom fast-path)`);
+      // Copy into stage so the new runtime has it too
+      await fsp.copyFile(existingIsnetbg, path.join(stagePath, exe));
+    } catch (_) {
+      log('isnetbg binary: optional — not present (not needed, the bundled Node.js wrapper works)');
+    }
+
+    if (dlLite) {
+      log('');
+      log('BiRefNet Lite model (~224 MB, MIT)');
+      const r = await downloadModel('birefnet-general-lite', ({ downloaded, total }) => {
+        process.stdout.write(`     ${(downloaded / 1024 / 1024).toFixed(1)} / ${(total / 1024 / 1024).toFixed(1)} MB\r`);
+      });
+      if (!r.ok) throw new Error(r.error);
+      process.stdout.write('\n');
+    }
+
+    if (dlGeneral) {
+      log('');
+      log('BiRefNet General model (~930 MB, MIT)');
+      const r = await downloadModel('birefnet-general', ({ downloaded, total }) => {
+        process.stdout.write(`     ${(downloaded / 1024 / 1024).toFixed(1)} / ${(total / 1024 / 1024).toFixed(1)} MB\r`);
+      });
+      if (!r.ok) throw new Error(r.error);
+      process.stdout.write('\n');
+    }
+
+    if (dlPortrait) {
+      log('');
+      log('BiRefNet Portrait model (~930 MB, MIT)');
+      const r = await downloadModel('birefnet-portrait', ({ downloaded, total }) => {
+        process.stdout.write(`     ${(downloaded / 1024 / 1024).toFixed(1)} / ${(total / 1024 / 1024).toFixed(1)} MB\r`);
+      });
+      if (!r.ok) throw new Error(r.error);
+      process.stdout.write('\n');
+    }
+
+    if (dlInpaint) {
+      log('');
+      log('MI-GAN inpaint model (~28 MB, MIT)');
+      await download(MIGAN_MODEL_URL, path.join(STAGE_MODELS, 'migan.onnx'), MIGAN_MODEL_SHA256);
+      log('');
+      log('LaMa inpaint model (~208 MB, Apache-2.0)');
+      await download(LAMA_MODEL_URL, path.join(STAGE_MODELS, 'lama-big.onnx'), LAMA_MODEL_SHA256);
+    }
+
+    // Verify the staged runtime
+    log('');
+    log('Verifying the staged runtime by size and SHA-256...');
+    installer.verifyStage(transactionId, (sp) => {
+      const verification = verifyRuntimeAssets(sp);
+      if (!verification.ok) {
+        log('  Stage verification issues:\n  ' + verification.issues.join('\n  '));
+        return false;
+      }
+      log(`  ${verification.count} files verified (${(verification.totalBytes / 1073741824).toFixed(2)} GiB)`);
+      return true;
     });
-    if (!r.ok) throw new Error(r.error);
-    process.stdout.write('\n');
-  }
 
-  if (dlGeneral) {
+    // Activate: backup old bin/, rename stage → bin/
     log('');
-    log('BiRefNet General model (~930 MB, MIT)');
-    const r = await downloadModel('birefnet-general', ({ downloaded, total }) => {
-      process.stdout.write(`     ${(downloaded / 1024 / 1024).toFixed(1)} / ${(total / 1024 / 1024).toFixed(1)} MB\r`);
+    log('Activating new runtime (backing up previous)...');
+    installer.activate(transactionId);
+
+    // Verify active and commit
+    installer.verifyAndCommit(transactionId, (ap) => {
+      const v = verifyRuntimeAssets(ap);
+      return v.ok;
     });
-    if (!r.ok) throw new Error(r.error);
-    process.stdout.write('\n');
-  }
 
-  if (dlPortrait) {
     log('');
-    log('BiRefNet Portrait model (~930 MB, MIT)');
-    const r = await downloadModel('birefnet-portrait', ({ downloaded, total }) => {
-      process.stdout.write(`     ${(downloaded / 1024 / 1024).toFixed(1)} / ${(total / 1024 / 1024).toFixed(1)} MB\r`);
-    });
-    if (!r.ok) throw new Error(r.error);
-    process.stdout.write('\n');
+    log('Done. Verify with:');
+    log('  npm run check');
+  } catch (e) {
+    // Any failure: cancel the transaction (restores previous bin/ if backed up)
+    try { installer.cancel(transactionId); } catch (_) {}
+    throw e;
   }
-
-  if (dlInpaint) {
-    log('');
-    await downloadInpaintModels();
-  }
-
-  log('');
-  log('Verifying the complete offline runtime by size and SHA-256...');
-  const verification = verifyRuntimeAssets(BIN);
-  if (!verification.ok) {
-    throw new Error('Offline runtime verification failed:\n  ' + verification.issues.join('\n  '));
-  }
-  log(`  ${verification.count} files verified (${(verification.totalBytes / 1073741824).toFixed(2)} GiB)`);
-
-  log('');
-  log('Done. Verify with:');
-  log('  npm run check');
 })().catch((e) => {
   fail(String((e && e.message) || e));
 });

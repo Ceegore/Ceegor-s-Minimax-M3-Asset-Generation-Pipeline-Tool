@@ -103,11 +103,18 @@ async function rename(p, newName) {
       // Cross-device or permission issue — fall back to guarded rename.
       if (fssync.existsSync(dest)) throw new Error('A file/folder with that name already exists.');
       await fs.rename(p, dest);
-      return dest;
+      return { path: dest };
     }
-    await fs.unlink(p);
+    // M-015 (hhhhu2 audit): structured partial-success. If unlink fails
+    // after a successful link, both source and dest exist. Report this
+    // as a partial success so the UI can handle it correctly.
+    try {
+      await fs.unlink(p);
+    } catch (unlinkErr) {
+      return { path: dest, partialSuccess: true, warning: 'Rename completed but source could not be removed: ' + (unlinkErr.message || unlinkErr) };
+    }
   }
-  return dest;
+  return { path: dest };
 }
 
 async function moveTo(src, destDir) {
@@ -150,14 +157,25 @@ async function moveTo(src, destDir) {
         // Cross-device: copy with exclusive flag (atomic no-clobber),
         // then remove source.
         await fs.copyFile(src, dest, fssync.constants.COPYFILE_EXCL);
-        await fs.rm(src, { force: true });
-        return dest;
+        // M-015: structured partial-success for cross-device source removal.
+        try {
+          await fs.rm(src, { force: true });
+        } catch (rmErr) {
+          return { path: dest, partialSuccess: true, warning: 'Move completed but source could not be removed: ' + (rmErr.message || rmErr) };
+        }
+        return { path: dest };
       }
       throw e;
     }
-    await fs.unlink(src);
+    // M-015 (hhhhu2 audit): structured partial-success. If unlink fails
+    // after a successful link, both source and dest exist.
+    try {
+      await fs.unlink(src);
+    } catch (unlinkErr) {
+      return { path: dest, partialSuccess: true, warning: 'Move completed but source could not be removed: ' + (unlinkErr.message || unlinkErr) };
+    }
   }
-  return dest;
+  return { path: dest };
 }
 
 async function copyTo(src, destDir) {
@@ -235,9 +253,34 @@ async function openInExplorer(p) {
 }
 
 async function readFile(p, maxBytes = 2 * 1024 * 1024) {
-  const st = await fs.stat(p);
-  if (st.size > maxBytes) throw new Error(`File too large to preview (${st.size} bytes).`);
-  return fs.readFile(p);
+  // M-016 (hhhhu2 audit): bounded read with a single file descriptor.
+  // The old stat-then-read had a TOCTOU gap where the file could be
+  // replaced or expanded between stat and readFile. Open one descriptor
+  // with no-follow semantics and read at most maxBytes + 1 to detect
+  // oversized files without a separate stat call.
+  const fd = await fs.open(p, fssync.constants.O_RDONLY | (fssync.constants.O_NOFOLLOW || 0));
+  try {
+    const st = await fd.stat();
+    if (st.size > maxBytes) {
+      throw new Error(`File too large to preview (${st.size} bytes).`);
+    }
+    // Read at most maxBytes + 1 to detect growth between stat and read.
+    const buf = Buffer.alloc(Math.min(st.size, maxBytes) + 1);
+    let totalRead = 0;
+    let pos = 0;
+    while (pos < buf.length) {
+      const { bytesRead } = await fd.read(buf, pos, buf.length - pos, totalRead);
+      if (bytesRead === 0) break;
+      totalRead += bytesRead;
+      pos += bytesRead;
+    }
+    if (totalRead > maxBytes) {
+      throw new Error(`File too large to preview (grew during read).`);
+    }
+    return buf.slice(0, totalRead);
+  } finally {
+    await fd.close();
+  }
 }
 
 module.exports = { list, mkdir, rename, moveTo, copyTo, deletePath, reveal, openInExplorer, readFile, validateName };

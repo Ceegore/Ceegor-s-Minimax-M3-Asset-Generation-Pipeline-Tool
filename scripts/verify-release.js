@@ -86,6 +86,28 @@ function sevenZipBin(root) {
   return null;
 }
 
+// M-019 (hhhhu2 audit): recursively find all .exe and .dll files in a directory.
+// Used to verify Authenticode signatures on bundled binaries inside the
+// unpacked release tree.
+function findBinariesRecursive(dir) {
+  const results = [];
+  const SKIP_DIRS = new Set(['node_modules', '.git']);
+  function walk(d) {
+    let entries;
+    try { entries = fs.readdirSync(d, { withFileTypes: true }); } catch (_) { return; }
+    for (const entry of entries) {
+      const full = path.join(d, entry.name);
+      if (entry.isDirectory()) {
+        if (!SKIP_DIRS.has(entry.name)) walk(full);
+      } else if (/\.(exe|dll)$/i.test(entry.name)) {
+        results.push(full);
+      }
+    }
+  }
+  walk(dir);
+  return results;
+}
+
 // Probe archive integrity with `7za t`. Returns { ok, error }.
 function verifyArchiveIntegrity(root, paths, archives) {
   if (archives.length === 0) return { ok: false, error: 'No archive to test.' };
@@ -241,6 +263,10 @@ function evaluate(root, opts = {}) {
     errors.push(`Executable is not validly code signed: ${signature.status}`);
   }
   // AUD-015 fix: Separate Authenticode gate checks ALL required binaries.
+  // M-019 (hhhhu2 audit): also inspect binaries inside the unpacked release
+  // tree (win-unpacked). ZIP archives are not directly inspected, but the
+  // unpacked tree that was used to CREATE the archives is verified. This
+  // catches unsigned or differently-signed bundled native tools.
   if (opts.requireAuthenticode) {
     const binariesToCheck = [paths.executable, ...archives.filter((a) => /\.(exe|dll)$/i.test(a))];
     for (const bin of binariesToCheck) {
@@ -248,6 +274,17 @@ function evaluate(root, opts = {}) {
       const sig = signatureFor(bin);
       if (sig.status !== 'Valid') {
         errors.push(`Authenticode check failed for ${path.basename(bin)}: ${sig.status}`);
+      }
+    }
+    // M-019: verify all .exe and .dll inside win-unpacked.
+    const unpackedDir = path.join(paths.output, 'win-unpacked');
+    if (fs.existsSync(unpackedDir)) {
+      const innerBinaries = findBinariesRecursive(unpackedDir);
+      for (const bin of innerBinaries) {
+        const sig = signatureFor(bin);
+        if (sig.status !== 'Valid') {
+          errors.push(`Authenticode check failed for bundled binary ${path.relative(unpackedDir, bin)}: ${sig.status}`);
+        }
       }
     }
   }
@@ -367,4 +404,4 @@ function main() {
 
 if (require.main === module) main();
 
-module.exports = { evaluate, parseArgs, signatureFor, writeManifest, verifyArchiveIntegrity, verifyManifest, verifyProvenance, verifyArchiveFreshness, validateArchiveSequence, validatePEHeader };
+module.exports = { evaluate, parseArgs, signatureFor, writeManifest, verifyArchiveIntegrity, verifyManifest, verifyProvenance, verifyArchiveFreshness, validateArchiveSequence, validatePEHeader, findBinariesRecursive };

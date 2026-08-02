@@ -35,7 +35,7 @@ test.after(() => {
 
 // ---- Helper: load registerConfigIpc with mocked electron + dialog. ----
 function loadIpc({ openResult, dialogError = null } = {}) {
-  for (const p of [CFG_IPC, PATH_SECURITY, PATH_GRANT, MMX_KEY_SYNC]) {
+  for (const p of [CFG_IPC, PATH_SECURITY, PATH_GRANT, MMX_KEY_SYNC, path.join(ROOT, 'main', 'services', 'CredentialRepository.js'), path.join(ROOT, 'main', 'services', 'SecretBlobStore.js'), path.join(ROOT, 'src', 'config.js'), path.join(ROOT, 'main', 'services', 'credentialPresence.js')]) {
     try { delete require.cache[require.resolve(p)]; } catch (_) {}
   }
   // Reset the defaultService singleton between tests.
@@ -71,6 +71,11 @@ function loadIpc({ openResult, dialogError = null } = {}) {
         },
       },
       app: { getPath: () => TMP },
+      safeStorage: {
+        isEncryptionAvailable: () => true,
+        encryptString: (s) => Buffer.from('enc:' + s, 'utf8'),
+        decryptString: (buf) => buf.toString('utf8').replace(/^enc:/, ''),
+      },
     },
   };
   process.env.MINIMAX_CONFIG_DIR = TMP;

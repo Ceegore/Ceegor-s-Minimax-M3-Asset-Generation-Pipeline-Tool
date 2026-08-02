@@ -29,11 +29,16 @@ const sessionStore = require('./SessionCredentialStore');
  */
 function credentialPresence(cfg) {
   const key = (cfg && typeof cfg.api_key === 'string') ? cfg.api_key : '';
+  // B-002 (hhhhu2 audit): also check for the encrypted credential reference.
+  // After replacePersisted(), api_key is empty but api_credential_id points
+  // to the encrypted blob in SecretBlobStore.
+  const credentialId = (cfg && typeof cfg.api_credential_id === 'string') ? cfg.api_credential_id : '';
   let session = false;
   try { session = sessionStore.hasSessionCredential(); } catch (_) { /* fail closed to persisted-only */ }
+  const hasPersisted = key.length > 0 || credentialId.length > 0;
   return {
-    hasApiKey: key.length > 0 || session,
-    hasPersistedApiKey: key.length > 0,
+    hasApiKey: hasPersisted || session,
+    hasPersistedApiKey: hasPersisted,
     hasSessionApiKey: session,
     // Only the persisted key has a displayable tail; the session key
     // never leaves Main in any form (not even 4 chars).

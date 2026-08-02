@@ -23,6 +23,13 @@ let _secretStore = null;
 function registerSecretStore(store) { _secretStore = store; }
 function _getSecretStore() { return _secretStore; }
 
+// B-003 fix: ProviderCredentialRepository integration. When registered,
+// all key resolution goes through the encrypted blob store instead of
+// the legacy SecretStore or plaintext fields.
+let _credentialRepo = null;
+function registerCredentialRepository(repo) { _credentialRepo = repo; }
+function _getCredentialRepo() { return _credentialRepo; }
+
 /** Credential ID for a provider's API key in the SecretStore. */
 function _credId(providerId) { return 'provider-' + providerId + '-apikey'; }
 
@@ -141,6 +148,22 @@ function write(d) {
       }
     }
   }
+  // M-010 (hhhhu2 audit): normalize credential references. The canonical
+  // field is `credential_id` (used by ProviderCredentialRepository).
+  // Legacy `credentialId` is migrated on write. `_sessionKey` and raw
+  // `apiKey` are stripped — they must never be persisted.
+  if (d && Array.isArray(d.providers)) {
+    for (const p of d.providers) {
+      if (p.credentialId && !p.credential_id) {
+        p.credential_id = p.credentialId;
+      }
+      delete p.credentialId;
+      delete p._sessionKey;
+      // Raw apiKey is only tolerated during migration; the encrypted
+      // blob store is the canonical source. Clear it if credential_id exists.
+      if (p.credential_id) p.apiKey = '';
+    }
+  }
   // B-004: normalize built-in origins before persisting so the file on
   // disk never carries a diverged openrouter/replicate baseUrl or kind.
   _pinBuiltins(d);
@@ -154,6 +177,14 @@ function provider(id) {
   const d = read();
   const p = (d.providers || []).find((x) => x.id === id);
   if (!p) throw new Error('unknown provider ' + id);
+  // B-003 fix: resolve apiKey through ProviderCredentialRepository first.
+  const repo = _getCredentialRepo();
+  if (repo) {
+    try {
+      const key = repo.resolveKey(id);
+      if (key) { p.apiKey = key; return p; }
+    } catch (_) { /* fall through to legacy */ }
+  }
   // H-024: resolve apiKey from SecretStore when credentialId is present.
   if (p.credentialId && !p.apiKey) {
     const store = _getSecretStore();
@@ -169,10 +200,20 @@ function provider(id) {
 // means "keep existing" (to prevent accidental loss). Deleting requires
 // a deliberate, separate action that bypasses the write() merge logic.
 function clearApiKey(id) {
+  // B-003 fix: clear through ProviderCredentialRepository when available.
+  const repo = _getCredentialRepo();
+  if (repo) {
+    try { repo.clear(id); } catch (_) {}
+  }
   const d = read();
   const p = (d.providers || []).find((x) => x.id === id);
   if (!p) throw new Error('unknown provider ' + id);
+  // M-010 (hhhhu2 audit): remove ALL credential reference fields so
+  // "clear key" cannot leave a resolvable reference behind.
   p.apiKey = '';
+  delete p.credentialId;
+  delete p.credential_id;
+  delete p._sessionKey;
   // Write with a flag that tells write() NOT to merge the old key back.
   const tmp = file() + '.tmp-' + randomUUID();
   fs.writeFileSync(tmp, JSON.stringify(d, null, 2));
@@ -180,4 +221,4 @@ function clearApiKey(id) {
   return { ok: true, providerId: id };
 }
 
-module.exports = { read, write, provider, clearApiKey, file, _default, BUILTIN_ORIGINS, registerSecretStore, _getSecretStore, _credId, _migrateKeys };
+module.exports = { read, write, provider, clearApiKey, file, _default, BUILTIN_ORIGINS, registerSecretStore, _getSecretStore, _credId, _migrateKeys, registerCredentialRepository, _getCredentialRepo };

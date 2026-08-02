@@ -36,43 +36,14 @@ const pathUtils = require('../../src/pathUtils');
 const { authorizePath: _authorizePath } = require('./grantAuthorizer');
 // P1-A (360° Audit H-001): secure IPC wrapper.
 const { secureHandle } = require('./secureHandle');
+// H-013 (hhhhu2 audit): native destructive-operation intent confirmation
+// (fb:confirmDestructive + consumeIntent) — split into its own module.
+const { registerConfirmDestructive, consumeIntent } = require('./fileBrowserDestructiveIntent');
+// M-014 (hhhhu2 audit): paginated directory listing handlers
+// (fb:listStart / fb:listNext / fb:listClose / fb:listDrives).
+const { registerListingHandlers } = require('./fileBrowserListingIpc');
 
 const MAX_WRITE_BYTES = 25 * 1024 * 1024;
-
-// MED-020: parallel drive enumeration with an overall deadline instead of
-// sequential per-letter probing. A slow/unresponsive network drive no longer
-// blocks the entire listing.
-async function listDrives() {
-  if (process.platform === 'win32') {
-    const letters = 'CDEFGHIJKLMNOPQRSTUVWXYZ';
-    const PER_LETTER_TIMEOUT_MS = 1500;
-    const OVERALL_DEADLINE_MS = 4000;
-    const results = await Promise.race([
-      Promise.allSettled(
-        [...letters].map(async (ch) => {
-          const root = ch + ':\\';
-          const st = await Promise.race([
-            fsp.stat(root),
-            new Promise((_, reject) => {
-              setTimeout(() => reject(new Error('stat timeout')), PER_LETTER_TIMEOUT_MS);
-            }),
-          ]);
-          if (st && st.isDirectory()) return { name: root, label: ch + ':' };
-          return null;
-        })
-      ),
-      new Promise((resolve) => {
-        setTimeout(() => resolve([]), OVERALL_DEADLINE_MS);
-      }),
-    ]);
-    const out = [];
-    for (const r of results) {
-      if (r && r.status === 'fulfilled' && r.value) out.push(r.value);
-    }
-    return out;
-  }
-  return [{ name: '/', label: '/' }];
-}
 
 /**
  * @param {{ appRoot: string }} deps
@@ -93,14 +64,10 @@ function register(deps) {
     catch (e) { return { ok: false, error: String(e.message || e) }; }
   });
 
-  secureHandle('fb:listDrives', { getMainWindow }, async () => {
-    try {
-      const drives = await listDrives();
-      return { ok: true, drives };
-    } catch (e) {
-      return { ok: false, error: String(e && e.message || e), drives: [] };
-    }
-  });
+  // M-014 (hhhhu2 audit): cursor-based paginated directory listing
+  // (fb:listStart / fb:listNext / fb:listClose) + fb:listDrives live in
+  // fileBrowserListingIpc.js.
+  registerListingHandlers({ getMainWindow });
 
   // R1.3: `fb:set-active-dir` is now a navigation ACK only. It does
   // NOT alter any trust set, the activeDir, or any global state. The
@@ -112,6 +79,13 @@ function register(deps) {
   secureHandle('fb:set-active-dir', { getMainWindow }, (_e, _dir) => {
     return { ok: true, activeDir: null, note: 'R1.3: navigation-only; mutations require a grantId' };
   });
+
+  // H-013 (hhhhu2 audit): Native confirmation for destructive operations.
+  // The renderer calls this BEFORE fb:delete/fb:move/fb:rename. It shows a
+  // native OS dialog and returns a single-use intentId bound to the exact
+  // operation, paths, and sender. The subsequent mutation handler consumes
+  // it (see fileBrowserDestructiveIntent.js).
+  registerConfirmDestructive({ getMainWindow });
 
   // ---- Mutating handlers: each requires a grantId. --------------------
 
@@ -151,67 +125,82 @@ function register(deps) {
   // grant covers; the new name is a string, not a path. The new
   // path is computed (dir of p + newName) and must still be inside
   // the grant scope.
-  secureHandle('fb:rename', { getMainWindow }, async (_e, p, newName, grantId) => {
+  // H-013: requires a consumed intent token for the destructive operation.
+  secureHandle('fb:rename', { getMainWindow }, async (e, p, newName, grantId, intentId) => {
     if (typeof p !== 'string' || typeof newName !== 'string' || !p || !newName) {
       return { ok: false, error: 'p and newName are required.' };
+    }
+    // BUG-R2-04 (validate before intent consumption): a newName with path
+    // separators is a traversal attempt — reject it BEFORE the one-shot
+    // intent token is consumed, so the rejection is pure validation and
+    // the token stays usable for a corrected retry.
+    if (/[/\\]/.test(newName) || newName === '..' || newName === '.') {
+      return { ok: false, error: 'newName cannot contain path separators.' };
     }
     // The grant must authorise the source path (a write/rename op).
     const authz = _authorizePath(grantId, 'rename', p);
     if (!authz.ok) return authz;
-    // The target path is the source's parent + newName. It must be
-    // a strict descendant of the source (sibling rename), so the
-    // grant already covers it via the directory-strict-descendant
-    // rule. We re-authorise to be safe.
+    // The target path is the source's parent + newName.
     const dirOfP = path.dirname(p);
     const targetPath = pathUtils.normalize(path.join(dirOfP, newName));
     const targetAuthz = _authorizePath(grantId, 'write', targetPath);
     if (!targetAuthz.ok) return targetAuthz;
-    try { return { ok: true, path: await fb.rename(p, newName) }; }
-    catch (e) { return { ok: false, error: String(e.message || e) }; }
+    // H-013: consume the intent token.
+    const renameIntentErr = consumeIntent(e, intentId, {
+      operation: 'rename',
+      canonicalSource: path.resolve(p),
+      canonicalDestination: path.resolve(targetPath),
+      sourceGrantId: grantId,
+    });
+    if (renameIntentErr) return renameIntentErr;
+    try { return { ok: true, ...(await fb.rename(p, newName)) }; }
+    catch (err) { return { ok: false, error: String(err.message || err) }; }
   });
 
   // fb:delete deletes `p`. For a directory grant, the path must be
   // a strict descendant (the grant root itself is never covered per
   // S1 §2.5). A `directory-root` grant (coversRoot:true) covers
   // the root itself.
-  secureHandle('fb:delete', { getMainWindow }, async (_e, p, grantId) => {
+  // H-013: requires a consumed intent token for the destructive operation.
+  secureHandle('fb:delete', { getMainWindow }, async (e, p, grantId, intentId) => {
     if (typeof p !== 'string' || !p) return { ok: false, error: 'p is required.' };
     const authz = _authorizePath(grantId, 'delete', p);
     if (!authz.ok) return authz;
+    // H-013: consume the intent token.
+    const deleteIntentErr = consumeIntent(e, intentId, {
+      operation: 'delete',
+      canonicalSource: path.resolve(p),
+      sourceGrantId: grantId,
+    });
+    if (deleteIntentErr) return deleteIntentErr;
     try { return { ok: true, path: await fb.deletePath(p) }; }
-    catch (e) { return { ok: false, error: String(e.message || e) }; }
+    catch (err) { return { ok: false, error: String(err.message || err) }; }
   });
 
   // fb:move moves `src` into `destDir`. The source needs a `read`
   // capability (or `move` — see PathGrantService). The destination
   // needs a `write` capability. Authorize both.
-  secureHandle('fb:move', { getMainWindow }, async (_e, src, destDir, grantId, destGrantId) => {
+  // H-013: requires a consumed intent token for the destructive operation.
+  secureHandle('fb:move', { getMainWindow }, async (e, src, destDir, grantId, destGrantId, intentId) => {
     if (typeof src !== 'string' || typeof destDir !== 'string' || !src || !destDir) {
       return { ok: false, error: 'src and destDir are required.' };
     }
     const destPath = pathUtils.normalize(path.join(destDir, path.basename(src)));
-    // Authorize source for `move` and destination for `write`.
-    // gewv2 GEW-002 fix: fb:move used to authorize BOTH endpoints against
-    // ONE grant, but the renderer can only mint a grant on the deepest
-    // common ancestor of src+destDir — for two non-nested trusted folders
-    // that ancestor is often e.g. C:\, which is never an allowed root, so
-    // the mint itself fails and every cross-root move is rejected. Fix:
-    // accept an OPTIONAL 5th arg `destGrantId` minted separately for the
-    // destination, so each endpoint is authorized by its OWN valid grant —
-    // this fixes the cross-root case WITHOUT weakening the R1.3 invariant
-    // that every mutation requires an authorizing grant (no root-based
-    // bypass; a missing/wrong/revoked grant still hard-rejects).
     const srcAuthz = _authorizePath(grantId, 'move', src);
     if (!srcAuthz.ok) return srcAuthz;
     const destAuthz = _authorizePath(destGrantId || grantId, 'write', destPath);
     if (!destAuthz.ok) return destAuthz;
-    // R8: moveTo auto-renames on collision (writes a sibling like "file (1).png").
-    // Authorising destPath is still sufficient: the renderer mints a DIRECTORY
-    // grant (GrantHelper.ensureMove — common ancestor, or destDir coversRoot),
-    // which covers every descendant of destDir, so the renamed sibling is in
-    // scope. No separate re-auth of the actual returned path is required.
-    try { return { ok: true, path: await fb.moveTo(src, destDir) }; }
-    catch (e) { return { ok: false, error: String(e.message || e) }; }
+    // H-013: consume the intent token.
+    const moveIntentErr = consumeIntent(e, intentId, {
+      operation: 'move',
+      canonicalSource: path.resolve(src),
+      canonicalDestination: path.resolve(destPath),
+      sourceGrantId: grantId,
+      destinationGrantId: destGrantId || grantId,
+    });
+    if (moveIntentErr) return moveIntentErr;
+    try { return { ok: true, ...(await fb.moveTo(src, destDir)) }; }
+    catch (err) { return { ok: false, error: String(err.message || err) }; }
   });
 
   // fb:copy copies `src` into `destDir`. The source needs `read`

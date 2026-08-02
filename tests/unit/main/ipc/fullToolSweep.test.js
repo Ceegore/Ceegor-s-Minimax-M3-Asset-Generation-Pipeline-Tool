@@ -49,6 +49,9 @@ function createElectronMock(overrides = {}) {
       },
       dialog: {
         showOpenDialog: overrides.showOpenDialog || (async () => ({ canceled: true, filePaths: [] })),
+        // H-013: fb:confirmDestructive shows a native confirmation box.
+        // Auto-confirm so the intent-token flow runs in tests.
+        showMessageBox: overrides.showMessageBox || (async () => ({ response: 1 })),
       },
       shell: {
         showItemInFolder(p) { showItemInFolderCalls.push(p); },
@@ -63,6 +66,13 @@ function createElectronMock(overrides = {}) {
         },
       },
       BrowserWindow: class BrowserWindow {},
+      // B-002 (hhhhu2 audit): CredentialRepository persists keys through
+      // SecretBlobStore, which requires electron's safeStorage.
+      safeStorage: {
+        isEncryptionAvailable: () => true,
+        encryptString: (s) => Buffer.from('enc:' + s, 'utf8'),
+        decryptString: (buf) => buf.toString('utf8').replace(/^enc:/, ''),
+      },
       contextBridge: overrides.contextBridge,
       ipcRenderer: overrides.ipcRenderer,
     },
@@ -588,7 +598,19 @@ test('app, config, state, batches, and file browser handlers pass a real filesys
     assert.equal(deniedEnsure.ok, false);
     assert.match(deniedEnsure.error, /root itself|descendant|outside the grant|not found|not covered/i);
 
-    const renameRes = await electron.handlers['fb:rename'](null, rootFile, 'renamed.txt', outputGrantId);
+    // H-013 (hhhhu2 audit): destructive ops (rename/move/delete) require
+    // a one-shot intent token minted via fb:confirmDestructive. The handlers
+    // bind the token to the IPC sender, so pass a fake event with a stable
+    // sender id (secureHandle skips sender checks outside real Electron).
+    const fakeEvent = { sender: { id: 1 } };
+    const renameIntent = await electron.handlers['fb:confirmDestructive'](fakeEvent, {
+      operation: 'rename',
+      sourcePath: rootFile,
+      destinationPath: path.join(outputDir, 'renamed.txt'),
+      sourceGrantId: outputGrantId,
+    });
+    assert.equal(renameIntent.ok, true);
+    const renameRes = await electron.handlers['fb:rename'](fakeEvent, rootFile, 'renamed.txt', outputGrantId, renameIntent.intentId);
     assert.equal(renameRes.ok, true);
     const renamedFile = renameRes.path;
     assert.equal(path.basename(renamedFile), 'renamed.txt');
@@ -597,7 +619,15 @@ test('app, config, state, batches, and file browser handlers pass a real filesys
     assert.equal(copyRes.ok, true);
     assert.equal(fs.existsSync(copyRes.path), true);
 
-    const moveRes = await electron.handlers['fb:move'](null, renamedFile, path.join(outputDir, 'sub'), outputGrantId);
+    const moveIntent = await electron.handlers['fb:confirmDestructive'](fakeEvent, {
+      operation: 'move',
+      sourcePath: renamedFile,
+      destinationPath: path.join(outputDir, 'sub', path.basename(renamedFile)),
+      sourceGrantId: outputGrantId,
+      destinationGrantId: outputGrantId,
+    });
+    assert.equal(moveIntent.ok, true);
+    const moveRes = await electron.handlers['fb:move'](fakeEvent, renamedFile, path.join(outputDir, 'sub'), outputGrantId, outputGrantId, moveIntent.intentId);
     assert.equal(moveRes.ok, true);
     assert.equal(fs.existsSync(moveRes.path), true);
     assert.equal(path.dirname(moveRes.path), path.join(outputDir, 'sub'));
@@ -621,7 +651,13 @@ test('app, config, state, batches, and file browser handlers pass a real filesys
     assert.equal(deniedWrite.ok, false);
     assert.match(deniedWrite.error, /root itself|descendant|outside the grant|not found|not covered/i);
 
-    const deleteRes = await electron.handlers['fb:delete'](null, moveRes.path, outputGrantId);
+    const deleteIntent = await electron.handlers['fb:confirmDestructive'](fakeEvent, {
+      operation: 'delete',
+      sourcePath: moveRes.path,
+      sourceGrantId: outputGrantId,
+    });
+    assert.equal(deleteIntent.ok, true);
+    const deleteRes = await electron.handlers['fb:delete'](fakeEvent, moveRes.path, outputGrantId, deleteIntent.intentId);
     assert.deepEqual(deleteRes, { ok: true, path: moveRes.path });
     assert.equal(fs.existsSync(moveRes.path), false);
 

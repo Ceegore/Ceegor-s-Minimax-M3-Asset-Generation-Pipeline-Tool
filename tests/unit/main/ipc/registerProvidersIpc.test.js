@@ -40,6 +40,55 @@ require.cache[grantMod] = {
   exports: { authorizePath: () => ({ ok: true }) },
 };
 
+// Stub ArtifactFinalizer: write b64 data to stage dir, simulate URL download errors.
+const finalizerMod = require.resolve('../../../../main/services/ArtifactFinalizer');
+let finalizerUrlError = null; // set by tests to simulate download failures
+require.cache[finalizerMod] = {
+  exports: {
+    finalize: async (descriptor, opts) => {
+      const stageDir = opts.stageDirectory || tmpDir;
+      fs.mkdirSync(stageDir, { recursive: true });
+      const stagedPath = path.join(stageDir, 'staged_' + Date.now() + '_' + Math.random().toString(36).slice(2));
+      if (descriptor.data) {
+        // b64 path: decode and write
+        const buf = Buffer.from(descriptor.data, 'base64');
+        fs.writeFileSync(stagedPath, buf);
+        return { stagedPath, extension: 'png', mediaType: 'image/png', bytes: buf.length, sha256: 'stub', metadata: {} };
+      }
+      if (descriptor.url) {
+        // URL path: simulate download
+        if (finalizerUrlError) throw new Error(finalizerUrlError);
+        const buf = Buffer.from('URL-DATA');
+        fs.writeFileSync(stagedPath, buf);
+        return { stagedPath, extension: 'png', mediaType: 'image/png', bytes: buf.length, sha256: 'stub', metadata: {} };
+      }
+      throw new Error('finalize: no data or url in descriptor');
+    },
+    detectType: () => 'png',
+  },
+};
+
+// Stub OutputTransactionService: simple pass-through that copies staged files.
+const txnMod = require.resolve('../../../../main/services/OutputTransactionService');
+require.cache[txnMod] = {
+  exports: {
+    OutputTransactionService: class {
+      constructor() { this._files = new Map(); }
+      begin() { const id = 'txn-' + Date.now(); this._files.set(id, []); return { transactionId: id, stageDir: path.join(tmpDir, 'stage-' + id) }; }
+      addFile(txnId, entry) { (this._files.get(txnId) || []).push(entry); }
+      commit(txnId) {
+        for (const f of (this._files.get(txnId) || [])) {
+          fs.mkdirSync(path.dirname(f.finalPath), { recursive: true });
+          fs.copyFileSync(f.stagedPath, f.finalPath);
+        }
+        this._files.delete(txnId);
+        return { committed: true };
+      }
+      cancel() {}
+    },
+  },
+};
+
 // Now load the registrar (it will call ipcMain.handle for each channel).
 delete require.cache[require.resolve('../../../../main/ipc/registerProvidersIpc')];
 const { register } = require('../../../../main/ipc/registerProvidersIpc');
@@ -52,7 +101,16 @@ beforeEach(() => { fetchResponses = []; });
 afterEach(() => { globalThis.fetch = realFetch; });
 
 function jsonResp(data, ok = true) {
-  return { ok, status: ok ? 200 : 500, json: async () => data, text: async () => JSON.stringify(data), arrayBuffer: async () => new ArrayBuffer(0) };
+  const buf = Buffer.from(JSON.stringify(data), 'utf8');
+  let sent = false;
+  return {
+    ok, status: ok ? 200 : 500,
+    headers: { get: (k) => k === 'content-length' ? String(buf.length) : null },
+    body: { getReader: () => ({ read: async () => { if (sent) return { done: true, value: undefined }; sent = true; return { done: false, value: new Uint8Array(buf) }; }, cancel: async () => {} }) },
+    json: async () => data,
+    text: async () => JSON.stringify(data),
+    arrayBuffer: async () => buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength),
+  };
 }
 
 // ---- Tests ----
@@ -82,23 +140,16 @@ test('providers:generate throws on download HTTP error (url-based output)', asyn
   const outDir = path.join(tmpDir, 'out-url');
   const handler = handlers.get('providers:generate');
 
-  // The adapter returns a URL-based output; the handler's download fetch gets a 404.
-  // H-018: use a public IP literal so the DNS validation step is skipped
-  // (hostname-based URLs would require mocking dns.promises.resolve4).
-  let callCount = 0;
-  globalThis.fetch = async (url) => {
-    callCount++;
-    // First call: the adapter's API call (images/generations) — return a URL output.
-    if (callCount === 1) return jsonResp({ data: [{ url: 'https://93.184.216.34/img.png' }] });
-    // Second call: the handler's download — return 404.
-    return { ok: false, status: 404, headers: new Map(), arrayBuffer: async () => new ArrayBuffer(0), text: async () => 'not found' };
-  };
+  // The adapter returns a URL-based output; the finalizer's download gets a 404.
+  finalizerUrlError = 'download HTTP 404';
+  globalThis.fetch = async () => jsonResp({ data: [{ url: 'https://93.184.216.34/img.png' }] });
 
   const r = await handler({}, {
     jobId: 'test-2', modality: 'image', providerId: 'openrouter',
     model: 'gpt-image-1', prompt: 'a dog', params: {},
     outDir, grantId: 'g1',
   });
+  finalizerUrlError = null; // reset
   assert.equal(r.ok, false);
   assert.ok(r.error.includes('download HTTP 404'), 'error mentions download HTTP 404: ' + r.error);
 });

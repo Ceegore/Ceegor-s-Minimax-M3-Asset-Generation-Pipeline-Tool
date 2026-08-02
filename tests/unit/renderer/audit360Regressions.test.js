@@ -329,6 +329,16 @@ test('M1: config:set returns { ok, config, error } envelope (live behavior)', ()
   // Force a fresh require of the registrar.
   delete require.cache[require.resolve(path.join(ROOT, 'main', 'ipc', 'registerConfigIpc.js'))];
   delete require.cache[require.resolve(path.join(ROOT, 'src', 'config'))];
+  // B-002 (hhhhu2 audit): config:set stores keys through the
+  // CredentialRepository + SecretBlobStore; re-load them fresh.
+  for (const rel of [
+    ['main', 'services', 'CredentialRepository.js'],
+    ['main', 'services', 'SecretBlobStore.js'],
+    ['main', 'services', 'SessionCredentialStore.js'],
+    ['main', 'services', 'credentialPresence.js'],
+  ]) {
+    try { delete require.cache[require.resolve(path.join(ROOT, ...rel))]; } catch (_) {}
+  }
   // Mock voicesCache so the require doesn't pull in the full service.
   const voicesPath = path.join(ROOT, 'main', 'services', 'VoicesCacheService.js');
   const origVoices = require.cache[require.resolve(voicesPath)];
@@ -339,7 +349,17 @@ test('M1: config:set returns { ok, config, error } envelope (live behavior)', ()
       handle(channel, fn) { handlers[channel] = fn; },
     };
     const electronBackup = require.cache[require.resolve('electron')];
-    require.cache[require.resolve('electron')] = { exports: { ipcMain: fakeIpc, dialog: { showOpenDialog() {} } } };
+    // B-002: safeStorage for SecretBlobStore + app.getPath for its store dir.
+    require.cache[require.resolve('electron')] = { exports: {
+      ipcMain: fakeIpc,
+      dialog: { showOpenDialog() {} },
+      app: { getPath: () => tmp },
+      safeStorage: {
+        isEncryptionAvailable: () => true,
+        encryptString: (s) => Buffer.from('enc:' + s, 'utf8'),
+        decryptString: (buf) => buf.toString('utf8').replace(/^enc:/, ''),
+      },
+    } };
     delete require.cache[require.resolve(path.join(ROOT, 'main', 'ipc', 'registerConfigIpc.js'))];
     require(path.join(ROOT, 'main', 'ipc', 'registerConfigIpc.js')).register({ getMainWindow: () => null });
     require.cache[require.resolve('electron')] = electronBackup;

@@ -30,9 +30,12 @@ const MODALITY_STREAM = Object.freeze({
 /**
  * Resolve the ffprobe binary path.
  * Uses ffmpeg-static's bundled ffprobe or falls back to system ffprobe.
- * @returns {string}
+ * M-004 (hhhhu2 audit): returns null when ffprobe cannot be found, so the
+ * caller can produce a clear diagnostic instead of a cryptic spawn error.
+ * @returns {string|null}
  */
 function resolveFfprobe() {
+  const fs = require('fs');
   try {
     // ffmpeg-static bundles ffprobe alongside ffmpeg
     const ffmpegPath = require('ffmpeg-static');
@@ -40,12 +43,26 @@ function resolveFfprobe() {
       const dir = path.dirname(ffmpegPath);
       const probeName = process.platform === 'win32' ? 'ffprobe.exe' : 'ffprobe';
       const probePath = path.join(dir, probeName);
-      const fs = require('fs');
       if (fs.existsSync(probePath)) return probePath;
     }
   } catch (_) {}
-  // Fallback: system ffprobe
-  return process.platform === 'win32' ? 'ffprobe.exe' : 'ffprobe';
+  // M-004: check for an explicitly bundled ffprobe in the app resources.
+  const bundledCandidates = [
+    path.join(__dirname, '..', '..', 'bin', process.platform === 'win32' ? 'ffprobe.exe' : 'ffprobe'),
+    path.join(__dirname, '..', '..', 'resources', 'bin', process.platform === 'win32' ? 'ffprobe.exe' : 'ffprobe'),
+  ];
+  for (const candidate of bundledCandidates) {
+    try { if (fs.existsSync(candidate)) return candidate; } catch (_) {}
+  }
+  // Fallback: system ffprobe (verify it exists)
+  const systemName = process.platform === 'win32' ? 'ffprobe.exe' : 'ffprobe';
+  try {
+    const { execFileSync } = require('child_process');
+    execFileSync(systemName, ['-version'], { timeout: 5000, windowsHide: true, stdio: 'ignore' });
+    return systemName;
+  } catch (_) {
+    return null; // ffprobe not available
+  }
 }
 
 /**
@@ -63,6 +80,10 @@ function resolveFfprobe() {
  */
 async function probeMedia(filePath, opts, signal) {
   const ffprobe = resolveFfprobe();
+  // M-004 (hhhhu2 audit): fail with a clear diagnostic when ffprobe is absent.
+  if (!ffprobe) {
+    return { ok: false, error: 'ffprobe is not available. Audio/video validation requires a bundled ffprobe binary. Reinstall the application or add ffprobe to PATH.' };
+  }
   const maxDuration = opts.maxDurationSec || 3600; // 1 hour default
   const maxWidth = opts.maxWidth || 7680;
   const maxHeight = opts.maxHeight || 4320;
@@ -163,7 +184,12 @@ function validateProbeResult(data, resolve, constraints) {
   }
 
   // Duration check
-  const duration = parseFloat(format.duration || '0');
+  // M-005 (hhhhu2 audit): reject zero, NaN, or negative duration.
+  const duration = parseFloat(format.duration || '');
+  if (!Number.isFinite(duration) || duration <= 0) {
+    resolve({ ok: false, error: `Media has invalid duration (${format.duration || 'missing'}). File may be structurally corrupt.` });
+    return;
+  }
   if (duration > constraints.maxDuration) {
     resolve({ ok: false, error: `Duration ${duration}s exceeds maximum ${constraints.maxDuration}s.` });
     return;
@@ -174,6 +200,11 @@ function validateProbeResult(data, resolve, constraints) {
     for (const s of matching) {
       const w = parseInt(s.width || '0', 10);
       const h = parseInt(s.height || '0', 10);
+      // M-005 (hhhhu2 audit): reject zero dimensions.
+      if (w <= 0 || h <= 0) {
+        resolve({ ok: false, error: `Video has invalid dimensions (${w}x${h}). File may be structurally corrupt.` });
+        return;
+      }
       if (w > constraints.maxWidth || h > constraints.maxHeight) {
         resolve({ ok: false, error: `Video dimensions ${w}x${h} exceed maximum.` });
         return;

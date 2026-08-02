@@ -208,14 +208,21 @@ app.whenReady().then(() => {
     console.error('[main] ensureOutputDir failed:', e);
   }
 
-  // H-024 (_5 audit): register the SecretStore with providersStore so provider
-  // API keys are migrated from plaintext to encrypted storage on first read.
+  // B-003 fix: wire ProviderCredentialRepository (encrypted blob store) for
+  // provider API keys. Migrate legacy plaintext keys on first boot, then
+  // register the repository with providersStore so all live IPC paths use it.
   try {
     const providersStore = require('../src/providersStore');
-    const SecretStore = require('./services/SecretStore');
-    providersStore.registerSecretStore(SecretStore);
+    const { ProviderCredentialRepository } = require('./services/ProviderCredentialRepository');
+    const blobStore = require('./services/SecretBlobStore');
+    const providersPath = path.join(app.getPath('userData'), 'providers.json');
+    const providerCredRepo = new ProviderCredentialRepository({ blobStore, providersPath });
+    // One-time migration of legacy plaintext apiKey fields to encrypted blobs.
+    try { providerCredRepo.migrateLegacy(); } catch (_) {}
+    // Register the new repository so IPC handlers can resolve keys through it.
+    providersStore.registerCredentialRepository(providerCredRepo);
   } catch (e) {
-    _queueLog('[main] SecretStore registration failed: ' + ((e && e.message) || e));
+    _queueLog('[main] ProviderCredentialRepository init failed: ' + ((e && e.message) || e));
   }
 
   for (const entry of ipcRegistrars) {

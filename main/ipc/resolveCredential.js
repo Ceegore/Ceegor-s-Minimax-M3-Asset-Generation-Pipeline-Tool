@@ -45,11 +45,13 @@ function _isSessionOnlyFromState(stateMod) {
 let _cfgMod = null;
 let _stateMod = null;
 let _sessionStore = null;
+let _credentialRepo = null;
 function _loadDeps() {
   if (!_cfgMod) _cfgMod = require('../../src/config');
   if (!_stateMod) _stateMod = require('../../src/state');
   if (!_sessionStore) _sessionStore = require('../services/SessionCredentialStore');
-  return { cfgMod: _cfgMod, stateMod: _stateMod, sessionStore: _sessionStore };
+  if (!_credentialRepo) _credentialRepo = require('../services/CredentialRepository');
+  return { cfgMod: _cfgMod, stateMod: _stateMod, sessionStore: _sessionStore, credentialRepo: _credentialRepo };
 }
 
 /**
@@ -78,6 +80,15 @@ function resolveCredential(payload, deps) {
     if (persistedSessionOnly) {
       return { apiKey: null, sessionOnly: true, error: 'No session API key configured. Re-enter it in Settings.' };
     }
+    // B-002 fix: resolve through CredentialRepository (encrypted blob store)
+    // instead of reading plaintext cfg.api_key directly. The repository
+    // handles both the new credential_id path and legacy fallback.
+    if (_deps.credentialRepo) {
+      try {
+        const resolved = _deps.credentialRepo.resolvePrimary();
+        if (resolved.apiKey) return resolved;
+      } catch (_) { /* fall through to legacy path */ }
+    }
     return { apiKey: cfg && cfg.api_key ? cfg.api_key : null, sessionOnly: false };
   } catch (_) {
     return { apiKey: null, sessionOnly: false, error: 'mmx: failed to read persisted config' };
@@ -91,6 +102,7 @@ function _resetForTest() {
   _cfgMod = null;
   _stateMod = null;
   _sessionStore = null;
+  _credentialRepo = null;
 }
 
 module.exports = { resolveCredential, _resetForTest };

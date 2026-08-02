@@ -50,6 +50,12 @@ const STATE_PATH = path.join(ROOT, 'src', 'state.js');
 const SYNC_PATH = path.join(ROOT, 'src', 'mmxApiKeySync.js');
 const GRANT_PATH = path.join(ROOT, 'main', 'services', 'PathGrantService');
 const VOICES_PATH = path.join(ROOT, 'main', 'services', 'VoicesCacheService');
+// B-002 (hhhhu2 audit): config:set routes keys through the
+// CredentialRepository + SecretBlobStore; both must be re-loaded per test.
+const CRED_REPO_PATH = path.join(ROOT, 'main', 'services', 'CredentialRepository.js');
+const SECRET_BLOB_PATH = path.join(ROOT, 'main', 'services', 'SecretBlobStore.js');
+const SESSION_STORE_PATH = path.join(ROOT, 'main', 'services', 'SessionCredentialStore.js');
+const CRED_PRESENCE_PATH = path.join(ROOT, 'main', 'services', 'credentialPresence.js');
 
 const TMP = fs.mkdtempSync(path.join(os.tmpdir(), 'mmx-r232-'));
 
@@ -62,7 +68,7 @@ function makeHome() {
 }
 
 function clearCache() {
-  for (const p of [IPC_PATH, CFG_PATH, STATE_PATH, SYNC_PATH, GRANT_PATH, VOICES_PATH]) {
+  for (const p of [IPC_PATH, CFG_PATH, STATE_PATH, SYNC_PATH, GRANT_PATH, VOICES_PATH, CRED_REPO_PATH, SECRET_BLOB_PATH, SESSION_STORE_PATH, CRED_PRESENCE_PATH]) {
     try { delete require.cache[require.resolve(p)]; } catch (_) {}
   }
 }
@@ -74,6 +80,12 @@ function loadConfigIpc(grantMock) {
       ipcMain: { handle: (ch, fn) => handlers.set(ch, fn) },
       app: { getPath: () => process.env.MINIMAX_CONFIG_DIR || process.cwd() },
       dialog: { showOpenDialog: async () => ({ canceled: true, filePaths: [] }) },
+      // B-002 (hhhhu2 audit): SecretBlobStore persists keys via safeStorage.
+      safeStorage: {
+        isEncryptionAvailable: () => true,
+        encryptString: (s) => Buffer.from('enc:' + s, 'utf8'),
+        decryptString: (buf) => buf.toString('utf8').replace(/^enc:/, ''),
+      },
     },
   };
   // Optionally inject a grant-service mock BEFORE loadConfigIpc() reads it.

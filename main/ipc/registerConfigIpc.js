@@ -46,6 +46,11 @@ const { updateSessionCredential } = require('../services/updateSessionCredential
 const { credentialPresence } = require('../services/credentialPresence');
 const { clampBatchMaxUnits } = require('../services/batchUnitsGate'); // H-046 (_5 audit): canonical clamp for the safe numeric cost-cap field
 const { secureHandle } = require('./secureHandle'); // P1-A (360° Audit H-001): sender/frame/origin-validated IPC wrapper
+// B-002 fix: wire the encrypted credential repository for key persistence.
+const credentialRepo = require('../services/CredentialRepository');
+// B-007: typed key command resolution (keep/replace/clear) — split out for
+// the lint size budget.
+const { parseKeyAction } = require('./configKeyAction');
 
 const PURPOSE_TO_ORIGIN = Object.freeze({
   'config-output': 'config-output',
@@ -116,41 +121,14 @@ function register({ getMainWindow }) {
       if (cfg == null || typeof cfg !== 'object' || Array.isArray(cfg)) {
         return { ok: false, config: _publicConfig(cfgMod.read()), error: 'Config must be a plain object.' };
       }
-      // B-007: the API key is a typed secret command, NOT a config text
-      // field. The renderer's key input renders EMPTY (secretless DTO),
-      // so a plain `api_key: ""` in the cfg MUST NEVER mean "delete the
-      // stored key" — that wiped the key on every unrelated settings
-      // save. Resolution order:
-      //   1. apiKeyNoSave (privacy switch) → persisted key cleared
-      //      (R2.3.1 contract), session key handled separately.
-      //   2. Explicit payload.apiKeyAction: 'keep' | 'replace' | 'clear'
-      //      ('replace' requires a non-empty payload.apiKeyValue).
-      //   3. Legacy inference (bare-cfg callers): a NON-EMPTY
-      //      cfg.api_key means replace; empty/absent means KEEP.
-      const rawAction = (isWrapped && payload.apiKeyAction !== undefined) ? payload.apiKeyAction : null;
-      if (rawAction !== null && rawAction !== 'keep' && rawAction !== 'replace' && rawAction !== 'clear') {
-        return { ok: false, config: _publicConfig(cfgMod.read()), error: "apiKeyAction must be 'keep', 'replace' or 'clear'." };
+      // B-007: resolve the typed key command (keep/replace/clear). The
+      // resolution rules (privacy switch > explicit action > legacy
+      // inference) live in configKeyAction.js.
+      const parsedKey = parseKeyAction({ isWrapped, payload, cfg, apiKeyNoSave });
+      if (parsedKey.error) {
+        return { ok: false, config: _publicConfig(cfgMod.read()), error: parsedKey.error };
       }
-      const legacyKey = (typeof cfg.api_key === 'string') ? cfg.api_key.trim() : '';
-      let keyAction;
-      let keyValue = '';
-      if (apiKeyNoSave) {
-        keyAction = 'clear'; // privacy switch: nothing persisted
-      } else if (rawAction === 'replace') {
-        keyValue = (typeof payload.apiKeyValue === 'string') ? payload.apiKeyValue.trim() : '';
-        if (!keyValue) {
-          return { ok: false, config: _publicConfig(cfgMod.read()), error: "apiKeyAction 'replace' requires a non-empty apiKeyValue." };
-        }
-        keyAction = 'replace';
-      } else if (rawAction === 'clear') {
-        keyAction = 'clear';
-      } else if (rawAction === 'keep') {
-        keyAction = 'keep';
-      } else {
-        // Legacy inference: empty text never means delete.
-        keyAction = legacyKey ? 'replace' : 'keep';
-        keyValue = legacyKey;
-      }
+      const { keyAction, keyValue } = parsedKey;
       // The api_key never flows through the generic merge below — it is
       // applied explicitly per keyAction after the prev-read.
       if ('api_key' in cfg) { try { delete cfg.api_key; } catch (_) {} }
@@ -232,11 +210,32 @@ function register({ getMainWindow }) {
         }
       }
       const safe = sanitize(Object.assign({}, prev, cfg)); // KGO5-013: merge preserves absent fields
-      // B-007: apply the typed key command AFTER the merge so the
-      // renderer's cfg can never influence the stored secret implicitly.
-      if (keyAction === 'replace') safe.api_key = keyValue;
-      else if (keyAction === 'clear') safe.api_key = '';
-      else safe.api_key = (prev && typeof prev.api_key === 'string') ? prev.api_key : '';
+      // B-002 fix: apply the typed key command through the CredentialRepository
+      // (encrypted blob store) instead of writing plaintext api_key to config.txt.
+      // The repository stores the key as an immutable encrypted blob and persists
+      // only a credential_id reference in config.
+      let credentialResult = null;
+      if (keyAction === 'replace') {
+        try {
+          credentialResult = credentialRepo.replacePersisted(keyValue);
+        } catch (credErr) {
+          return { ok: false, config: _publicConfig(prev), error: 'Credential storage failed: ' + (credErr.message || credErr) };
+        }
+        safe.api_key = ''; // never persist plaintext
+      } else if (keyAction === 'clear') {
+        try { credentialResult = credentialRepo.clearPrimary(); } catch (_) {}
+        safe.api_key = '';
+      } else {
+        safe.api_key = ''; // B-002: never write plaintext key back to config
+      }
+      // B-002 (hhhhu2 audit): the repository owns the api_credential_id
+      // reference. `safe` was merged from `prev` BEFORE the repository
+      // write, so re-sync the authoritative reference here — otherwise the
+      // write below would clobber a freshly stored id (replace) or revive a
+      // cleared one (clear/keep).
+      safe.api_credential_id = (() => {
+        try { return cfgMod.read().api_credential_id || ''; } catch (_) { return ''; }
+      })();
       cfgMod.write(safe);
       if (isWrapped && typeof payload.apiKeyNoSave === 'boolean') updateSessionCredential(apiKeyNoSave, payload.sessionApiKey);
       // B-007: an EXPLICIT clear (not the privacy switch) also removes the

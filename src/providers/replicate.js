@@ -11,6 +11,58 @@ const HOST = 'https://api.replicate.com/v1';
 // Max time (ms) to poll a prediction before giving up.
 const MAX_WAIT_MS = 10 * 60 * 1000; // 10 minutes
 
+// H-005: per-request timeout so a stalled TCP/TLS/response cannot outlive
+// the advertised job deadline or cancellation expectation.
+const DEFAULT_FETCH_TIMEOUT_MS = 60000; // 60s per individual request
+
+// H-006: strict model identifier grammar. Replicate models are "owner/name"
+// or "owner/name:version". Each segment must be a safe URL path component.
+const MODEL_SEGMENT_RE = /^[a-zA-Z0-9][a-zA-Z0-9._-]{0,127}$/;
+function validateModel(model) {
+  if (!model || typeof model !== 'string') throw new Error('replicate: model identifier is required');
+  const versioned = model.includes(':');
+  const base = versioned ? model.slice(0, model.indexOf(':')) : model;
+  const version = versioned ? model.slice(model.indexOf(':') + 1) : null;
+  const parts = base.split('/');
+  if (parts.length !== 2 || !parts[0] || !parts[1]) {
+    throw new Error('replicate: model must be "owner/name" or "owner/name:version"');
+  }
+  for (const seg of parts) {
+    if (!MODEL_SEGMENT_RE.test(seg)) {
+      throw new Error('replicate: invalid model segment "' + seg + '"');
+    }
+  }
+  if (version !== null && !MODEL_SEGMENT_RE.test(version)) {
+    throw new Error('replicate: invalid model version "' + version + '"');
+  }
+  return { owner: parts[0], name: parts[1], version };
+}
+
+// H-005: combine caller signal with a per-request timeout.
+function _fetchSignal(signal, timeoutMs) {
+  const ms = timeoutMs || DEFAULT_FETCH_TIMEOUT_MS;
+  if (typeof AbortSignal.any === 'function' && typeof AbortSignal.timeout === 'function') {
+    const signals = [AbortSignal.timeout(ms)];
+    if (signal) signals.unshift(signal);
+    return AbortSignal.any(signals);
+  }
+  if (signal) return signal;
+  return typeof AbortSignal.timeout === 'function' ? AbortSignal.timeout(ms) : undefined;
+}
+
+// H-005: abortable delay — rejects immediately when the signal fires instead
+// of waiting for the full timeout duration.
+function abortableDelay(ms, signal) {
+  return new Promise((resolve, reject) => {
+    if (signal && signal.aborted) return reject(new Error('cancelled'));
+    const timer = setTimeout(resolve, ms);
+    if (signal) {
+      const onAbort = () => { clearTimeout(timer); reject(new Error('cancelled')); };
+      signal.addEventListener('abort', onAbort, { once: true });
+    }
+  });
+}
+
 function _ext(u) {
   const m = /\.(\w{2,4})(?:\?|#|$)/.exec(String(u || ''));
   return m ? m[1].toLowerCase() : 'bin';
@@ -19,9 +71,12 @@ function _ext(u) {
 // Core submit-poll loop.
 // model: "owner/name" (latest) or "owner/name:version". input: model-specific object.
 async function run({ apiKey, model, input, signal, onProgress }) {
-  const versioned = model.includes(':');
-  const url = versioned ? HOST + '/predictions' : HOST + '/models/' + model + '/predictions';
-  const body = versioned ? { version: model.split(':')[1], input } : { input };
+  // H-006: validate and encode model identifier before URL construction.
+  const parsed = validateModel(model);
+  const versioned = parsed.version !== null;
+  const modelPath = encodeURIComponent(parsed.owner) + '/' + encodeURIComponent(parsed.name);
+  const url = versioned ? HOST + '/predictions' : HOST + '/models/' + modelPath + '/predictions';
+  const body = versioned ? { version: parsed.version, input } : { input };
   const sub = await fetch(url, {
     method: 'POST',
     headers: {
@@ -30,7 +85,7 @@ async function run({ apiKey, model, input, signal, onProgress }) {
       Prefer: 'wait',
     },
     body: JSON.stringify(body),
-    signal,
+    signal: _fetchSignal(signal), // H-005: per-request timeout
   });
   if (!sub.ok) throw new Error('replicate submit HTTP ' + sub.status + ': ' + (await sub.text().catch(() => '')).slice(0, 400));
   let pred = await sub.json();
@@ -48,10 +103,10 @@ async function run({ apiKey, model, input, signal, onProgress }) {
     if (pollUrl.origin !== 'https://api.replicate.com') {
       throw new Error('replicate: poll URL origin mismatch (expected api.replicate.com, got ' + pollUrl.origin + ')');
     }
-    await new Promise((r) => setTimeout(r, 2000));
+    await abortableDelay(2000, signal); // H-005: abortable polling wait
     const g = await fetch(pred.urls.get, {
       headers: { Authorization: 'Bearer ' + apiKey },
-      signal,
+      signal: _fetchSignal(signal), // H-005: per-request timeout
     });
     if (!g.ok) throw new Error('replicate poll HTTP ' + g.status);
     pred = await g.json();
@@ -106,4 +161,5 @@ module.exports = {
   video: (a) => run(Object.assign({}, a, { input: Object.assign({ prompt: a.prompt }, a.params) })),
   speech: (a) => run(Object.assign({}, a, { input: Object.assign({ text: a.input }, a.params) })),
   run,
+  validateModel,
 };

@@ -73,9 +73,16 @@ async function downloadFile(url, destPath, opts = {}) {
   const config = { ...DEFAULTS, ...opts };
   const tmpPath = destPath + '.tmp-' + process.pid + '-' + Date.now().toString(36);
 
-  // Overall timeout
+  // H-011 (hhhhu2 audit): Use an AbortController so the overall timeout
+  // actually aborts the request/response/stream AND rejects the promise.
+  // Previously the timer only deleted the temp file while the download
+  // continued indefinitely and the promise never settled.
+  const ac = new AbortController();
+  let settled = false;
+
   const overallTimer = setTimeout(() => {
-    cleanup();
+    if (settled) return;
+    ac.abort();
   }, config.overallTimeoutMs);
   overallTimer.unref?.();
 
@@ -91,7 +98,8 @@ async function downloadFile(url, destPath, opts = {}) {
     validateDownloadUrl(url, { allowedOrigins: opts.allowedOrigins });
     await fsp_mkdir(path.dirname(destPath));
 
-    const result = await downloadWithRedirects(url, tmpPath, config, 0);
+    const result = await downloadWithRedirects(url, tmpPath, config, 0, ac.signal);
+    settled = true;
     clearTimeout(overallTimer);
 
     // Verify size
@@ -110,7 +118,11 @@ async function downloadFile(url, destPath, opts = {}) {
     fs.renameSync(tmpPath, destPath);
     return { ok: true, sha256: result.sha256, bytes: result.bytes };
   } catch (err) {
+    settled = true;
     cleanup();
+    if (ac.signal.aborted) {
+      return { ok: false, error: `Download timed out after ${config.overallTimeoutMs}ms.` };
+    }
     return { ok: false, error: String(err.message || err) };
   }
 }
@@ -123,10 +135,15 @@ async function downloadFile(url, destPath, opts = {}) {
  * @param {number} hops
  * @returns {Promise<{ sha256: string, bytes: number }>}
  */
-function downloadWithRedirects(url, tmpPath, config, hops) {
+function downloadWithRedirects(url, tmpPath, config, hops, signal) {
   return new Promise((resolve, reject) => {
     if (hops > config.maxRedirects) {
       reject(new Error(`Too many redirects (max ${config.maxRedirects}).`));
+      return;
+    }
+    // H-011: if already aborted, reject immediately.
+    if (signal && signal.aborted) {
+      reject(new Error('Download aborted.'));
       return;
     }
 
@@ -148,7 +165,7 @@ function downloadWithRedirects(url, tmpPath, config, hops) {
         const nextUrl = new URL(location, url).href;
         // Revalidate the redirect target
         try { validateDownloadUrl(nextUrl); } catch (e) { reject(e); return; }
-        downloadWithRedirects(nextUrl, tmpPath, config, hops + 1).then(resolve, reject);
+        downloadWithRedirects(nextUrl, tmpPath, config, hops + 1, signal).then(resolve, reject);
         return;
       }
 
@@ -171,24 +188,40 @@ function downloadWithRedirects(url, tmpPath, config, hops) {
       const out = fs.createWriteStream(tmpPath, { flags: 'wx', mode: 0o600 });
       let downloaded = 0;
       let idleTimer = null;
+      let rejected = false;
+
+      function fail(err) {
+        if (rejected) return;
+        rejected = true;
+        if (idleTimer) clearTimeout(idleTimer);
+        out.destroy();
+        res.destroy();
+        reject(err);
+      }
+
+      // H-011: abort signal destroys the response stream.
+      if (signal) {
+        const onAbort = () => fail(new Error('Download aborted (overall timeout).'));
+        if (signal.aborted) { fail(new Error('Download aborted.')); return; }
+        signal.addEventListener('abort', onAbort, { once: true });
+      }
 
       function resetIdle() {
         if (idleTimer) clearTimeout(idleTimer);
         idleTimer = setTimeout(() => {
-          out.destroy();
-          reject(new Error('Download stalled (idle timeout).'));
+          fail(new Error('Download stalled (idle timeout).'));
         }, config.idleTimeoutMs);
         idleTimer.unref?.();
       }
       resetIdle();
 
       res.on('data', (chunk) => {
+        if (rejected) return;
         downloaded += chunk.length;
         hash.update(chunk);
         resetIdle();
         if (downloaded > config.maxBytes) {
-          out.destroy();
-          reject(new Error(`Download exceeded ${config.maxBytes} bytes.`));
+          fail(new Error(`Download exceeded ${config.maxBytes} bytes.`));
           return;
         }
         if (config.onProgress && declared > 0) {
@@ -198,19 +231,14 @@ function downloadWithRedirects(url, tmpPath, config, hops) {
 
       res.pipe(out);
       out.on('finish', () => {
+        if (rejected) return;
         if (idleTimer) clearTimeout(idleTimer);
         out.close(() => {
           resolve({ sha256: hash.digest('hex'), bytes: downloaded });
         });
       });
-      out.on('error', (e) => {
-        if (idleTimer) clearTimeout(idleTimer);
-        reject(e);
-      });
-      res.on('error', (e) => {
-        if (idleTimer) clearTimeout(idleTimer);
-        reject(e);
-      });
+      out.on('error', (e) => fail(e));
+      res.on('error', (e) => fail(e));
     });
 
     req.on('timeout', () => {
@@ -218,6 +246,12 @@ function downloadWithRedirects(url, tmpPath, config, hops) {
       reject(new Error('Connection timed out.'));
     });
     req.on('error', reject);
+    // H-011: abort signal also destroys the request.
+    if (signal) {
+      const onAbort = () => { req.destroy(); reject(new Error('Download aborted (overall timeout).')); };
+      if (signal.aborted) { req.destroy(); reject(new Error('Download aborted.')); return; }
+      signal.addEventListener('abort', onAbort, { once: true });
+    }
   });
 }
 

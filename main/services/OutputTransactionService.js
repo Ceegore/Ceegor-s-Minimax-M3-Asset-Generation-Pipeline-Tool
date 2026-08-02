@@ -24,99 +24,15 @@ const path = require('path');
 const crypto = require('crypto');
 const { CODES, AppError } = require('../errors/AppError');
 const { isStrictDescendant } = require('./pathRelation');
+// Low-level filesystem primitives (atomic journal writes, link-safe path
+// checks, hashing, fsync) — split out for the lint size budget.
+const { writeJsonSync, isRegularFile, ancestorsAreRegular, hashFileSync, fsyncFile } = require('./transactionFileUtils');
 
 const SCHEMA_VERSION = 1;
 const VALID_STATES = Object.freeze([
   'PREPARING', 'PREPARED', 'INSTALLING', 'COMMITTED', 'CLEANED',
+  'ROLLBACK_INCOMPLETE', // M-012: cancel failed to fully roll back
 ]);
-
-/**
- * Atomically write and fsync a JSON file.
- * @param {string} filePath
- * @param {object} data
- */
-function writeJsonSync(filePath, data) {
-  const json = JSON.stringify(data, null, 2);
-  const tmp = filePath + '.tmp-' + crypto.randomUUID().slice(0, 8);
-  const fd = fs.openSync(tmp, 'w', 0o600);
-  try {
-    fs.writeSync(fd, json);
-    try { fs.fsyncSync(fd); } catch (_) { /* best-effort on Windows */ }
-  } finally {
-    fs.closeSync(fd);
-  }
-  fs.renameSync(tmp, filePath);
-  // fsync the containing directory where supported
-  try {
-    const dirFd = fs.openSync(path.dirname(filePath), 'r');
-    try { fs.fsyncSync(dirFd); } finally { fs.closeSync(dirFd); }
-  } catch (_) { /* Windows may not support directory fsync */ }
-}
-
-/**
- * Verify a path is a regular file (not a link/reparse point).
- * @param {string} filePath
- * @returns {boolean}
- */
-function isRegularFile(filePath) {
-  try {
-    const st = fs.lstatSync(filePath);
-    return st.isFile();
-  } catch (_) { return false; }
-}
-
-/**
- * Verify no ancestor in the chain is a symlink/reparse point.
- * @param {string} filePath
- * @param {string} stopAt - Ancestor at which to stop checking
- * @returns {boolean}
- */
-function ancestorsAreRegular(filePath, stopAt) {
-  let current = path.dirname(filePath);
-  const stop = path.resolve(stopAt);
-  while (current.length > stop.length) {
-    try {
-      const st = fs.lstatSync(current);
-      if (st.isSymbolicLink()) return false;
-    } catch (_) { return false; }
-    current = path.dirname(current);
-  }
-  return true;
-}
-
-/**
- * Compute SHA-256 of a file synchronously.
- * @param {string} filePath
- * @returns {string} hex digest
- */
-function hashFileSync(filePath) {
-  const hash = crypto.createHash('sha256');
-  const fd = fs.openSync(filePath, 'r');
-  try {
-    const buf = Buffer.alloc(64 * 1024);
-    let bytesRead;
-    while ((bytesRead = fs.readSync(fd, buf, 0, buf.length, null)) > 0) {
-      hash.update(buf.slice(0, bytesRead));
-    }
-  } finally {
-    fs.closeSync(fd);
-  }
-  return hash.digest('hex');
-}
-
-/**
- * Fsync a file by path (best-effort on Windows where EPERM is common).
- * @param {string} filePath
- */
-function fsyncFile(filePath) {
-  try {
-    const fd = fs.openSync(filePath, 'r');
-    try { fs.fsyncSync(fd); } finally { fs.closeSync(fd); }
-  } catch (e) {
-    // EPERM/EIO on Windows temp/network paths is non-fatal.
-    if (e.code !== 'EPERM' && e.code !== 'EIO' && e.code !== 'ENOTSUP') throw e;
-  }
-}
 
 class OutputTransactionService {
   /**
@@ -248,12 +164,19 @@ class OutputTransactionService {
     writeJsonSync(this.journalPath(transactionId), journal);
 
     // Step 8: Install each file
+    // M-011 (hhhhu2 audit): intent-before-action journaling. Mark the file
+    // as "installing" in the journal BEFORE the rename so a crash between
+    // rename and journal-write is recoverable. Recovery reconciles by
+    // checking both staged and final filesystem states.
     for (const file of journal.files) {
       // No-clobber: fail if destination exists
       if (fs.existsSync(file.finalPath)) {
         this._rollbackInstalled(journal);
         throw new AppError(CODES.OUTPUT_TRANSACTION_FAILED, `Destination already exists: ${path.basename(file.finalPath)}`);
       }
+      // Journal intent BEFORE the destructive rename.
+      file.installing = true;
+      writeJsonSync(this.journalPath(transactionId), journal);
       try {
         fs.renameSync(file.stagedPath, file.finalPath);
       } catch (renameErr) {
@@ -262,6 +185,8 @@ class OutputTransactionService {
           fs.copyFileSync(file.stagedPath, file.finalPath);
           fs.unlinkSync(file.stagedPath);
         } else {
+          file.installing = false;
+          writeJsonSync(this.journalPath(transactionId), journal);
           this._rollbackInstalled(journal);
           throw new AppError(CODES.OUTPUT_TRANSACTION_FAILED, `Rename failed: ${renameErr.message}`, { cause: renameErr });
         }
@@ -271,6 +196,7 @@ class OutputTransactionService {
         const dirFd = fs.openSync(path.dirname(file.finalPath), 'r');
         try { fs.fsyncSync(dirFd); } finally { fs.closeSync(dirFd); }
       } catch (_) { /* Windows */ }
+      file.installing = false;
       file.installed = true;
       writeJsonSync(this.journalPath(transactionId), journal);
     }
@@ -305,6 +231,8 @@ class OutputTransactionService {
 
   /**
    * Cancel a transaction before commit.
+   * M-012 (hhhhu2 audit): preserve the journal and stage directory when
+   * rollback is incomplete, so manual-review evidence is not lost.
    * @param {string} transactionId
    */
   cancel(transactionId) {
@@ -312,7 +240,14 @@ class OutputTransactionService {
     try { journal = this._readJournal(transactionId); } catch (_) { return; }
     if (journal.state === 'COMMITTED' || journal.state === 'CLEANED') return;
     if (journal.state === 'INSTALLING') {
-      this._rollbackInstalled(journal);
+      const rollbackComplete = this._rollbackInstalled(journal);
+      if (!rollbackComplete) {
+        // M-012: rollback was incomplete — preserve evidence for manual review.
+        // Mark the journal so recovery knows this needs attention.
+        journal.state = 'ROLLBACK_INCOMPLETE';
+        try { writeJsonSync(this.journalPath(transactionId), journal); } catch (_) {}
+        return;
+      }
     }
     // Remove stage directory
     try { fs.rmSync(journal.stageDir, { recursive: true, force: true }); } catch (_) {}
@@ -324,28 +259,56 @@ class OutputTransactionService {
    * Rollback files that have been installed (marked installed:true in journal).
    * Only removes a final path that exactly matches the journal, is under the
    * canonical root, is a regular file, and has the expected size and hash.
+   * M-011 (hhhhu2 audit): also reconciles files marked `installing:true`
+   * (intent journaled but crash before completion) by checking filesystem state.
+   * M-012 (hhhhu2 audit): returns false if any file could not be rolled back.
    * @param {object} journal
+   * @returns {boolean} true if all installed files were successfully rolled back
    */
   _rollbackInstalled(journal) {
+    let complete = true;
     for (const file of journal.files) {
+      // M-011: reconcile files that were mid-install (intent journaled,
+      // crash before installed=true). Check if the final file exists.
+      if (file.installing && !file.installed) {
+        if (isRegularFile(file.finalPath)) {
+          // The rename completed but the journal wasn't updated.
+          // Verify and remove it.
+          try {
+            if (!isStrictDescendant(journal.canonicalRoot, file.finalPath)) { complete = false; continue; }
+            const st = fs.statSync(file.finalPath);
+            if (st.size !== file.bytes) { complete = false; continue; }
+            const actualHash = hashFileSync(file.finalPath);
+            if (actualHash !== file.sha256) { complete = false; continue; }
+            fs.unlinkSync(file.finalPath);
+            file.installing = false;
+          } catch (_) { complete = false; }
+        } else {
+          // Rename didn't complete — staged file should still exist.
+          file.installing = false;
+        }
+        continue;
+      }
       if (!file.installed) continue;
       try {
         // Verify the path is still under canonical root
-        if (!isStrictDescendant(journal.canonicalRoot, file.finalPath)) continue;
+        if (!isStrictDescendant(journal.canonicalRoot, file.finalPath)) { complete = false; continue; }
         // Must be a regular file (not a link)
-        if (!isRegularFile(file.finalPath)) continue;
+        if (!isRegularFile(file.finalPath)) { complete = false; continue; }
         // Must match expected size and hash
         const st = fs.statSync(file.finalPath);
-        if (st.size !== file.bytes) continue;
+        if (st.size !== file.bytes) { complete = false; continue; }
         const actualHash = hashFileSync(file.finalPath);
-        if (actualHash !== file.sha256) continue;
+        if (actualHash !== file.sha256) { complete = false; continue; }
         // Safe to remove
         fs.unlinkSync(file.finalPath);
         file.installed = false;
       } catch (_) {
         // If any check fails, leave the file untouched — MANUAL_REVIEW_REQUIRED
+        complete = false;
       }
     }
+    return complete;
   }
 
   /**
@@ -399,9 +362,24 @@ class OutputTransactionService {
         break;
 
       case 'INSTALLING': {
-        // Some files may have been installed — rollback those, then clean stage
+        // Some files may have been installed — rollback those, then clean stage.
+        // M-011 (hhhhu2 audit): also reconcile files with installing:true.
         let safe = true;
         for (const file of (journal.files || [])) {
+          // Reconcile mid-install files (intent journaled, crash before completion)
+          if (file.installing && !file.installed) {
+            if (isRegularFile(file.finalPath)) {
+              try {
+                if (!isStrictDescendant(journal.canonicalRoot, file.finalPath)) { safe = false; break; }
+                const st2 = fs.statSync(file.finalPath);
+                if (st2.size !== file.bytes) { safe = false; break; }
+                const h2 = hashFileSync(file.finalPath);
+                if (h2 !== file.sha256) { safe = false; break; }
+                fs.unlinkSync(file.finalPath);
+              } catch (_) { safe = false; break; }
+            }
+            continue;
+          }
           if (!file.installed) continue;
           try {
             if (!isStrictDescendant(journal.canonicalRoot, file.finalPath)) { safe = false; break; }
@@ -418,6 +396,7 @@ class OutputTransactionService {
           try { fs.unlinkSync(journalFile); } catch (_) {}
           result.recovered++;
         } else {
+          // M-012: preserve evidence for manual review.
           result.manualReview++;
         }
         break;
@@ -434,6 +413,12 @@ class OutputTransactionService {
         // Should not exist — remove stale journal
         try { fs.unlinkSync(journalFile); } catch (_) {}
         result.recovered++;
+        break;
+
+      // M-012 (hhhhu2 audit): ROLLBACK_INCOMPLETE means a previous cancel
+      // could not fully roll back. Preserve for manual review.
+      case 'ROLLBACK_INCOMPLETE':
+        result.manualReview++;
         break;
 
       default:

@@ -26,6 +26,54 @@ function _fetchSignal(signal, timeoutMs) {
   return typeof AbortSignal.timeout === 'function' ? AbortSignal.timeout(ms) : undefined;
 }
 
+// H-004 (hhhhu2 audit): bounded response body reading. A malicious or
+// malfunctioning endpoint must not be able to exhaust main-process memory.
+const MAX_JSON_BYTES = 4 * 1024 * 1024;   // 4 MB for JSON responses
+const MAX_ERROR_BYTES = 16 * 1024;         // 16 KB for error bodies
+const MAX_BINARY_BYTES = 100 * 1024 * 1024; // 100 MB for binary (speech)
+
+/**
+ * Read a response body with a hard byte cap. Checks Content-Length first,
+ * then streams with a counter so even chunked/lying responses are bounded.
+ * @param {Response} res
+ * @param {number} maxBytes
+ * @returns {Promise<Buffer>}
+ */
+async function _readBounded(res, maxBytes) {
+  const declared = Number(res.headers.get('content-length') || 0);
+  if (declared > maxBytes) {
+    throw new Error('response too large (' + declared + ' bytes, cap ' + maxBytes + ')');
+  }
+  const reader = res.body.getReader();
+  const chunks = [];
+  let total = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    total += value.byteLength;
+    if (total > maxBytes) {
+      reader.cancel().catch(() => {});
+      throw new Error('response exceeded ' + maxBytes + ' byte cap');
+    }
+    chunks.push(value);
+  }
+  return Buffer.concat(chunks.map((c) => Buffer.from(c)), total);
+}
+
+/** Read and parse JSON with a size cap. */
+async function _jsonBounded(res, maxBytes) {
+  const buf = await _readBounded(res, maxBytes || MAX_JSON_BYTES);
+  return JSON.parse(buf.toString('utf8'));
+}
+
+/** Read error text with a small cap. */
+async function _errorText(res) {
+  try {
+    const buf = await _readBounded(res, MAX_ERROR_BYTES);
+    return buf.toString('utf8').slice(0, 400);
+  } catch (_) { return ''; }
+}
+
 // Max time (ms) to poll an async video job before giving up.
 const VIDEO_MAX_WAIT_MS = 10 * 60 * 1000; // 10 minutes
 
@@ -37,7 +85,7 @@ async function listModels({ baseUrl, apiKey, signal }) {
     signal: _fetchSignal(signal, 15000),
   });
   if (!res.ok) throw new Error('models HTTP ' + res.status);
-  const j = await res.json();
+  const j = await _jsonBounded(res); // H-004: bounded
   return (j.data || []).map((m) => m.id).filter(Boolean);
 }
 
@@ -49,8 +97,8 @@ async function images({ baseUrl, apiKey, model, prompt, params, signal }) {
     body: JSON.stringify(body),
     signal: _fetchSignal(signal),
   });
-  if (!res.ok) throw new Error('images HTTP ' + res.status + ': ' + (await res.text().catch(() => '')).slice(0, 400));
-  const j = await res.json();
+  if (!res.ok) throw new Error('images HTTP ' + res.status + ': ' + await _errorText(res));
+  const j = await _jsonBounded(res); // H-004: bounded
   return (j.data || []).map((d) => {
     // FUNC-023: detect format from bytes, not hardcoded 'png'.
     let ext = 'png';
@@ -87,8 +135,8 @@ async function speech({ baseUrl, apiKey, model, input, voice, format, params, si
     body: JSON.stringify(body),
     signal: _fetchSignal(signal),
   });
-  if (!res.ok) throw new Error('speech HTTP ' + res.status + ': ' + (await res.text().catch(() => '')).slice(0, 400));
-  const buf = Buffer.from(await res.arrayBuffer());
+  if (!res.ok) throw new Error('speech HTTP ' + res.status + ': ' + await _errorText(res));
+  const buf = await _readBounded(res, MAX_BINARY_BYTES); // H-004: bounded
   return [{ b64: buf.toString('base64'), url: null, ext: effectiveFmt, contentType: 'audio/' + effectiveFmt }];
 }
 
@@ -104,8 +152,8 @@ async function video({ baseUrl, apiKey, model, prompt, params, signal, onProgres
     body: JSON.stringify(Object.assign({ model, prompt }, params || {})),
     signal: _fetchSignal(signal, FETCH_TIMEOUT_MS),
   });
-  if (!sub.ok) throw new Error('video submit HTTP ' + sub.status + ': ' + (await sub.text().catch(() => '')).slice(0, 400));
-  const j = await sub.json();
+  if (!sub.ok) throw new Error('video submit HTTP ' + sub.status + ': ' + await _errorText(sub));
+  const j = await _jsonBounded(sub); // H-004: bounded
   const id = j.id || j.job_id || (j.data && j.data.id);
   if (!id) throw new Error('video submit: no job id in response');
 
@@ -137,7 +185,7 @@ async function video({ baseUrl, apiKey, model, prompt, params, signal, onProgres
       signal: _fetchSignal(signal, FETCH_TIMEOUT_MS),
     });
     if (!st.ok) throw new Error('video poll HTTP ' + st.status);
-    const s = await st.json();
+    const s = await _jsonBounded(st); // H-004: bounded
     if (onProgress) onProgress({ stage: s.status || 'running', pct: s.progress != null ? s.progress : null });
 
     if (s.status === 'completed' || s.status === 'succeeded') {

@@ -18,7 +18,13 @@ beforeEach(() => {
   fetchResponses = [];
   globalThis.fetch = async (url, opts) => {
     fetchCalls.push({ url, opts });
-    const resp = fetchResponses.shift() || { ok: true, json: async () => ({}), arrayBuffer: async () => new ArrayBuffer(0) };
+    const resp = fetchResponses.shift() || {
+      ok: true,
+      headers: { get: () => '0' },
+      body: { getReader: () => ({ read: async () => ({ done: true, value: undefined }), cancel: async () => {} }) },
+      json: async () => ({}),
+      arrayBuffer: async () => new ArrayBuffer(0),
+    };
     return resp;
   };
 });
@@ -28,7 +34,16 @@ afterEach(() => {
 });
 
 function jsonResponse(data, ok = true) {
-  return { ok, status: ok ? 200 : 500, json: async () => data, text: async () => JSON.stringify(data), arrayBuffer: async () => new ArrayBuffer(0) };
+  const buf = Buffer.from(JSON.stringify(data), 'utf8');
+  let sent = false;
+  return {
+    ok, status: ok ? 200 : 500,
+    headers: { get: (k) => k === 'content-length' ? String(buf.length) : null },
+    body: { getReader: () => ({ read: async () => { if (sent) return { done: true, value: undefined }; sent = true; return { done: false, value: new Uint8Array(buf) }; }, cancel: async () => {} }) },
+    json: async () => data,
+    text: async () => JSON.stringify(data),
+    arrayBuffer: async () => buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength),
+  };
 }
 
 // ============================================================================
@@ -68,6 +83,8 @@ test('openaiCompat.speech sends POST /audio/speech and returns base64 audio', as
   const audioBytes = Buffer.from('fake-audio');
   fetchResponses.push({
     ok: true, status: 200,
+    headers: { get: (k) => k === 'content-length' ? String(audioBytes.length) : null },
+    body: { getReader: () => { let sent = false; return { read: async () => { if (sent) return { done: true }; sent = true; return { done: false, value: new Uint8Array(audioBytes) }; }, cancel: async () => {} }; } },
     arrayBuffer: async () => audioBytes.buffer.slice(audioBytes.byteOffset, audioBytes.byteOffset + audioBytes.byteLength),
     text: async () => '',
   });
@@ -84,7 +101,7 @@ test('openaiCompat.speech sends POST /audio/speech and returns base64 audio', as
 });
 
 test('openaiCompat.images throws on HTTP error', async () => {
-  fetchResponses.push({ ok: false, status: 429, text: async () => 'rate limited', json: async () => ({}) });
+  fetchResponses.push({ ok: false, status: 429, headers: { get: () => null }, body: { getReader: () => ({ read: async () => ({ done: true }), cancel: async () => {} }) }, text: async () => 'rate limited', json: async () => ({}) });
   await assert.rejects(
     () => openaiCompat.images({ baseUrl: 'https://x.com/v1', apiKey: 'k', model: 'm', prompt: 'p' }),
     /images HTTP 429/
@@ -209,7 +226,7 @@ test('replicate.run throws on poll HTTP error', async () => {
     status: 'processing',
     urls: { get: 'https://api.replicate.com/v1/predictions/err' },
   }));
-  fetchResponses.push({ ok: false, status: 500, json: async () => ({}), text: async () => 'internal error' });
+  fetchResponses.push({ ok: false, status: 500, headers: { get: () => null }, body: { getReader: () => ({ read: async () => ({ done: true }), cancel: async () => {} }) }, json: async () => ({}), text: async () => 'internal error' });
   await assert.rejects(
     () => replicate.run({ apiKey: 'k', model: 'x/y', input: {} }),
     /replicate poll HTTP 500/
@@ -224,7 +241,7 @@ test('openaiCompat.video throws on poll HTTP error', async () => {
   // Submit succeeds
   fetchResponses.push(jsonResponse({ id: 'vid-1' }));
   // Poll returns 500
-  fetchResponses.push({ ok: false, status: 500, json: async () => ({}), text: async () => 'err' });
+  fetchResponses.push({ ok: false, status: 500, headers: { get: () => null }, body: { getReader: () => ({ read: async () => ({ done: true }), cancel: async () => {} }) }, json: async () => ({}), text: async () => 'err' });
   await assert.rejects(
     () => openaiCompat.video({ baseUrl: 'https://api.test.com/v1', apiKey: 'k', model: 'm', prompt: 'p' }),
     /video poll HTTP 500/
@@ -259,7 +276,7 @@ test('openaiCompat.video success: submit → poll → completed with URL', async
 });
 
 test('openaiCompat.video throws on submit HTTP error', async () => {
-  fetchResponses.push({ ok: false, status: 403, text: async () => 'forbidden', json: async () => ({}) });
+  fetchResponses.push({ ok: false, status: 403, headers: { get: () => null }, body: { getReader: () => ({ read: async () => ({ done: true }), cancel: async () => {} }) }, text: async () => 'forbidden', json: async () => ({}) });
   await assert.rejects(
     () => openaiCompat.video({ baseUrl: 'https://x.com/v1', apiKey: 'k', model: 'm', prompt: 'p' }),
     /video submit HTTP 403/
@@ -276,7 +293,7 @@ test('openaiCompat.video throws on failed status', async () => {
 });
 
 test('openaiCompat.speech throws on HTTP error', async () => {
-  fetchResponses.push({ ok: false, status: 401, text: async () => 'unauthorized', json: async () => ({}) });
+  fetchResponses.push({ ok: false, status: 401, headers: { get: () => null }, body: { getReader: () => ({ read: async () => ({ done: true }), cancel: async () => {} }) }, text: async () => 'unauthorized', json: async () => ({}) });
   await assert.rejects(
     () => openaiCompat.speech({ baseUrl: 'https://x.com/v1', apiKey: 'bad', model: 'tts-1', input: 'hi' }),
     /speech HTTP 401/
@@ -284,7 +301,7 @@ test('openaiCompat.speech throws on HTTP error', async () => {
 });
 
 test('openaiCompat.listModels throws on HTTP error', async () => {
-  fetchResponses.push({ ok: false, status: 500, text: async () => 'err', json: async () => ({}) });
+  fetchResponses.push({ ok: false, status: 500, headers: { get: () => null }, body: { getReader: () => ({ read: async () => ({ done: true }), cancel: async () => {} }) }, text: async () => 'err', json: async () => ({}) });
   await assert.rejects(
     () => openaiCompat.listModels({ baseUrl: 'https://x.com/v1', apiKey: 'k' }),
     /models HTTP 500/

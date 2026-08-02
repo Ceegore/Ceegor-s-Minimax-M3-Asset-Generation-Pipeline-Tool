@@ -40,38 +40,75 @@ function main() {
   console.log(`  package.json version: ${pkgVersion}`);
 
   // 2. Read package-lock.json version
+  // M-018 (hhhhu2 audit): the lockfile is REQUIRED for a release build.
   const lockPath = path.join(ROOT, 'package-lock.json');
-  if (fs.existsSync(lockPath)) {
-    const lock = JSON.parse(fs.readFileSync(lockPath, 'utf8'));
-    const lockVersion = lock.version;
-    if (lockVersion !== pkgVersion) {
-      fail(`package-lock.json version (${lockVersion}) does not match package.json (${pkgVersion}). Run npm install to sync.`);
-    }
-    console.log(`  package-lock.json version: ${lockVersion} (matches)`);
+  if (!fs.existsSync(lockPath)) {
+    fail('package-lock.json is missing. Run npm install to generate it before releasing.');
   }
+  const lock = JSON.parse(fs.readFileSync(lockPath, 'utf8'));
+  const lockVersion = lock.version;
+  if (lockVersion !== pkgVersion) {
+    fail(`package-lock.json version (${lockVersion}) does not match package.json (${pkgVersion}). Run npm install to sync.`);
+  }
+  console.log(`  package-lock.json version: ${lockVersion} (matches)`);
 
   // 3. Check Git HEAD is a tag or matches expected tag format
   const headCommit = git(['rev-parse', 'HEAD']);
   console.log(`  HEAD commit: ${headCommit}`);
 
   // Check if HEAD has a tag
+  // M-018 (hhhhu2 audit): on a tag release, require EXACTLY ONE tag
+  // matching v${package.version}. Multiple tags or no tag is a failure
+  // unless the GITHUB_REF environment variable indicates a non-tag build.
   let tag = '';
+  let allTags = [];
   try {
-    tag = execFileSync('git', ['tag', '--points-at', 'HEAD'], {
+    const tagOutput = execFileSync('git', ['tag', '--points-at', 'HEAD'], {
       cwd: ROOT, encoding: 'utf8', windowsHide: true,
-    }).trim().split('\n')[0];
+    }).trim();
+    allTags = tagOutput ? tagOutput.split('\n').filter(Boolean) : [];
   } catch (_) {}
 
-  if (tag) {
-    console.log(`  Tag at HEAD: ${tag}`);
-    // Tag should match version (v1.0.3 -> 1.0.3)
+  const isTagRelease = process.env.GITHUB_REF
+    ? process.env.GITHUB_REF.startsWith('refs/tags/')
+    : allTags.length > 0;
+
+  if (isTagRelease) {
+    // Strict mode: exactly one tag, matching v<version>
+    const expectedTag = `v${pkgVersion}`;
+    if (allTags.length === 0) {
+      fail('This is a tag release but no tag points at HEAD.');
+    }
+    if (allTags.length > 1) {
+      fail(`Multiple tags point at HEAD (${allTags.join(', ')}). A release commit must have exactly one tag.`);
+    }
+    tag = allTags[0];
+    if (tag !== expectedTag) {
+      fail(`Tag "${tag}" does not match the expected tag "${expectedTag}" for version ${pkgVersion}.`);
+    }
+    console.log(`  Tag at HEAD: ${tag} (exactly one, matches version)`);
+    // M-018: compare against the triggering GitHub ref and SHA if available.
+    if (process.env.GITHUB_REF) {
+      const refTag = process.env.GITHUB_REF.replace('refs/tags/', '');
+      if (refTag !== tag) {
+        fail(`GitHub ref tag "${refTag}" does not match the local tag "${tag}".`);
+      }
+    }
+    if (process.env.GITHUB_SHA) {
+      if (process.env.GITHUB_SHA !== headCommit) {
+        fail(`GitHub SHA (${process.env.GITHUB_SHA}) does not match local HEAD (${headCommit}).`);
+      }
+    }
+  } else if (allTags.length > 0) {
+    // Non-release build but tags exist — use the first for build-info.
+    tag = allTags[0];
     const tagVersion = tag.replace(/^v/, '');
     if (tagVersion !== pkgVersion) {
       fail(`Tag "${tag}" (version ${tagVersion}) does not match package.json version (${pkgVersion}).`);
     }
-    console.log(`  Tag version matches package.json: ${tagVersion}`);
+    console.log(`  Tag at HEAD: ${tag} (pre-release build)`);
   } else {
-    console.log('  No tag at HEAD (allowed for pre-release builds).');
+    console.log('  No tag at HEAD (development build — not for release).');
   }
 
   // 4. Check working tree is clean
