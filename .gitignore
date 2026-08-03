@@ -77,3 +77,9 @@ _verify_*.js
 commit_msg_*.txt
 settings.json
 test_out/
+
+# verification scratch leftovers (probe fixtures + run logs)
+scratch_verify/_tmp*/
+scratch_verify/_*.log
+scratch_verify/_*.txt
+test-run.txt
