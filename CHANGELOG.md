@@ -2,6 +2,16 @@
 
 Notable user-facing changes are recorded here.
 
+## 1.0.4 - 2026-08-03
+
+### Fixed
+
+- Release-gate workflow YAML parse error: an unquoted ": " in a step name made GitHub reject every run of the workflow with no diagnostics (this invalidated the v1.0.3 tag run). The step name is now quoted.
+
+### Added
+
+- Workflow contract test now parses every workflow file as YAML and rejects unquoted names containing ": ", so a workflow that GitHub cannot parse can never reach a tag again.
+
 ## 1.0.3 - 2026-08-03
 
 ### Added

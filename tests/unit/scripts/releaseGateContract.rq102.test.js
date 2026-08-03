@@ -28,6 +28,14 @@ const wfPath = path.join(ROOT, '.github', 'workflows', 'release-gate.yml');
 const wf = fs.readFileSync(wfPath, 'utf8');
 const pkg = JSON.parse(fs.readFileSync(path.join(ROOT, 'package.json'), 'utf8'));
 
+// js-yaml arrives transitively via electron-builder. It is required here on
+// purpose: the v1.0.3 tag once failed on GitHub with ZERO diagnostics
+// because an unquoted ": " in a step name made the workflow unparseable.
+// If the dependency ever disappears, this test must fail loudly instead of
+// silently skipping the parse check.
+let yaml = null;
+try { yaml = require('js-yaml'); } catch (_) { yaml = null; }
+
 // Very small structural slice helper: returns the text of one top-level job
 // block (from its key until the next same-or-higher-indented key).
 function jobBlock(jobId) {
@@ -116,5 +124,24 @@ test('RQ-004: every npm script the workflow invokes actually exists', () => {
   assert.ok(invoked.length >= 10, 'sanity: the workflow must invoke npm scripts');
   for (const script of new Set(invoked)) {
     assert.ok(pkg.scripts && pkg.scripts[script], `workflow invokes missing npm script: ${script}`);
+  }
+});
+
+test('RQ-004: every workflow file parses as valid YAML with a job graph', () => {
+  assert.ok(yaml, 'js-yaml must be resolvable (transitive via electron-builder) to validate workflow syntax');
+  const dir = path.join(ROOT, '.github', 'workflows');
+  const files = fs.readdirSync(dir).filter((f) => /\.ya?ml$/.test(f));
+  assert.ok(files.length > 0, 'sanity: workflow files must exist');
+  for (const f of files) {
+    let doc = null;
+    try { doc = yaml.load(fs.readFileSync(path.join(dir, f), 'utf8')); }
+    catch (e) { assert.fail(`workflow ${f} is not parseable YAML — GitHub will reject every run with no diagnostics: ${e.message}`); }
+    assert.ok(doc && typeof doc === 'object', `workflow ${f} must be a mapping`);
+    assert.ok(doc.jobs && Object.keys(doc.jobs).length > 0, `workflow ${f} must define at least one job`);
+    // An unquoted ": " inside a plain step/job name is the exact shape
+    // that broke the v1.0.3 release run; flag it directly.
+    const src = fs.readFileSync(path.join(dir, f), 'utf8');
+    const bad = src.split(/\r?\n/).filter((l) => /^\s*(?:-\s*)?name:\s+[^"'\s][^"']*:\s/.test(l));
+    assert.equal(bad.length, 0, `workflow ${f} has unquoted names containing \": \": ${bad.join(' | ')}`);
   }
 });

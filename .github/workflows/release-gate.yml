@@ -347,7 +347,7 @@ jobs:
         if: env.MINISIGN_KEY_PATH != ''
         run: npm run sign:release
 
-      - name: Verify release (strict: archive, authenticode, manifest, provenance, SBOM)
+      - name: "Verify release (strict: archive, authenticode, manifest, provenance, SBOM)"
         if: env.IS_TAG_RELEASE == 'true'
         run: npm run verify:release
 
