@@ -72,15 +72,24 @@ No archive program or administrator access is needed. Allow roughly 9 GB of free
 
 The tool needs an internet connection when it sends generation requests to MiniMax or another cloud provider. All post-processing runs with the included local components.
 
-**If you run into problems with Windows Security and the tool installer, just unpack the .zip and start the .exe. If anything in the tool does not work, make sure the output folder is set to a directory you have full access to. Due to Windows, the automatically picked output folder sometimes leads to issues.**
+**If anything in the tool does not work, make sure the output folder is set to a directory you have full access to. Due to Windows, the automatically picked output folder sometimes leads to issues.**
 
 ### Portable option
 
 Experienced users can instead extract every archive part into the same folder with any archiver — the parts merge into one `MiniMaxAssetTool-<version>-x64` folder — and run `MiniMaxAssetTool.exe` directly from that folder. Keep the entire folder together; the EXE needs the `resources` folder beside it.
 
-### Windows security message
+### Verifying release authenticity
 
-The current release is not code-signed, so Windows may identify it as an unknown publisher or show **Windows protected your PC**. Download it only from this repository and compare the files with the published `.sha256` manifest. If the checksum matches, choose **More info → Run anyway**. Do not disable Microsoft Defender or add an antivirus exclusion. A managed work or school computer may require approval from its administrator.
+Releases are **code-signed**: every executable shipped in the release carries an Authenticode signature, and the `.sha256` manifest has a detached **Minisign** signature (`.sha256.minisig`) attached to it. The installer verifies the `.sha256` manifest of every download before it extracts anything.
+
+To verify a release yourself:
+
+1. Download the release only from this repository's [Releases](../../releases) page — never from mirrors or third-party sites.
+2. Check the Authenticode signature: right-click `MiniMaxAssetTool.exe` → **Properties → Digital Signatures**; a valid signature from the publisher must be listed.
+3. Compare every downloaded file against the published `.sha256` manifest (for example `Get-FileHash -Algorithm SHA256 <file>` in PowerShell).
+4. Optionally verify the manifest signature with [Minisign](https://jedisct1.github.io/minisign/): `minisign -Vm MiniMaxAssetTool-<version>-x64.sha256 -P <published public key>`.
+
+Windows SmartScreen may still show **Windows protected your PC** for a newly signed release until enough installations build reputation. If it appears, confirm the digital signature and checksums as above first, then choose **More info → Run anyway**. Never disable Microsoft Defender or add an antivirus exclusion, and never run a release whose signature or checksums do not match. A managed work or school computer may require approval from its administrator.
 
 ## Develop from source
 

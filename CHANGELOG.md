@@ -2,6 +2,23 @@
 
 Notable user-facing changes are recorded here.
 
+## 1.0.3 - 2026-08-03
+
+### Added
+
+- Release gate workflow: every mandatory gate is now an explicit job — qualification (lint, unit, coverage gate, contract, IPC coverage), packaged E2E + smoke, flakiness qualification (10× full suite), directed mutation testing, build/sign/verify, and clean-VM acceptance — with publication depending on all of them.
+- Flakiness qualification runner (`test:flaky`) with evidence report.
+- Directed mutation-testing gate (`test:mutation`) for the credential/security modules, with evidence report.
+- Regression suites pinning the credential keep-save, corrupt-key reporting, typed save outcomes, and the release-gate job inventory.
+
+### Fixed
+
+- Provider settings save with "keep existing key" no longer drops the stored credential reference (the encrypted key blob was orphaned).
+- A corrupt or unreadable stored provider key now reports `hasKey=false` with actionable repair guidance instead of claiming a usable key; generation and model listing fail fast before spending money.
+- Provider settings save now returns typed `committed`/`partial`/`failed` outcomes; partial key failures are surfaced as errors and the dialog stays open for repair instead of showing false success.
+- Signed release workflow no longer writes signing material into the repository worktree (which dirtied build provenance); the clean tree and exact commit SHA are re-asserted before the build and provenance is verified afterwards.
+- Release documentation now describes the signed-release verification path (Authenticode + Minisign + checksums) instead of the outdated unsigned/checksum-only guidance.
+
 ## 1.0.2 - 2026-07-30
 
 ### Added

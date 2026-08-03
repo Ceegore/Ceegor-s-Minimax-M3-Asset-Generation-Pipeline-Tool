@@ -1,6 +1,6 @@
 {
   "name": "ceegor-minimax-m3-asset-generation-pipeline-tool",
-  "version": "1.0.2",
+  "version": "1.0.3",
   "description": "Windows batch asset production for MiniMax with local image processing, organized exports, and pipeline reports.",
   "main": "main.js",
   "scripts": {
@@ -19,6 +19,8 @@
     "test:coverage": "node --test --test-concurrency=6 --experimental-test-coverage \"tests/unit/**/*.test.js\"",
     "test:coverage:gate": "node scripts/check-unit-coverage.js",
     "test:ipc-coverage": "node scripts/e2e/ipc-coverage.js --threshold=97",
+    "test:mutation": "node scripts/mutation-test.js",
+    "test:flaky": "node scripts/flakiness-run.js",
     "test:packaged": "node scripts/e2e/packaged-boot.js",
     "test:installer": "node scripts/test-release-installer.js",
     "test:visual": "node scripts/e2e/launch.js",

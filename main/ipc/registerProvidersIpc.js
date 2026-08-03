@@ -63,6 +63,21 @@ function writeProbe(dir) {
 // providers:generate handler below); they were removed to keep this module
 // within the 500-line hard limit.
 
+// RQ-006 fix: a provider whose persisted credential blob is missing or
+// unreadable must fail FAST with an actionable repair message instead of
+// reaching the adapter with no usable key. Returns an error string when
+// the stored key is corrupt, else null.
+function corruptKeyError(providerId) {
+  const repo = providersStore._getCredentialRepo();
+  if (!repo || typeof repo.getPublic !== 'function') return null;
+  let pub = null;
+  try { pub = (repo.getPublic() || []).find((x) => x.id === providerId); } catch (_) { return null; }
+  if (pub && pub.credentialState === 'corrupt') {
+    return `Provider "${providerId}": the stored API key is corrupt or unreadable. Open Provider Settings and re-enter the key to repair it.`;
+  }
+  return null;
+}
+
 function register({ getMainWindow }) {
   // ---- Config persistence ----
   // SEC-002: `providers:get` REMOVED. The raw provider config (including
@@ -188,6 +203,11 @@ function register({ getMainWindow }) {
           delete p.keyAction;
           delete p.apiKey;      // raw keys never reach the metadata store
           delete p._sessionKey;
+          // RQ-007 hardening: DTO status fields round-tripped from
+          // providers:getPublic must never be persisted to providers.json.
+          delete p.hasKey;
+          delete p.credentialState;
+          delete p.apiKeyLast4;
         }
       }
       const keyWarnings = [];
@@ -199,9 +219,9 @@ function register({ getMainWindow }) {
             else if (op.action === 'session') credRepo.useSessionOnly(op.id, op.value);
             else if (op.action === 'clear') credRepo.clear(op.id);
           } catch (opErr) {
-            // Metadata is committed; report the key failure as a warning so
-            // the renderer does not retry the whole save (which would
-            // re-write metadata needlessly).
+            // Metadata is committed; report the key failure via the typed
+            // outcome below so the renderer can surface it and stay open
+            // for repair (RQ-007), without retrying the whole save.
             keyWarnings.push(`Provider "${op.id}": key ${op.action} failed (${(opErr && opErr.message) || opErr})`);
           }
         }
@@ -215,8 +235,15 @@ function register({ getMainWindow }) {
         }
         providersStore.write(data);
       }
-      if (keyWarnings.length) return { ok: true, warnings: keyWarnings, error: keyWarnings.join('; ') };
-      return { ok: true };
+      // RQ-007 fix: TYPED outcome (committed/partial/failed). The old
+      // ok=true+warnings shape let the renderer show false success after a
+      // partial credential update. ok stays true (metadata IS saved) but
+      // the renderer must surface unresolved key failures and stay open.
+      if (keyWarnings.length) {
+        const status = (keyWarnings.length >= keyOps.length) ? 'failed' : 'partial';
+        return { ok: true, status, warnings: keyWarnings, error: keyWarnings.join('; ') };
+      }
+      return { ok: true, status: 'committed' };
     }
     catch (e) { return { ok: false, error: String(e.message || e) }; }
   });
@@ -239,6 +266,8 @@ function register({ getMainWindow }) {
   // renderer cannot flood the provider's /models endpoint.
   secureHandle('providers:listModels', { getMainWindow }, async (_e, { providerId }) => {
     try {
+      const corruptErr = corruptKeyError(providerId); // RQ-006
+      if (corruptErr) return { ok: false, error: corruptErr };
       const p = providersStore.provider(providerId);
       const a = ADAPTERS[p.kind];
       if (!a || !a.listModels) return { ok: true, models: [] };
@@ -275,6 +304,9 @@ function register({ getMainWindow }) {
     // renderer (the renderer's aggregate estimate gate is UX only).
     const unitsErr = checkProviderUnits(req.params);
     if (unitsErr) return { ok: false, error: unitsErr };
+    // RQ-006: never spend money on a paid call for a corrupt stored key.
+    const corruptErr = corruptKeyError(req.providerId);
+    if (corruptErr) return { ok: false, error: corruptErr };
     // P2-C (H-014, H-015): acquire cloud job gate slot before API call.
     // MED-040: pass baseUrl for origin-based rate limiting.
     const provider = providersStore.provider(req.providerId);

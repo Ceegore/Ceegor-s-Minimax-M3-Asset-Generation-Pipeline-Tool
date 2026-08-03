@@ -66,6 +66,12 @@ Thumbs.db
 .env.*.local
 *.pem
 *.key
+# RQ-002: signing material must never live inside the release worktree —
+# an untracked minisign.pub would dirty `git status --porcelain` and make
+# the build provenance fail strict verification. The release workflow keeps
+# the pinned key under RUNNER_TEMP (MINISIGN_PUB_PATH); a TRACKED pinned
+# key would be committed explicitly and never via this rule.
+minisign.pub
 
 # ---- dev scratch ----
 _*.md

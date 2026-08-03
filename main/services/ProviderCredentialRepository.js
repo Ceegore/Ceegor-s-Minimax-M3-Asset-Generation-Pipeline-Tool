@@ -96,7 +96,12 @@ class ProviderCredentialRepository {
         label: p.label || p.id,
         kind: p.kind || '',
         baseUrl: p.baseUrl || '',
-        hasKey: credentialState !== 'none',
+        // RQ-006 fix: hasKey must mean "a usable key resolves". The old
+        // `credentialState !== 'none'` reported hasKey=true for 'corrupt'
+        // (missing/unreadable blob), so the UI claimed a usable key while
+        // resolveKey() returned null. Only persisted/session keys count;
+        // 'corrupt' stays surfaced as a separate, actionable state.
+        hasKey: credentialState === 'persisted' || credentialState === 'session',
         credentialState,
       };
     });

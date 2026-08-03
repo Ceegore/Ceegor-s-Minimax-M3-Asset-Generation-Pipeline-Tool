@@ -8,7 +8,8 @@
 // Prerequisites:
 //   - minisign binary on PATH (https://jedisct1.github.io/minisign/)
 //   - MINISIGN_KEY_PATH env var pointing to the secret key file
-//   - For --verify: MINISIGN_PUB_KEY env var or default ./minisign.pub
+//   - For --verify: MINISIGN_PUB_PATH env var (explicit public-key path,
+//     RQ-002), legacy MINISIGN_PUB_KEY path, or default ./minisign.pub
 //
 // The signature is written alongside the .sha256 manifest:
 //   dist-out/MiniMaxAssetTool-<version>-x64.sha256.minisig
@@ -56,7 +57,10 @@ function main() {
 
   if (verify) {
     // --- Verify mode ---
-    const pubKey = process.env.MINISIGN_PUB_KEY || path.join(ROOT, 'minisign.pub');
+    // RQ-002 fix: MINISIGN_PUB_PATH is the canonical way to point at a
+    // pinned public key OUTSIDE the repository worktree (the tag workflow
+    // writes it under RUNNER_TEMP so the build provenance stays clean).
+    const pubKey = process.env.MINISIGN_PUB_PATH || process.env.MINISIGN_PUB_KEY || path.join(ROOT, 'minisign.pub');
     if (!fs.existsSync(pubKey)) fail(`Public key not found: ${pubKey}`);
     if (!fs.existsSync(sigPath)) fail(`Signature not found: ${sigPath}`);
     const r = spawnSync(bin, ['-V', '-p', pubKey, '-m', manifest, '-x', sigPath], {

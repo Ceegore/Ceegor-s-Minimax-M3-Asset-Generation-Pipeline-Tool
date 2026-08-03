@@ -68,6 +68,12 @@
         urlIn.style.width = '100%';
         if (p.kind !== 'custom-openai') urlIn.disabled = true;
         sec.append(el('label', {}, 'API Key:'), keyIn);
+        // RQ-006: a corrupt stored key must be visible and repairable —
+        // the settings dialog is the only path that can fix it.
+        if (p.credentialState === 'corrupt') {
+          sec.appendChild(el('div', { class: 'prov-key-corrupt', style: 'color:#e6a23c;font-size:12px;margin:2px 0;' },
+            '⚠ Stored key is unreadable (corrupt). Enter a new key to repair it.'));
+        }
         sec.append(el('label', {}, 'Base URL:'), urlIn);
         wrap.appendChild(sec);
         inputs.push({ p, keyIn, urlIn });
@@ -85,7 +91,19 @@
           updates.providers.push(entry);
         }
         const r = await window.api.providersSet(updates);
-        if (r && r.ok) { toast('Provider settings saved.', 'ok'); close(); }
+        if (r && r.ok) {
+          // RQ-007: Main returns a typed status. Anything other than
+          // 'committed' means at least one key operation failed AFTER the
+          // metadata was saved — report it loudly and keep the dialog
+          // open so the user can repair the key instead of seeing a
+          // false success.
+          if (r.status && r.status !== 'committed') {
+            toast('Settings saved, but ' + (r.status === 'failed' ? 'the API key change failed' : 'some API key changes failed')
+              + ': ' + (r.error || 'unknown'), 'err', 10000);
+            return;
+          }
+          toast('Provider settings saved.', 'ok'); close();
+        }
         else toast('Save failed: ' + (r && r.error || 'unknown'), 'err');
       });
       const cancelBtn = el('button', {}, 'Cancel');

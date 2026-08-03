@@ -14,6 +14,23 @@
 # and it FAILS with explicit missing-secret diagnostics instead of running
 # a strict verifier that can never pass. Only tag-triggered runs publish.
 #
+# RQ-002 fix: signing material is NEVER written into the repository
+#   worktree. The pinned Minisign public key goes to RUNNER_TEMP and the
+#   scripts read it via MINISIGN_PUB_PATH. A second clean-tree + full-SHA
+#   assertion runs immediately before the build, and the produced
+#   provenance is checked against the triggering SHA afterwards — so a
+#   signed run can no longer record commitDirty=true and fail its own
+#   strict verifier.
+#
+# RQ-004 fix: every mandatory release gate is an explicit job and the
+#   publication step depends on ALL of them: qualification (lint, unit,
+#   coverage gate, contract, IPC coverage), E2E + smoke, flakiness
+#   repetition, mutation testing, build/sign/verify, and clean-VM
+#   acceptance (packaged boot + installer + upgrade on a fresh runner).
+#
+# RQ-008 fix: the coverage GATE (test:coverage:gate) runs right after
+#   coverage collection, so sub-threshold coverage fails the release.
+#
 # The fast PR gate (ci.yml) remains the first line of defense; this
 # workflow is the mandatory second gate before any artifact reaches
 # GitHub Releases.
@@ -32,19 +49,21 @@ on:
         required: true
         type: string
 
+env:
+  # Shared by every job: tag vs manual dispatch and the declared version.
+  IS_TAG_RELEASE: ${{ startsWith(github.ref, 'refs/tags/') }}
+  # M-001 (hhhhu3 audit): manual runs must declare the version they build.
+  RELEASE_EXPECTED_VERSION: ${{ inputs.version }}
+
 jobs:
-  release-gate:
-    name: Full release verification
+  # ------------------------------------------------------------------
+  # Gate 1 — static checks, unit tests, coverage GENERATION + GATE,
+  # contract and IPC coverage.
+  # ------------------------------------------------------------------
+  qualification:
+    name: Lint + unit + coverage gate + contract + IPC coverage
     runs-on: windows-latest
-    timeout-minutes: 40
-    env:
-      IS_TAG_RELEASE: ${{ startsWith(github.ref, 'refs/tags/') }}
-      # M-001 (hhhhu3 audit): manual runs must declare the version they build.
-      RELEASE_EXPECTED_VERSION: ${{ inputs.version }}
-      # Authenticode: electron-builder signs every PE it emits when these are
-      # present. The strict verifier re-checks every binary afterwards.
-      WIN_CSC_LINK: ${{ secrets.WIN_CSC_LINK }}
-      WIN_CSC_KEY_PASSWORD: ${{ secrets.WIN_CSC_KEY_PASSWORD }}
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v7
 
@@ -59,11 +78,163 @@ jobs:
       - name: Architecture lint
         run: npm run lint
 
-      - name: Unit tests (with coverage)
+      - name: Unit tests (with coverage collection)
         run: npm run test:coverage
 
-      - name: Contract tests
-        run: npm run test:contract
+      # RQ-008 fix: collection alone cannot enforce the coverage
+      # requirement — the gate must run and fail on threshold violations.
+      - name: Unit line-coverage GATE (fail below threshold)
+        run: npm run test:coverage:gate -- --threshold=50
+
+      - name: Contract tests (real API when key present, explicit skip banner otherwise)
+        env:
+          RUN_CONTRACT_TESTS: '1'
+          MINIMAX_API_KEY: ${{ secrets.MINIMAX_API_KEY }}
+        run: |
+          if (-not $env:MINIMAX_API_KEY) { $env:MMX_CONTRACT_OPTIONAL = '1' }
+          npm run test:contract
+
+      # The npm script carries its own gate threshold (97%) — a lower
+      # appended value would be ignored by the arg parser, so the release
+      # simply uses the script's built-in gate.
+      - name: IPC coverage gate (fail below 97%)
+        run: npm run test:ipc-coverage
+
+      - name: Check bundled dependencies
+        run: node scripts/check-bundled-deps.js
+
+      - name: Upload coverage evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: coverage-evidence
+          path: coverage/
+          if-no-files-found: ignore
+          retention-days: 30
+
+  # ------------------------------------------------------------------
+  # Gate 2 — E2E (real renderer, fake mmx) + smoke.
+  # ------------------------------------------------------------------
+  e2e-and-smoke:
+    name: E2E + smoke
+    runs-on: windows-latest
+    timeout-minutes: 40
+    env:
+      MMX_SHOTS_DIR: ${{ github.workspace }}\mmx-shots
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '22'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: E2E (real renderer + fake mmx, full ported smoke surface)
+        run: npm run test:e2e -- --surface-threshold=96
+
+      - name: Smoke test
+        run: npm run test:smoke
+
+      - name: Upload failure screenshots
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: release-e2e-failure-screenshots
+          path: ${{ github.workspace }}\mmx-shots
+          if-no-files-found: ignore
+          retention-days: 7
+
+  # ------------------------------------------------------------------
+  # Gate 3 — RQ-004 fix: flakiness qualification. Ten consecutive full
+  # suite runs; ANY failed repetition fails the release.
+  # ------------------------------------------------------------------
+  flakiness:
+    name: Flakiness qualification (10x full suite)
+    runs-on: windows-latest
+    timeout-minutes: 180
+    env:
+      FLAKY_REPEATS: '10'
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '22'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Repeated full-suite runs
+        run: npm run test:flaky
+
+      - name: Upload flakiness evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: flakiness-evidence
+          path: coverage/flakiness-report.json
+          if-no-files-found: ignore
+          retention-days: 30
+
+  # ------------------------------------------------------------------
+  # Gate 4 — RQ-004 fix: mutation testing of the release-critical
+  # credential/security modules. Any surviving mutant fails the release.
+  # ------------------------------------------------------------------
+  mutation:
+    name: Mutation testing (critical credential modules)
+    runs-on: windows-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '22'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Directed mutation testing
+        run: npm run test:mutation
+
+      - name: Upload mutation evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: mutation-evidence
+          path: coverage/mutation-report.json
+          if-no-files-found: ignore
+          retention-days: 30
+
+  # ------------------------------------------------------------------
+  # Gate 5 — identity, signing, build, SBOM, strict verification.
+  # Runs only after the qualification and E2E gates are green.
+  # ------------------------------------------------------------------
+  build-sign-verify:
+    name: Identity + build + sign + strict verify
+    runs-on: windows-latest
+    timeout-minutes: 60
+    needs: [qualification, e2e-and-smoke]
+    env:
+      # Authenticode: electron-builder signs every PE it emits when these are
+      # present. The strict verifier re-checks every binary afterwards.
+      WIN_CSC_LINK: ${{ secrets.WIN_CSC_LINK }}
+      WIN_CSC_KEY_PASSWORD: ${{ secrets.WIN_CSC_KEY_PASSWORD }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '22'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
 
       - name: Assert release identity
         run: npm run assert:identity
@@ -91,6 +262,8 @@ jobs:
       # B-003 (hhhhu3 audit): prepare the signing material and fail with
       # explicit missing-secret diagnostics. A tag release MUST be signed;
       # a manual dry run may proceed without secrets (it never publishes).
+      # RQ-002 fix: the pinned public key is written under RUNNER_TEMP and
+      # exposed as MINISIGN_PUB_PATH — NEVER into the repository worktree.
       - name: Prepare signing material
         shell: pwsh
         run: |
@@ -111,9 +284,13 @@ jobs:
             Add-Content -Path $env:GITHUB_ENV -Value "MINISIGN_KEY_PATH=$keyPath"
           }
           if ($env:MINISIGN_PUB_KEY) {
-            # The strict verifier and the published artifact set both read the
-            # pinned public key from the repository root.
-            Set-Content -Path 'minisign.pub' -Value $env:MINISIGN_PUB_KEY -Encoding ascii
+            # RQ-002 fix: signing material stays OUTSIDE the worktree. The
+            # strict verifier and sign:release read this path via
+            # MINISIGN_PUB_PATH; an untracked file in the repo would dirty
+            # `git status --porcelain` and poison the build provenance.
+            $pubPath = Join-Path $env:RUNNER_TEMP 'minisign.pub'
+            Set-Content -Path $pubPath -Value $env:MINISIGN_PUB_KEY -Encoding ascii
+            Add-Content -Path $env:GITHUB_ENV -Value "MINISIGN_PUB_PATH=$pubPath"
           }
           if ($tag) {
             Add-Content -Path $env:GITHUB_ENV -Value 'REQUIRE_CODE_SIGNING=1'
@@ -122,8 +299,44 @@ jobs:
           MINISIGN_KEY_B64: ${{ secrets.MINISIGN_KEY_B64 }}
           MINISIGN_PUB_KEY: ${{ secrets.MINISIGN_PUB_KEY }}
 
+      # RQ-002 fix: SECOND clean-tree assertion immediately before the
+      # build/provenance. The identity check above ran before the signing
+      # material existed; if ANYTHING has touched the worktree since, the
+      # build must stop instead of recording commitDirty=true provenance.
+      # Also pins the build to the exact triggering SHA.
+      - name: Re-assert clean tree and exact SHA before build (RQ-002)
+        shell: pwsh
+        run: |
+          $dirty = git status --porcelain
+          if ($dirty) {
+            Write-Host $dirty
+            throw 'Working tree became dirty after signing-material preparation (RQ-002). Signing material must never be written into the repository worktree.'
+          }
+          $head = git rev-parse HEAD
+          if ($env:GITHUB_SHA -and ($head -ne $env:GITHUB_SHA)) {
+            throw "HEAD ($head) does not match the triggering SHA ($env:GITHUB_SHA)."
+          }
+          Write-Host "Clean tree confirmed at $head"
+
       - name: Build portable release
         run: node scripts/zip-portable.js
+
+      # RQ-002 fix: the provenance must identify the EXACT triggering
+      # commit and record a clean tree — enforced here, not only by the
+      # strict verifier's generic dirty check.
+      - name: Assert provenance matches the triggering SHA (RQ-002)
+        shell: pwsh
+        run: |
+          $prov = Get-ChildItem dist-out -Filter *.provenance.json | Select-Object -First 1
+          if (-not $prov) { throw 'Build produced no provenance file.' }
+          $p = Get-Content $prov.FullName -Raw | ConvertFrom-Json
+          if ($p.commitDirty -ne $false) {
+            throw "Provenance records a dirty or unknown build tree (commitDirty=$($p.commitDirty)). Rebuild from a clean worktree."
+          }
+          if ($env:GITHUB_SHA -and $p.commit -and -not ($env:GITHUB_SHA.StartsWith($p.commit))) {
+            throw "Provenance commit ($($p.commit)) does not identify the triggering SHA ($env:GITHUB_SHA)."
+          }
+          Write-Host "Provenance verified: clean build at $($p.commit)"
 
       - name: Generate SBOM
         run: node scripts/generate-sbom.js
@@ -141,6 +354,63 @@ jobs:
       - name: Verify release (lenient dry run for untagged manual builds)
         if: env.IS_TAG_RELEASE != 'true'
         run: node scripts/verify-release.js --require-archive --require-provenance --require-sbom --skip-integrity
+
+      - name: Upload build output for clean-VM acceptance
+        uses: actions/upload-artifact@v7
+        with:
+          name: release-build
+          path: dist-out/
+          retention-days: 30
+
+  # ------------------------------------------------------------------
+  # Gate 6 — RQ-004 fix: clean-VM acceptance. GitHub-hosted runners are
+  # freshly imaged VMs, so this job exercises packaged boot, installer,
+  # upgrade-over-existing-install and tamper rejection on a clean
+  # machine against the EXACT build output from Gate 5.
+  # ------------------------------------------------------------------
+  clean-vm-acceptance:
+    name: Clean-VM acceptance (packaged boot, installer, upgrade)
+    runs-on: windows-latest
+    timeout-minutes: 45
+    needs: [build-sign-verify]
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '22'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Download exact build output
+        uses: actions/download-artifact@v7
+        with:
+          name: release-build
+          path: dist-out/
+
+      - name: Packaged boot (asar-packed renderer + preload)
+        run: npm run test:packaged
+
+      - name: Installer test (fresh install + upgrade + tamper rejection)
+        run: npm run test:installer
+
+  # ------------------------------------------------------------------
+  # Publication — ONLY after every mandatory gate is green for the
+  # exact tag SHA. Manual dispatch runs never reach this step's upload.
+  # ------------------------------------------------------------------
+  release-publication:
+    name: Release artifact publication
+    runs-on: windows-latest
+    timeout-minutes: 20
+    needs: [qualification, e2e-and-smoke, flakiness, mutation, build-sign-verify, clean-vm-acceptance]
+    steps:
+      - name: Download qualified build output
+        uses: actions/download-artifact@v7
+        with:
+          name: release-build
+          path: dist-out/
 
       # M-001 (hhhhu3 audit): only a tag-triggered run uploads publication
       # output. A manual dispatch run must never produce "release artifacts".

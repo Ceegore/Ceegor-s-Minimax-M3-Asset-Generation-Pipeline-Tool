@@ -154,12 +154,30 @@ function write(d) {
   // would resurrect plaintext the repository already migrated away.
   const repoActive = !!_getCredentialRepo();
   const existing = read();
-  if (!repoActive && d && Array.isArray(d.providers) && Array.isArray(existing.providers)) {
+  const existingById = new Map(((existing && existing.providers) || [])
+    .filter((x) => x && x.id).map((x) => [x.id, x]));
+  if (!repoActive && d && Array.isArray(d.providers)) {
     for (const p of d.providers) {
       if (!p.apiKey && p.id) {
-        const prev = existing.providers.find((x) => x.id === p.id);
+        const prev = existingById.get(p.id);
         if (prev && prev.apiKey) p.apiKey = prev.apiKey;
       }
+    }
+  }
+  // RQ-003 fix: with the encrypted credential repository active,
+  // credential references are SERVER-OWNED. The renderer's secret-free
+  // payload never carries `credential_id`, so a metadata write must
+  // PRESERVE the on-disk reference per provider ("empty key = keep
+  // existing") instead of replacing it away — the old full-replace
+  // dropped the reference and orphaned the encrypted blob. Incoming
+  // references are never trusted: they are stripped and re-merged from
+  // the persisted store, keyed by provider id.
+  if (repoActive && d && Array.isArray(d.providers)) {
+    for (const p of d.providers) {
+      delete p.credential_id;
+      delete p.credentialId;
+      const prev = p.id ? existingById.get(p.id) : undefined;
+      if (prev && prev.credential_id) p.credential_id = prev.credential_id;
     }
   }
   // M-010 (hhhhu2 audit): normalize credential references. The canonical

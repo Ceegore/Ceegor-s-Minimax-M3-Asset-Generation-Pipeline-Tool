@@ -312,9 +312,14 @@ function evaluate(root, opts = {}) {
     } else {
       // Attempt verification using minisign if available
       try {
-        const pubKeyPath = path.join(root, 'minisign.pub');
+        // RQ-002 fix: the pinned public key path is configurable. The tag
+        // workflow keeps signing material under RUNNER_TEMP (never inside
+        // the repository worktree, which would dirty the provenance) and
+        // passes the location via MINISIGN_PUB_PATH. A repo-root
+        // minisign.pub remains the fallback for tracked pinned keys.
+        const pubKeyPath = process.env.MINISIGN_PUB_PATH || path.join(root, 'minisign.pub');
         if (!fs.existsSync(pubKeyPath)) {
-          errors.push('Minisign public key (minisign.pub) not found in repository.');
+          errors.push(`Minisign public key not found at ${pubKeyPath} (set MINISIGN_PUB_PATH or track minisign.pub).`);
         } else {
           const result = childProcess.spawnSync('minisign', [
             '-V', '-p', pubKeyPath, '-m', manifestPath, '-x', sigPath,
