@@ -109,7 +109,8 @@
   async function scanRunFiles(outDir, startMs) {
     try {
       const _g = (window.GrantHelper && window.GrantHelper.ensureDirList) ? await window.GrantHelper.ensureDirList(outDir) : undefined;
-      const dirList = (_g && _g.ok === false) ? _g : await window.api.fbList(outDir, _g);
+      // M-012 (hhhhu3 audit): paginated listing drain.
+      const dirList = (_g && _g.ok === false) ? _g : await window.FbListPaged.drain(outDir, _g);
       if (dirList && dirList.ok && Array.isArray(dirList.items)) {
         const nowMs = Date.now();
         return dirList.items

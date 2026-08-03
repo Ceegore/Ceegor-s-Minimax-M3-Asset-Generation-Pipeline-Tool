@@ -518,6 +518,12 @@ contextBridge.exposeInMainWorld('api', {
 
   // ---- file browser ----
   fbList: (dir, grantId) => (grantId !== undefined ? ipcRenderer.invoke('fb:list', dir, grantId) : ipcRenderer.invoke('fb:list', dir)),
+  // M-012 (hhhhu3 audit): cursor-paginated listing. Main-owned sessions
+  // return the full directory in sorted pages (no 5,000-entry
+  // truncation). The cursor is an opaque Main-minted token.
+  fbListStart: (opts) => ipcRenderer.invoke('fb:listStart', opts),
+  fbListNext: (opts) => ipcRenderer.invoke('fb:listNext', opts),
+  fbListClose: (opts) => ipcRenderer.invoke('fb:listClose', opts),
   // The renderer pushes its current `state.fbDir` here on every
   // navigation. The main process uses this as the explicit gate for
   // every write IPC ("you can only write in the folder you're looking
@@ -538,12 +544,18 @@ contextBridge.exposeInMainWorld('api', {
   // a read grant (Main enforces it). Callers use GrantHelper.ensureRead.
   fbMkdir: (dir, name, grantId) => ipcRenderer.invoke('fb:mkdir', dir, name, grantId),
   fbEnsureDir: (dir, grantId) => ipcRenderer.invoke('fb:ensureDir', dir, grantId),
-  fbRename: (path, newName, grantId) => ipcRenderer.invoke('fb:rename', path, newName, grantId),
-  fbDelete: (path, grantId) => ipcRenderer.invoke('fb:delete', path, grantId),
+  // B-007 (hhhhu3 audit): native destructive-operation confirmation bridge.
+  // Main requires a one-shot intent token for fb:rename / fb:delete /
+  // fb:move. The renderer calls fbConfirmDestructive FIRST (it shows the
+  // native OS dialog and authorizes/canonicalizes through the grant
+  // service), then passes the returned intentId to the mutation call.
+  fbConfirmDestructive: (spec) => ipcRenderer.invoke('fb:confirmDestructive', spec),
+  fbRename: (path, newName, grantId, intentId) => ipcRenderer.invoke('fb:rename', path, newName, grantId, intentId),
+  fbDelete: (path, grantId, intentId) => ipcRenderer.invoke('fb:delete', path, grantId, intentId),
   // gewv2 GEW-002: optional 4th arg destGrantId lets the caller authorize
   // the destination with a SEPARATE grant when src and destDir don't share
   // a common-ancestor grant (e.g. two different trusted roots).
-  fbMove: (src, destDir, grantId, destGrantId) => ipcRenderer.invoke('fb:move', src, destDir, grantId, destGrantId),
+  fbMove: (src, destDir, grantId, destGrantId, intentId) => ipcRenderer.invoke('fb:move', src, destDir, grantId, destGrantId, intentId),
   fbCopy: (src, destDir, grantId, destGrantId) => ipcRenderer.invoke('fb:copy', src, destDir, grantId, destGrantId),
   fbReveal: (path, grantId) => ipcRenderer.invoke('fb:reveal', path, grantId),
   // Open a NEW Windows Explorer window at the file's parent folder.

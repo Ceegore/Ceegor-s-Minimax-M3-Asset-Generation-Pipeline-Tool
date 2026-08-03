@@ -2,6 +2,11 @@
 setlocal EnableExtensions DisableDelayedExpansion
 title Install MiniMax Asset Tool
 cd /d "%~dp0"
+rem H-016 (hhhhu3 audit): %~dp0 ends with a backslash, so %CD% here is
+rem "X:\path\" while normalized paths are "X:\path". A trailing-backslash
+rem mismatch would break the source-equals-install comparison below (and the
+rem installer would re-install over itself). Normalize through a FOR loop.
+for %%I in ("%CD%") do cd /d "%%~fI"
 
 echo.
 echo ============================================================
@@ -76,9 +81,12 @@ rem M-024 (360 Audit): per-file hash verification against FILES.sha256.
 rem M-017 (hhhhu2 audit): the manifest is MANDATORY for an installable release.
 rem A missing manifest fails closed — a directly extracted/portable source
 rem tree without the inner manifest is not accepted.
+rem H-018 (hhhhu3 audit): the verification is COMPLETE and strict. It rejects
+rem malformed manifest lines, duplicate entries, files present on disk but
+rem missing from the manifest, and a manifest that is far too small to be real.
 if not exist "%STAGING_DIR%\FILES.sha256" goto :missing_manifest
 set "MINIMAX_INSTALL_DIR_FOR_HASH=%STAGING_DIR%"
-powershell.exe -NoProfile -NonInteractive -Command "$ErrorActionPreference='Stop'; $root=$env:MINIMAX_INSTALL_DIR_FOR_HASH; $manifest=Join-Path $root 'FILES.sha256'; $bad=0; foreach($line in [IO.File]::ReadAllLines($manifest)){if($line -match '^([0-9a-fA-F]{64})\s+(.+)$'){$rel=$matches[2].Trim(); $fp=Join-Path $root $rel; if(-not [IO.File]::Exists($fp)){Write-Host ('  MISSING: '+$rel); $bad++; continue}; $actual=(Get-FileHash -Algorithm SHA256 -LiteralPath $fp).Hash.ToLowerInvariant(); if($actual -ne $matches[1].ToLowerInvariant()){Write-Host ('  TAMPERED: '+$rel); $bad++}}}; if($bad -gt 0){throw ($bad.ToString()+' file(s) failed integrity check.')}"
+powershell.exe -NoProfile -NonInteractive -Command "$ErrorActionPreference='Stop'; $root=$env:MINIMAX_INSTALL_DIR_FOR_HASH; $minEntries=if($env:MINIMAX_MANIFEST_MIN_ENTRIES){[int]$env:MINIMAX_MANIFEST_MIN_ENTRIES}else{50}; $manifest=Join-Path $root 'FILES.sha256'; $bad=0; $entries=@{}; foreach($line in [IO.File]::ReadAllLines($manifest)){ if([string]::IsNullOrWhiteSpace($line)){continue}; if($line -match '^([0-9a-fA-F]{64})\s+(.+)$'){ $rel=$matches[2].Trim(); if($entries.ContainsKey($rel.ToLowerInvariant())){Write-Host ('  DUPLICATE: '+$rel); $bad++; continue}; $entries[$rel.ToLowerInvariant()]=$rel; $fp=Join-Path $root $rel; if(-not [IO.File]::Exists($fp)){Write-Host ('  MISSING: '+$rel); $bad++; continue}; $actual=(Get-FileHash -Algorithm SHA256 -LiteralPath $fp).Hash.ToLowerInvariant(); if($actual -ne $matches[1].ToLowerInvariant()){Write-Host ('  TAMPERED: '+$rel); $bad++} } else {Write-Host ('  MALFORMED manifest line: '+$line); $bad++} }; foreach($fp in [IO.Directory]::EnumerateFiles($root,'*',[IO.SearchOption]::AllDirectories)){ $rel=$fp.Substring($root.Length+1).Replace('\','/'); if($rel -eq 'FILES.sha256'){continue}; if(-not $entries.ContainsKey($rel.ToLowerInvariant())){Write-Host ('  UNLISTED: '+$rel); $bad++} }; if($entries.Count -lt $minEntries){Write-Host ('  MANIFEST TOO SMALL: only '+$entries.Count+' entries (a real release has hundreds).'); $bad++}; if($bad -gt 0){throw ($bad.ToString()+' file(s) failed the completeness/integrity check.')}"
 if errorlevel 1 (
   echo.
   echo [ERROR] One or more files failed the integrity check.
@@ -92,9 +100,12 @@ echo Integrity check passed.
 
 rem Swap: remove old installation, rename staging to final.
 rem If the old dir exists, move it aside first (rollback safety).
+rem H-015 (hhhhu3 audit): Windows REN accepts only a bare NAME as its target —
+rem `ren "C:\full\path" "C:\other\full\path"` fails when an existing install
+rem is present. Use `move /y`, which accepts full destination paths.
 set "OLD_DIR=%INSTALL_DIR%.old-%RANDOM%"
 if exist "%INSTALL_DIR%" (
-  ren "%INSTALL_DIR%" "%OLD_DIR%" >nul 2>&1
+  move /y "%INSTALL_DIR%" "%OLD_DIR%" >nul 2>&1
   if exist "%INSTALL_DIR%" (
     echo [ERROR] Could not move the existing installation aside.
     echo Close the app if it is running and try again.
@@ -103,15 +114,20 @@ if exist "%INSTALL_DIR%" (
     exit /b 1
   )
 )
-ren "%STAGING_DIR%" "%INSTALL_DIR%" >nul 2>&1
+move /y "%STAGING_DIR%" "%INSTALL_DIR%" >nul 2>&1
 if not exist "%INSTALL_DIR%\MiniMaxAssetTool.exe" (
-  echo [ERROR] The final rename failed. Attempting rollback...
-  if defined OLD_DIR if exist "%OLD_DIR%" ren "%OLD_DIR%" "%INSTALL_DIR%" >nul 2>&1
+  echo [ERROR] The final swap failed. Attempting rollback...
+  if defined OLD_DIR if exist "%OLD_DIR%" move /y "%OLD_DIR%" "%INSTALL_DIR%" >nul 2>&1
   pause
   exit /b 1
 )
 rem Remove the old installation (swap succeeded).
 if defined OLD_DIR if exist "%OLD_DIR%" rmdir /s /q "%OLD_DIR%" >nul 2>&1
+
+:shortcuts
+rem H-016 (hhhhu3 audit): the source-equals-install path jumps here, so the
+rem label must exist. Re-running the installer inside the installed directory
+rem refreshes the shortcuts instead of crashing on a missing label.
 
 echo Creating Desktop and Start menu shortcuts...
 set "MINIMAX_INSTALL_TARGET=%INSTALL_DIR%"
@@ -155,7 +171,14 @@ rem Every part is an independent, complete .zip (not a raw volume split), so
 rem each one is checksum-verified and extracted on its own. All parts store
 rem their files under the same MiniMaxAssetTool-<version>-x64 folder, so the
 rem extractions merge into one folder.
-powershell.exe -NoProfile -NonInteractive -Command "$ErrorActionPreference='Stop'; $first=[IO.Path]::GetFullPath($env:MINIMAX_ARCHIVE_FIRST); $dir=[IO.Path]::GetDirectoryName($first); $name=[IO.Path]::GetFileName($first); $isSplit=$name -match '\.part1\.zip$'; $baseName=if($isSplit){$name -replace '\.part1\.zip$',''}else{$name -replace '\.zip$',''}; $manifest=Join-Path $dir ($baseName+'.sha256'); if(-not [IO.File]::Exists($manifest)){throw 'The matching .sha256 checksum file is missing.'}; $parts=if($isSplit){@(Get-ChildItem -LiteralPath $dir -File | Where-Object {$_.Name -match ('^'+[regex]::Escape($baseName)+'\.part\d+\.zip$')} | Sort-Object {[int][regex]::Match($_.Name,'\.part(\d+)\.zip$').Groups[1].Value})}else{@(Get-Item -LiteralPath $first)}; if($parts.Count -eq 0){throw 'No archive parts were found.'}; if($isSplit){for($i=0;$i -lt $parts.Count;$i++){$expected=$baseName+'.part'+($i+1)+'.zip'; if($parts[$i].Name -ne $expected){throw ('Archive sequence is incomplete. Expected '+$expected+'.')}}}; $hashes=@{}; foreach($line in [IO.File]::ReadAllLines($manifest)){if($line -match '^([0-9a-fA-F]{64})\s+\*?(.+)$'){$hashes[$matches[2].Trim()]=$matches[1].ToLowerInvariant()}}; foreach($part in $parts){if(-not $hashes.ContainsKey($part.Name)){throw ('No checksum was published for '+$part.Name+'.')}; $actual=(Get-FileHash -Algorithm SHA256 -LiteralPath $part.FullName).Hash.ToLowerInvariant(); if($actual -ne $hashes[$part.Name]){throw ('Checksum mismatch for '+$part.Name+'. Download that file again.')}}; foreach($part in $parts){& tar.exe -xf $part.FullName -C $env:MINIMAX_EXTRACT_DIR; if($LASTEXITCODE -ne 0){throw ('Could not extract '+$part.Name+'.')}}"
+rem H-017 (hhhhu3 audit): when the release publishes a Minisign signature
+rem (<base>.sha256.minisig), it is verified against the PINNED public key
+rem BEFORE any checksum is trusted — an attacker who can replace the archive
+rem can also replace the plaintext .sha256 file, so the hash alone proves
+rem nothing. Verification requires minisign.exe beside this installer or on
+rem PATH (https://jedisct1.github.io/minisign/). A signature that FAILS to
+rem verify aborts the install; a missing verification tool warns loudly.
+powershell.exe -NoProfile -NonInteractive -Command "$ErrorActionPreference='Stop'; $first=[IO.Path]::GetFullPath($env:MINIMAX_ARCHIVE_FIRST); $dir=[IO.Path]::GetDirectoryName($first); $name=[IO.Path]::GetFileName($first); $isSplit=$name -match '\.part1\.zip$'; $baseName=if($isSplit){$name -replace '\.part1\.zip$',''}else{$name -replace '\.zip$',''}; $manifest=Join-Path $dir ($baseName+'.sha256'); if(-not [IO.File]::Exists($manifest)){throw 'The matching .sha256 checksum file is missing.'}; $sig=Join-Path $dir ($baseName+'.sha256.minisig'); if([IO.File]::Exists($sig)){ $pub=Join-Path $dir 'minisign.pub'; $tool=$null; $candidate=Join-Path $dir 'minisign.exe'; if([IO.File]::Exists($candidate)){$tool=$candidate}else{$found=(Get-Command minisign -ErrorAction SilentlyContinue); if($found){$tool=$found.Source}}; if(-not $tool){ Write-Host '  [WARNING] A release signature (.minisig) is present but minisign.exe was not found — the signature could NOT be verified. Place minisign.exe beside the installer for full assurance.' } else { if(-not [IO.File]::Exists($pub)){throw 'The pinned Minisign public key (minisign.pub) is missing next to the release files.'}; & $tool -V -p $pub -m $manifest -x $sig | Out-Null; if($LASTEXITCODE -ne 0){throw 'The release signature (.minisig) is INVALID. Do not install these files — download them again from the official release page.'}; Write-Host '  Release signature verified against the pinned public key.' } }; $parts=if($isSplit){@(Get-ChildItem -LiteralPath $dir -File | Where-Object {$_.Name -match ('^'+[regex]::Escape($baseName)+'\.part\d+\.zip$')} | Sort-Object {[int][regex]::Match($_.Name,'\.part(\d+)\.zip$').Groups[1].Value})}else{@(Get-Item -LiteralPath $first)}; if($parts.Count -eq 0){throw 'No archive parts were found.'}; if($isSplit){for($i=0;$i -lt $parts.Count;$i++){$expected=$baseName+'.part'+($i+1)+'.zip'; if($parts[$i].Name -ne $expected){throw ('Archive sequence is incomplete. Expected '+$expected+'.')}}}; $hashes=@{}; foreach($line in [IO.File]::ReadAllLines($manifest)){if($line -match '^([0-9a-fA-F]{64})\s+\*?(.+)$'){$hashes[$matches[2].Trim()]=$matches[1].ToLowerInvariant()}}; foreach($part in $parts){if(-not $hashes.ContainsKey($part.Name)){throw ('No checksum was published for '+$part.Name+'.')}; $actual=(Get-FileHash -Algorithm SHA256 -LiteralPath $part.FullName).Hash.ToLowerInvariant(); if($actual -ne $hashes[$part.Name]){throw ('Checksum mismatch for '+$part.Name+'. Download that file again.')}}; foreach($part in $parts){& tar.exe -xf $part.FullName -C $env:MINIMAX_EXTRACT_DIR; if($LASTEXITCODE -ne 0){throw ('Could not extract '+$part.Name+'.')}}"
 if errorlevel 1 goto :extract_failed
 
 rem The archive's single top-level folder is MiniMaxAssetTool-<version>-x64.

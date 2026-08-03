@@ -1,8 +1,15 @@
 'use strict';
 
 /**
- * Safe HTTP client for all provider networking.
- * 
+ * Safe HTTP client for Main-side provider networking.
+ *
+ * L-002 (hhhhu3 audit) scope note: production provider IPC
+ * (registerProvidersIpc) injects this client into the provider adapters
+ * and uses it for URL-based artifact downloads. The adapters under
+ * src/providers keep a bounded raw-fetch path that runs ONLY when no
+ * client is injected (direct unit tests) — do not infer from this module
+ * that every fetch in the codebase is DNS-pinned.
+ *
  * AUD-008 fix: Resolve both A and AAAA records, validate every returned address,
  * use a custom dispatcher/agent that connects only to a validated address while
  * preserving the original TLS SNI/Host.
@@ -341,6 +348,32 @@ async function json(url, options = {}, policy = {}) {
 }
 
 /**
+ * Fetch a response body as a bounded Buffer (binary payloads, e.g. TTS audio).
+ * H-001 (hhhhu3 audit): provider speech responses need the same DNS pinning
+ * and caps as JSON calls; the adapters previously used global fetch for them.
+ * @param {string} url
+ * @param {object} options
+ * @param {object} policy - requires policy.maxBytes
+ * @returns {Promise<Buffer>}
+ */
+async function bytes(url, options = {}, policy = {}) {
+  const opened = await open(url, options, policy);
+  try {
+    const maxBytes = policy.maxBytes;
+    if (!Number.isSafeInteger(maxBytes) || maxBytes <= 0) throw new TypeError('maxBytes is required');
+    const declared = Number(opened.response.headers['content-length'] || 0);
+    if (declared > maxBytes) throw new AppError(CODES.RESPONSE_TOO_LARGE, 'Response is too large.');
+    const buffer = await readLimited(opened.response.body, maxBytes, opened.signal);
+    if (opened.response.statusCode < 200 || opened.response.statusCode >= 300) {
+      throw new AppError(CODES.RESPONSE_INVALID, `Provider HTTP ${opened.response.statusCode}.`);
+    }
+    return buffer;
+  } finally {
+    await opened.dispatcher.close().catch(() => {});
+  }
+}
+
+/**
  * Download a file with streaming and size limits.
  * @param {string} url
  * @param {string} destination
@@ -388,4 +421,4 @@ async function toFile(url, destination, options = {}, policy = {}) {
   }
 }
 
-module.exports = { json, toFile, open, isPublicAddress, resolvePublic, validateUrl, DEFAULTS };
+module.exports = { json, bytes, toFile, open, isPublicAddress, resolvePublic, validateUrl, DEFAULTS };

@@ -1,9 +1,11 @@
 // main/ipc/fileBrowserListingIpc.js
 // M-014 (hhhhu2 audit): cursor-based paginated directory listing handlers
 // (fb:listStart / fb:listNext / fb:listClose), split out of
-// registerFileBrowserIpc.js. These handlers replace the old 5,000-entry
-// truncation with bounded Main-owned sessions that return all entries in
-// sorted pages.
+// registerFileBrowserIpc.js. These handlers are the PRIMARY listing path
+// (the renderer drains them via window.FbListPaged), returning all entries
+// in sorted pages without the legacy 5,000-entry truncation. The legacy
+// fb:list handler stays registered as a compat/fallback surface
+// (L-002 hhhhu3 audit: it was not removed — do not infer that it was).
 //
 // MED-020: the drive enumeration helper (fb:listDrives) lives here too —
 // parallel per-letter probing with an overall deadline so a slow/unresponsive
@@ -85,7 +87,7 @@ function registerListingHandlers(deps) {
     const { sessionId, cursor } = opts;
     if (!sessionId || !cursor) return { ok: false, error: 'sessionId and cursor are required.' };
     try {
-      const result = listingService.listNext({
+      const result = await listingService.listNext({
         sessionId,
         cursor,
         senderId: e.sender.id,

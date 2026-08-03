@@ -31,10 +31,24 @@ const ROOT = path.resolve(__dirname, '..', '..', '..', '..');
 global.window = global;
 global.toast = () => {};
 require(path.join(ROOT, 'renderer', 'tabs', 'argvBuilders.js'));
+// M-012 (hhhhu3 audit): listRunDirFiles drains via window.FbListPaged —
+// load the real bridge (it falls back to the per-test window.api.fbList
+// stubs because the paginated surface is not present in these mocks).
+require(path.join(ROOT, 'renderer', 'services', 'fbListPaged.js'));
 require(path.join(ROOT, 'renderer', 'tabs', 'batchDirectRunner.js'));
 const { runVariantDirect } = global.window.BatchDirectRunner;
 
+// B-007 (hhhhu3 audit): the cancel/mmx-failure cleanup routes through
+// window.FbIntent.del. Stub that records the deletions the tests assert on.
+function installFbIntentStub(deleted) {
+  global.window.FbIntent = {
+    del: async (p) => { deleted.push(p); return { ok: true }; },
+    isCanceled: () => false,
+  };
+}
+
 function resetState(overrides) {
+  delete global.window.FbIntent; // B-007: tests opt in via installFbIntentStub
   global.window.state = Object.assign({
     fbDir: 'C:\\out',
     generating: null,
@@ -303,6 +317,7 @@ test('R6.2.D: n=1 row does NOT mint a per-run subdir (single-file writes go stra
 test('R6.2.E: n>1 failure cleans up the runSubdir (best-effort fbDelete)', async () => {
   resetState();
   const deleted = [];
+  installFbIntentStub(deleted);
   global.window.api = {
     fbEnsureDir: async (p) => ({ ok: true, path: p }),
     mmxRunJob: async () => ({ ok: false, code: 1, stderr: 'mmx crashed' }),
@@ -319,6 +334,7 @@ test('R6.2.E: n>1 failure cleans up the runSubdir (best-effort fbDelete)', async
 test('R6.2.F: n>1 success leaves the runSubdir intact (cleanup only on failure)', async () => {
   resetState();
   const deleted = [];
+  installFbIntentStub(deleted);
   global.window.api = {
     fbEnsureDir: async (p) => ({ ok: true, path: p }),
     mmxRunJob: async () => ({ ok: true, code: 0 }),
@@ -466,6 +482,7 @@ test('R6.2.M: failure cleanup is gated on !ok (success never deletes the runSubd
   // is NEVER called.
   resetState();
   const deleted = [];
+  installFbIntentStub(deleted);
   global.window.api = {
     fbEnsureDir: async (p) => ({ ok: true, path: p }),
     mmxRunJob: async () => ({ ok: true, code: 0 }),
@@ -487,6 +504,7 @@ test('R6.2.N: failure cleanup checks runSubdir truthy (no fbDelete(null) when mi
   // + forcing mmx failure. fbDelete must NOT be called.
   resetState();
   const deleted = [];
+  installFbIntentStub(deleted);
   let fbDeleteCalled = false;
   global.window.api = {
     fbEnsureDir: async (p) => { throw new Error('mint failed'); },
@@ -535,6 +553,7 @@ test('P4.6.A: cancelled n>1 run inventories the runSubdir — status partial + o
   resetState();
   global.window.JobRunner = makeCancellingJobRunner();
   const deleted = [];
+  installFbIntentStub(deleted);
   global.window.api = {
     fbEnsureDir: async (p) => ({ ok: true, path: p }),
     mmxRunJob: async () => ({ ok: true, code: 0 }),
@@ -562,6 +581,7 @@ test('P4.6.B: keepPartialOutputs:false deletes the runSubdir on cancel (cleanup 
   resetState();
   global.window.JobRunner = makeCancellingJobRunner();
   const deleted = [];
+  installFbIntentStub(deleted);
   global.window.api = {
     fbEnsureDir: async (p) => ({ ok: true, path: p }),
     mmxRunJob: async () => ({ ok: true, code: 0 }),

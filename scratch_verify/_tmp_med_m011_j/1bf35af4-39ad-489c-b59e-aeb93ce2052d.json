@@ -1,0 +1,25 @@
+{
+  "schemaVersion": 1,
+  "transactionId": "1bf35af4-39ad-489c-b59e-aeb93ce2052d",
+  "state": "INSTALLING",
+  "canonicalRoot": "C:\\Projects\\Ceegor-s-Minimax-M3-Asset-Generation-Pipeline-Tool\\scratch_verify\\_tmp_med_m011_root",
+  "leaseId": null,
+  "createdAt": 1785770862189,
+  "stageDir": "C:\\Projects\\Ceegor-s-Minimax-M3-Asset-Generation-Pipeline-Tool\\scratch_verify\\_tmp_med_m011_root\\.mmas-stage-1bf35af4-39ad-489c-b59e-aeb93ce2052d",
+  "files": [
+    {
+      "stagedPath": "C:\\Projects\\Ceegor-s-Minimax-M3-Asset-Generation-Pipeline-Tool\\scratch_verify\\_tmp_med_m011_root\\.mmas-stage-1bf35af4-39ad-489c-b59e-aeb93ce2052d\\a.txt",
+      "finalPath": "C:\\Projects\\Ceegor-s-Minimax-M3-Asset-Generation-Pipeline-Tool\\scratch_verify\\_tmp_med_m011_root\\a.txt",
+      "bytes": 5,
+      "sha256": "11770b3ea657fe68cba19675143e4715c8de9d763d3c21a85af6b7513d43997d",
+      "installed": false
+    },
+    {
+      "stagedPath": "C:\\Projects\\Ceegor-s-Minimax-M3-Asset-Generation-Pipeline-Tool\\scratch_verify\\_tmp_med_m011_root\\.mmas-stage-1bf35af4-39ad-489c-b59e-aeb93ce2052d\\b.txt",
+      "finalPath": "C:\\Projects\\Ceegor-s-Minimax-M3-Asset-Generation-Pipeline-Tool\\scratch_verify\\_tmp_med_m011_root\\b.txt",
+      "bytes": 5,
+      "sha256": "0fad32b1e81a318bb7ec37b8b6cd180d1b86cb279240142348a3ecd435cd0742",
+      "installed": true
+    }
+  ]
+}

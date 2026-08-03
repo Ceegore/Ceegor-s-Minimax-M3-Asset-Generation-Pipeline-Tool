@@ -186,12 +186,16 @@ test('preload bridge exposes every tool function and maps to the expected channe
     'diagnose',
     'externalToolsProbe',
     'externalToolsRun',
+    'fbConfirmDestructive',
     'fbCopy',
     'fbDelete',
     'fbEnsureDir',
     'fbExists',
     'fbList',
+    'fbListClose',
     'fbListDrives',
+    'fbListNext',
+    'fbListStart',
     'fbMkdir',
     'fbMove',
     'fbOpenDialog',
@@ -308,13 +312,19 @@ test('preload bridge exposes every tool function and maps to the expected channe
     // argument; the preload bridge forwards it through.
     ['fbMkdir', ['C:\\work', 'sub', 'grant-id'], 'fb:mkdir'],
     ['fbEnsureDir', ['C:\\work\\newdir', 'grant-id'], 'fb:ensureDir'],
-    ['fbRename', ['C:\\work\\a.txt', 'b.txt', 'grant-id'], 'fb:rename'],
-    ['fbDelete', ['C:\\work\\a.txt', 'grant-id'], 'fb:delete'],
+    ['fbRename', ['C:\\work\\a.txt', 'b.txt', 'grant-id', 'intent-id'], 'fb:rename'],
+    ['fbDelete', ['C:\\work\\a.txt', 'grant-id', 'intent-id'], 'fb:delete'],
     // gewv2 GEW-002: fbMove/fbCopy now accept an optional 4th destGrantId
     // arg (a separately-minted grant for the destination when src/destDir
     // don't share a common-ancestor grant) — the preload wrapper forwards
     // it 1:1, so the sweep exercises it explicitly here.
-    ['fbMove', ['C:\\work\\a.txt', 'C:\\work\\out', 'grant-id', 'dest-grant-id'], 'fb:move'],
+    ['fbMove', ['C:\\work\\a.txt', 'C:\\work\\out', 'grant-id', 'dest-grant-id', 'intent-id'], 'fb:move'],
+    // B-007/M-012/M-013 (hhhhu3 audit): the confirm-then-execute bridge and
+    // the paginated listing surface are preload contract members too.
+    ['fbConfirmDestructive', [{ operation: 'delete', sourcePath: 'C:\\work\\a.txt', sourceGrantId: 'grant-id' }], 'fb:confirmDestructive'],
+    ['fbListStart', [{ dir: 'C:\\work', grantId: 'grant-id' }], 'fb:listStart'],
+    ['fbListNext', [{ cursor: 'c1' }], 'fb:listNext'],
+    ['fbListClose', [{ cursor: 'c1' }], 'fb:listClose'],
     ['fbCopy', ['C:\\work\\a.txt', 'C:\\work\\out', 'grant-id', 'dest-grant-id'], 'fb:copy'],
     ['fbReveal', ['C:\\work\\a.txt', 'grant-r1'], 'fb:reveal'],
     ['fbOpenInExplorer', ['C:\\work\\a.txt', 'grant-r2'], 'fb:openInExplorer'],

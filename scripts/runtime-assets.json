@@ -3,6 +3,11 @@
   "description": "Files that must be present in every full offline Windows release. Paths are relative to resources/bin.",
   "assets": [
     {
+      "path": "ffprobe.exe",
+      "bytes": 80995328,
+      "sha256": "f28c4751e7367205267025aaf0fcfc921e34d9b7edaa46bd9c8abaf367fc9051"
+    },
+    {
       "path": "realesrgan-ncnn-vulkan.exe",
       "bytes": 6161408,
       "sha256": "07e49f7cbb4ede01ae4dd4c399d3a7e5846e3d2085c3128eff881e55cb7b1a0c"

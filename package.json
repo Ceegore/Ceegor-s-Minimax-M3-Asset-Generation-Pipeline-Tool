@@ -51,6 +51,7 @@
   "author": "Ceegor",
   "license": "MIT",
   "dependencies": {
+    "@ffprobe-installer/ffprobe": "^2.1.2",
     "ffmpeg-static": "^5.3.0",
     "ipaddr.js": "2.4.0",
     "mmx-cli": "^1.0.18",
@@ -59,8 +60,8 @@
     "undici": "7.29.0"
   },
   "devDependencies": {
-    "7zip-bin": "^5.2.0",
     "@electron/fuses": "^1.8.0",
+    "7zip-bin": "^5.2.0",
     "electron": "^43.1.0",
     "electron-builder": "^26.15.3"
   },
@@ -95,6 +96,11 @@
       "node_modules/bun-plugin-dts/**",
       "node_modules/es-toolkit/**",
       "node_modules/undici/**",
+      "node_modules/@ffprobe-installer/**",
+      "!node_modules/@ffprobe-installer/darwin*/**",
+      "!node_modules/@ffprobe-installer/linux*/**",
+      "!node_modules/@ffprobe-installer/win32-ia32/**",
+      "!node_modules/@ffprobe-installer/win32-arm64/**",
       "!node_modules/onnxruntime-node/bin/napi-v6/darwin/**",
       "!node_modules/onnxruntime-node/bin/napi-v6/linux/**",
       "!node_modules/onnxruntime-node/bin/napi-v6/win32/arm64/**",
@@ -105,6 +111,7 @@
       "**/*.dll",
       "node_modules/@img/**",
       "node_modules/ffmpeg-static/ffmpeg.exe",
+      "node_modules/@ffprobe-installer/**",
       "node_modules/mmx-cli/**",
       "node_modules/@clack/**",
       "node_modules/bun-plugin-dts/**",

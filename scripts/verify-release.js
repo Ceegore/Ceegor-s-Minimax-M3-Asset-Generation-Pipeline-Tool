@@ -3,7 +3,7 @@ const childProcess = require('child_process');
 const crypto = require('crypto');
 const fs = require('fs');
 const path = require('path');
-const { archiveFiles, infoFor, releasePaths, relative, validateArchiveSequence } = require('./releaseArtifacts');
+const { archiveFiles, infoFor, outerManifestEntries, releasePaths, relative, validateArchiveSequence } = require('./releaseArtifacts');
 
 function signatureFor(filePath) {
   if (process.platform !== 'win32') return { checked: false, status: 'UNSUPPORTED_PLATFORM' };
@@ -86,12 +86,17 @@ function sevenZipBin(root) {
   return null;
 }
 
-// M-019 (hhhhu2 audit): recursively find all .exe and .dll files in a directory.
+// M-019 (hhhhu2 audit): recursively find all signable binaries in a directory.
 // Used to verify Authenticode signatures on bundled binaries inside the
 // unpacked release tree.
+//
+// M-003 (hhhhu3 audit): native addons use the .node extension and unpacked
+// native dependencies live under app.asar.unpacked/node_modules — the old
+// scan skipped every node_modules directory and only matched .exe/.dll, so
+// the "all required binaries" claim was broader than the implemented scan.
 function findBinariesRecursive(dir) {
   const results = [];
-  const SKIP_DIRS = new Set(['node_modules', '.git']);
+  const SKIP_DIRS = new Set(['.git']);
   function walk(d) {
     let entries;
     try { entries = fs.readdirSync(d, { withFileTypes: true }); } catch (_) { return; }
@@ -99,7 +104,7 @@ function findBinariesRecursive(dir) {
       const full = path.join(d, entry.name);
       if (entry.isDirectory()) {
         if (!SKIP_DIRS.has(entry.name)) walk(full);
-      } else if (/\.(exe|dll)$/i.test(entry.name)) {
+      } else if (/\.(exe|dll|node)$/i.test(entry.name)) {
         results.push(full);
       }
     }
@@ -246,7 +251,12 @@ function evaluate(root, opts = {}) {
         integrity = verifyArchiveIntegrity(root, paths, archives);
         if (!integrity.ok) errors.push(integrity.error);
       }
-      manifest = verifyManifest(paths, [paths.executable, ...archives]);
+      // B-002 (hhhhu3 audit): verify the manifest against the ONE canonical
+      // outer artifact inventory (executable + archive part(s) + installer
+      // CMD) — the exact file set zip-portable.js writes into the manifest.
+      const canonicalFiles = outerManifestEntries(paths).map((rel) => path.join(paths.output, rel));
+      if (canonicalFiles.length === 0) errors.push('Canonical release artifact inventory is empty.');
+      manifest = verifyManifest(paths, canonicalFiles);
       if (!manifest.ok) errors.push(...manifest.errors);
       provenance = verifyProvenance(root, paths);
       if (!provenance.ok) errors.push(...provenance.errors);
@@ -258,6 +268,9 @@ function evaluate(root, opts = {}) {
       freshness = verifyArchiveFreshness(root, archives);
       if (!freshness.ok) errors.push(...freshness.errors);
     }
+  } else if (opts.requireProvenance) {
+    provenance = verifyProvenance(root, paths);
+    if (!provenance.ok) errors.push(...provenance.errors);
   }
   if (opts.requireSignature && signature.status !== 'Valid') {
     errors.push(`Executable is not validly code signed: ${signature.status}`);
@@ -315,13 +328,13 @@ function evaluate(root, opts = {}) {
       }
     }
   }
-  // AUD-015 fix: SBOM presence check.
+  // AUD-015 fix: SBOM check.
+  // M-004 (hhhhu3 audit): verify SBOM CONTENT, not just presence — the old
+  // check accepted any existing file named sbom.spdx.json / sbom.cyclonedx.json
+  // (which the builder never even produces: it writes <base>.sbom.json).
   if (opts.requireSbom) {
-    const sbomPath = path.join(paths.output, 'sbom.spdx.json');
-    const sbomAlt = path.join(paths.output, 'sbom.cyclonedx.json');
-    if (!fs.existsSync(sbomPath) && !fs.existsSync(sbomAlt)) {
-      errors.push('SBOM file is missing from release output.');
-    }
+    const sbomErrors = verifySbom(root, paths);
+    if (!sbomErrors.ok) errors.push(...sbomErrors.errors);
   }
   return { paths, exe, archives: archiveInfo, signature, integrity, manifest, provenance, freshness, errors };
 }
@@ -370,12 +383,73 @@ function verifyArchiveFreshness(root, archives) {
   };
 }
 
+/**
+ * M-004 (hhhhu3 audit): verify SBOM content, not just presence.
+ * Checks: file exists at the builder's actual output path, is valid JSON,
+ * declares a known schema (CycloneDX/SPDX), and its primary component
+ * name/version match package.json.
+ */
+function verifySbom(root, paths) {
+  const errors = [];
+  const candidates = [
+    path.join(paths.output, `${paths.baseName}.sbom.json`),
+    path.join(paths.output, 'sbom.spdx.json'),
+    path.join(paths.output, 'sbom.cyclonedx.json'),
+  ];
+  const sbomPath = candidates.find((p) => fs.existsSync(p));
+  if (!sbomPath) {
+    return { ok: false, errors: [`SBOM file is missing from release output (expected one of: ${candidates.map((p) => path.basename(p)).join(', ')}).`] };
+  }
+  let sbom;
+  try {
+    sbom = JSON.parse(fs.readFileSync(sbomPath, 'utf8'));
+  } catch (e) {
+    return { ok: false, errors: [`SBOM is not valid JSON: ${e.message}`] };
+  }
+  const isCycloneDX = sbom.bomFormat === 'CycloneDX' && typeof sbom.specVersion === 'string';
+  const isSPDX = typeof sbom.spdxVersion === 'string';
+  if (!isCycloneDX && !isSPDX) {
+    errors.push('SBOM does not declare a recognized schema (CycloneDX bomFormat/specVersion or SPDX spdxVersion).');
+  }
+  // Package/version correspondence with the released product.
+  if (isCycloneDX) {
+    const comp = sbom.metadata && sbom.metadata.component;
+    if (!comp) {
+      errors.push('CycloneDX SBOM has no metadata.component — cannot verify package correspondence.');
+    } else {
+      if (comp.name !== paths.productName && comp.name !== readPackageName(root)) {
+        errors.push(`SBOM component name "${comp.name}" matches neither productName "${paths.productName}" nor package name.`);
+      }
+      if (comp.version !== paths.version) {
+        errors.push(`SBOM component version "${comp.version}" does not match release version "${paths.version}".`);
+      }
+    }
+    if (!Array.isArray(sbom.components) || sbom.components.length === 0) {
+      errors.push('CycloneDX SBOM lists no components.');
+    }
+  } else if (isSPDX) {
+    const pkgName = readPackageName(root);
+    const found = Array.isArray(sbom.packages) && sbom.packages.some((p) => p.name === pkgName && p.versionInfo === paths.version);
+    if (!found) errors.push(`SPDX SBOM does not list package "${pkgName}@${paths.version}".`);
+  }
+  return { ok: errors.length === 0, errors };
+}
+
+function readPackageName(root) {
+  try {
+    return JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8')).name;
+  } catch (_) {
+    return null;
+  }
+}
+
 function writeManifest(report) {
-  const files = [report.paths.executable, ...report.archives.map((item) => item.filePath)];
+  // B-002 (hhhhu3 audit): write the canonical inventory, not an ad-hoc list.
+  const files = outerManifestEntries(report.paths).map((rel) => path.join(report.paths.output, rel));
   const lines = files.map((filePath) => {
     const info = infoFor(filePath);
     if (!info.exists) throw new Error(`Cannot write a checksum for missing file: ${filePath}`);
-    return `${info.sha256}  ${relative(report.paths.root, filePath)}`;
+    return `${info.sha256}  ${relative(report.paths.output, filePath)}`;
   });
   fs.writeFileSync(report.paths.manifest, lines.join('\n') + '\n', 'utf8');
   return report.paths.manifest;
@@ -404,4 +478,4 @@ function main() {
 
 if (require.main === module) main();
 
-module.exports = { evaluate, parseArgs, signatureFor, writeManifest, verifyArchiveIntegrity, verifyManifest, verifyProvenance, verifyArchiveFreshness, validateArchiveSequence, validatePEHeader, findBinariesRecursive };
+module.exports = { evaluate, parseArgs, signatureFor, writeManifest, verifyArchiveIntegrity, verifyManifest, verifyProvenance, verifyArchiveFreshness, verifySbom, validateArchiveSequence, validatePEHeader, findBinariesRecursive };

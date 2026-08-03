@@ -356,11 +356,12 @@
     }
     if (stale010) {
       try {
-        if (window.api && window.api.fbDelete) {
+        if (window.FbIntent) {
           // BGR-009 fix: mint delete grant (R1.3 gate).
+          // B-007 (hhhhu3 audit): delete via native confirmation (window.FbIntent).
           const dg = (window.GrantHelper) ? await window.GrantHelper.ensureDelete(tmpPath) : undefined;
-          await window.api.fbDelete(tmpPath, dg);
-          if (r.path && r.path !== tmpPath) await window.api.fbDelete(r.path, dg);
+          await window.FbIntent.del(tmpPath, dg);
+          if (r.path && r.path !== tmpPath) await window.FbIntent.del(r.path, dg);
         }
       } catch (_) { /* temp cleanup is best-effort */ }
       return { stale: true };
@@ -372,11 +373,12 @@
     // tidy both temp files. The caller toasts the explanation.
     if (mode === 'transparency' && r.holesFilled === 0) {
       try {
-        if (window.api && window.api.fbDelete) {
+        if (window.FbIntent) {
           // BGR-009 fix: mint delete grant (R1.3 gate).
+          // B-007 (hhhhu3 audit): delete via native confirmation (window.FbIntent).
           const dg = (window.GrantHelper) ? await window.GrantHelper.ensureDelete(tmpPath) : undefined;
-          await window.api.fbDelete(tmpPath, dg);
-          if (r.path && r.path !== tmpPath) await window.api.fbDelete(r.path, dg);
+          await window.FbIntent.del(tmpPath, dg);
+          if (r.path && r.path !== tmpPath) await window.FbIntent.del(r.path, dg);
         }
       } catch (_) { /* temp cleanup is best-effort */ }
       return { noop: true };
@@ -411,7 +413,7 @@
     }
     // tidy the temp source
     // BGR-009 fix: mint delete grant (R1.3 gate).
-    try { if (window.api && window.api.fbDelete) { const dg = (window.GrantHelper) ? await window.GrantHelper.ensureDelete(tmpPath) : undefined; await window.api.fbDelete(tmpPath, dg); } } catch (_) {}
+    try { if (window.FbIntent) { const dg = (window.GrantHelper) ? await window.GrantHelper.ensureDelete(tmpPath) : undefined; await window.FbIntent.del(tmpPath, dg); } } catch (_) {} // B-007 (hhhhu3 audit): delete via native confirmation
     return r; // PE-009: stats (holesFilled/maskShare) for the caller's toast
     } catch (e) {
       // R5.2 Heal: cancel-cleanup. If we pushed the pre-snapshot
@@ -431,12 +433,13 @@
       ctrl._commitHandle = null; // PE-010: clear commit routing on failure
       // PE-026: tidy temps on failure too (best-effort).
       try {
-        if (window.api && window.api.fbDelete) {
+        if (window.FbIntent) {
           // BGR-009 fix: mint delete grant (R1.3 gate).
-          if (typeof tmpPath === 'string') { const dg = (window.GrantHelper) ? await window.GrantHelper.ensureDelete(tmpPath) : undefined; await window.api.fbDelete(tmpPath, dg); }
+          // B-007 (hhhhu3 audit): delete via native confirmation (window.FbIntent).
+          if (typeof tmpPath === 'string') { const dg = (window.GrantHelper) ? await window.GrantHelper.ensureDelete(tmpPath) : undefined; await window.FbIntent.del(tmpPath, dg); }
           // P5 (DA-M-005): also remove the healed output if it was written
           // before the failure — a reload throw must not orphan it on disk.
-          if (typeof healOutPath === 'string' && healOutPath !== tmpPath) { const dg2 = (window.GrantHelper) ? await window.GrantHelper.ensureDelete(healOutPath) : undefined; await window.api.fbDelete(healOutPath, dg2); }
+          if (typeof healOutPath === 'string' && healOutPath !== tmpPath) { const dg2 = (window.GrantHelper) ? await window.GrantHelper.ensureDelete(healOutPath) : undefined; await window.FbIntent.del(healOutPath, dg2); }
         }
       } catch (_) { /* temp cleanup is best-effort */ }
       throw e;  // re-throw so the caller can handle

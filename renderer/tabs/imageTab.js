@@ -562,7 +562,8 @@ window.TABS.image = {
       async function resolveOutDirFiles() {
         try {
           const _g = (window.GrantHelper && window.GrantHelper.ensureDirList) ? await window.GrantHelper.ensureDirList(runDir) : undefined;
-          const dirList = (_g && _g.ok === false) ? _g : await window.api.fbList(runDir, _g);
+          // M-012 (hhhhu3 audit): paginated listing drain.
+          const dirList = (_g && _g.ok === false) ? _g : await window.FbListPaged.drain(runDir, _g);
           if (dirList && dirList.ok && Array.isArray(dirList.items)) {
             const matches = dirList.items
               .filter((it) => !it.isDir && ['.png', '.jpg', '.jpeg', '.webp'].includes(it.ext))

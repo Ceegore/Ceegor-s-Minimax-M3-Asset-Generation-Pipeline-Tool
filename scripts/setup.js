@@ -172,7 +172,11 @@ const { verifyRuntimeAssets } = require('./lib/runtimeAssets');
   // (atomically replacing the live bin/). Interruption at any point leaves
   // the previous runtime intact.
   const installer = new RuntimeInstaller({ projectRoot: ROOT, runtimeDir: 'bin' });
-  const { transactionId, stagePath } = installer.begin();
+  // H-013 (hhhhu3 audit): recovery at begin() must be able to VERIFY an
+  // interrupted activation instead of blindly committing it — pass the same
+  // runtime asset verifier the forward path uses.
+  const runtimeVerifier = (p) => verifyRuntimeAssets(p).ok;
+  const { transactionId, stagePath } = installer.begin({ verifyFn: runtimeVerifier });
   const STAGE_MODELS = path.join(stagePath, 'models');
 
   try {
@@ -211,9 +215,11 @@ const { verifyRuntimeAssets } = require('./lib/runtimeAssets');
     if (dlLite) {
       log('');
       log('BiRefNet Lite model (~224 MB, MIT)');
+      // B-004 (hhhhu3 audit): download into the transaction STAGE, never
+      // through the runtime writable-override resolver.
       const r = await downloadModel('birefnet-general-lite', ({ downloaded, total }) => {
         process.stdout.write(`     ${(downloaded / 1024 / 1024).toFixed(1)} / ${(total / 1024 / 1024).toFixed(1)} MB\r`);
-      });
+      }, { destDir: STAGE_MODELS });
       if (!r.ok) throw new Error(r.error);
       process.stdout.write('\n');
     }
@@ -223,7 +229,7 @@ const { verifyRuntimeAssets } = require('./lib/runtimeAssets');
       log('BiRefNet General model (~930 MB, MIT)');
       const r = await downloadModel('birefnet-general', ({ downloaded, total }) => {
         process.stdout.write(`     ${(downloaded / 1024 / 1024).toFixed(1)} / ${(total / 1024 / 1024).toFixed(1)} MB\r`);
-      });
+      }, { destDir: STAGE_MODELS });
       if (!r.ok) throw new Error(r.error);
       process.stdout.write('\n');
     }
@@ -233,7 +239,7 @@ const { verifyRuntimeAssets } = require('./lib/runtimeAssets');
       log('BiRefNet Portrait model (~930 MB, MIT)');
       const r = await downloadModel('birefnet-portrait', ({ downloaded, total }) => {
         process.stdout.write(`     ${(downloaded / 1024 / 1024).toFixed(1)} / ${(total / 1024 / 1024).toFixed(1)} MB\r`);
-      });
+      }, { destDir: STAGE_MODELS });
       if (!r.ok) throw new Error(r.error);
       process.stdout.write('\n');
     }

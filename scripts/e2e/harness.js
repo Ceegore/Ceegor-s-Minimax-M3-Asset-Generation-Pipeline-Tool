@@ -187,6 +187,21 @@ function createHarness(opts = {}) {
     // windows on the user's desktop (file pickers, Explorer, browser).
     // In E2E we replace them with instant no-op responses so the IPC
     // round-trip is still exercised without disrupting the user.
+    //
+    // B-007 (hhhhu3 audit): fb:confirmDestructive goes through
+    // dialog.showMessageBox (NOT its own channel), so it cannot be
+    // stubbed via DIALOG_CHANNELS. Auto-accept message boxes instead so
+    // the destructive confirm-then-execute flow runs headlessly. The REAL
+    // handler + OperationIntentService still run end-to-end; only the
+    // native dialog itself is bypassed.
+    const electron = require('electron');
+    try {
+      if (electron.dialog && !electron.dialog.__e2ePatched) {
+        electron.dialog.__origShowMessageBox = electron.dialog.showMessageBox;
+        electron.dialog.showMessageBox = async () => ({ response: 1, checkboxChecked: false });
+        electron.dialog.__e2ePatched = true;
+      }
+    } catch (_) { /* dialog patch is best-effort */ }
     const DIALOG_CHANNELS = [
       'install:pickAndCopy', 'batches:saveManualAs',
       'file:pick', 'file:saveAs', 'config:pickFolder', 'inpaint:replaceModel',

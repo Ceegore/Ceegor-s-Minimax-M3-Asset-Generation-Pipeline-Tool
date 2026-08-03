@@ -111,7 +111,8 @@ async function startGenPolling() {
   // is new" (the folder may have had files before the run started).
   try {
     const _g = (window.GrantHelper && window.GrantHelper.ensureDirList) ? await window.GrantHelper.ensureDirList(pollDir) : undefined;
-    const r = (_g && _g.ok === false) ? _g : await window.api.fbList(pollDir, _g);
+    // M-012 (hhhhu3 audit): paginated listing drain (no 5,000-entry truncation).
+    const r = (_g && _g.ok === false) ? _g : await window.FbListPaged.drain(pollDir, _g);
     if (r && r.ok) state._lastPolledItems = (r.items || []).map((it) => it.path);
   } catch (_) {
     state._lastPolledItems = [];
@@ -130,7 +131,8 @@ async function startGenPolling() {
     _genPollBusy = true;
     try {
       const _g2 = (window.GrantHelper && window.GrantHelper.ensureDirList) ? await window.GrantHelper.ensureDirList(pollDir) : undefined;
-      const r = (_g2 && _g2.ok === false) ? _g2 : await window.api.fbList(pollDir, _g2);
+      // M-012 (hhhhu3 audit): paginated listing drain.
+      const r = (_g2 && _g2.ok === false) ? _g2 : await window.FbListPaged.drain(pollDir, _g2);
       if (!r || !r.ok) return;
       const newItems = r.items || [];
       // Filter to supported asset types (isItemVisibleInList) so the
@@ -445,7 +447,10 @@ async function fbClipboardPaste(destDir) {
       // BGR-009 fix: mint move grant (R1.3 gate).
       // gewv2 GEW-002 fix: ensureMove returns { ok, srcGrant, destGrant }.
       const mv = (window.GrantHelper) ? await window.GrantHelper.ensureMove(p, destDir) : undefined;
-      const r = await window.api.fbMove(p, destDir, mv && mv.srcGrant, mv && mv.destGrant);
+      // B-007 (hhhhu3 audit): move needs a one-shot intent token minted by
+      // the native confirmation (window.FbIntent).
+      const r = await window.FbIntent.move(p, destDir, mv && mv.srcGrant, mv && mv.destGrant);
+      if (window.FbIntent.isCanceled(r)) { skipped++; continue; } // user declined the native confirmation
       if (r.ok) ok++; else fail++;
     } else {
       // Copy: read + write via the main process. We don't have a fbCopy

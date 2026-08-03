@@ -8,12 +8,50 @@ const { spawnSync } = require('child_process');
 
 const ROOT = path.resolve(__dirname, '..');
 const releaseDir = path.resolve(process.argv[2] || path.join(ROOT, 'dist-out', 'win-unpacked'));
-const installer = path.join(releaseDir, 'Install MiniMax Asset Tool.cmd');
+// H-015/M-002 (hhhhu3 audit): always test the CURRENT installer from the repo
+// root — a stale copy inside an old build output (dist-out) would silently
+// validate the previous release's installer instead of the fixed one.
+const installer = path.join(ROOT, 'Install MiniMax Asset Tool.cmd');
 const executable = path.join(releaseDir, 'MiniMaxAssetTool.exe');
 
 function fail(message) {
   process.stderr.write(`[test-release-installer] FAIL: ${message}\n`);
   process.exitCode = 1;
+}
+
+// B-001/M-002 (hhhhu3 audit): the installer fails closed when the inner
+// FILES.sha256 manifest is absent, so every test fixture must generate a
+// complete manifest for its mock release tree â€” exactly the way
+// zip-portable.js does for the real release (relative paths, '/' separated,
+// FILES.sha256 itself excluded, sorted by path).
+function writeInnerManifest(treeDir) {
+  const lines = [];
+  (function walk(dir) {
+    for (const ent of fs.readdirSync(dir, { withFileTypes: true })) {
+      const full = path.join(dir, ent.name);
+      if (ent.isDirectory()) { walk(full); continue; }
+      if (ent.name === 'FILES.sha256') continue;
+      const digest = crypto.createHash('sha256').update(fs.readFileSync(full)).digest('hex');
+      lines.push(`${digest}  ${path.relative(treeDir, full).replace(/\\/g, '/')}`);
+    }
+  })(treeDir);
+  lines.sort((a, b) => a.slice(66).localeCompare(b.slice(66)));
+  fs.writeFileSync(path.join(treeDir, 'FILES.sha256'), lines.join('\n') + '\n', 'utf8');
+}
+
+function runInstaller(cwd, extraEnv) {
+  return spawnSync('cmd.exe', ['/d', '/c', path.join(cwd, path.basename(installer))], {
+    cwd,
+    encoding: 'utf8',
+    windowsHide: true,
+    env: {
+      ...process.env,
+      // The fixtures are tiny stand-ins for the real tree; relax the
+      // production minimum-entry count (50) for the completeness check.
+      MINIMAX_MANIFEST_MIN_ENTRIES: '1',
+      ...extraEnv,
+    },
+  });
 }
 
 if (process.platform !== 'win32') {
@@ -45,18 +83,14 @@ if (!fs.existsSync(installer) || !fs.existsSync(executable)) {
       fs.mkdirSync(path.dirname(target), { recursive: true });
       fs.writeFileSync(target, 'installer test', 'utf8');
     }
+    // M-002 (hhhhu3 audit): the fixture carries the mandatory inner manifest.
+    writeInnerManifest(mockSource);
 
-    const result = spawnSync('cmd.exe', ['/d', '/c', path.join(mockSource, path.basename(installer))], {
-      cwd: mockSource,
-      encoding: 'utf8',
-      windowsHide: true,
-      env: {
-        ...process.env,
-        MINIMAX_INSTALL_DIR: installTarget,
-        MINIMAX_INSTALL_DESKTOP: desktop,
-        MINIMAX_INSTALL_START_MENU: startMenu,
-        MINIMAX_INSTALL_NO_LAUNCH: '1',
-      },
+    const result = runInstaller(mockSource, {
+      MINIMAX_INSTALL_DIR: installTarget,
+      MINIMAX_INSTALL_DESKTOP: desktop,
+      MINIMAX_INSTALL_START_MENU: startMenu,
+      MINIMAX_INSTALL_NO_LAUNCH: '1',
     });
     if (result.status !== 0) {
       fail(`installer exited with ${result.status}: ${(result.stderr || result.stdout || '').trim()}`);
@@ -82,6 +116,63 @@ if (!fs.existsSync(installer) || !fs.existsSync(executable)) {
           process.stdout.write('[test-release-installer] PASS: no-admin install validation and shortcuts work\n');
         }
       }
+    }
+
+    // M-002 (hhhhu3 audit): UPGRADE over an existing installation. The old
+    // swap used `ren` with full destination paths (invalid in Windows) â€” this
+    // case exercises the exact code path that broke upgrades (H-015).
+    const upgradeTarget = path.join(temp, 'upgrade app');
+    fs.mkdirSync(path.join(upgradeTarget, 'nested'), { recursive: true });
+    fs.writeFileSync(path.join(upgradeTarget, 'MiniMaxAssetTool.exe'), 'OLD RELEASE', 'utf8');
+    fs.writeFileSync(path.join(upgradeTarget, 'nested', 'old-release-marker.txt'), 'old', 'utf8');
+    const upgradeResult = runInstaller(mockSource, {
+      MINIMAX_INSTALL_DIR: upgradeTarget,
+      MINIMAX_INSTALL_DESKTOP: desktop,
+      MINIMAX_INSTALL_START_MENU: startMenu,
+      MINIMAX_INSTALL_NO_LAUNCH: '1',
+    });
+    const upgradedSentinel = path.join(upgradeTarget, 'nested', 'copy-sentinel.txt');
+    const staleMarker = path.join(upgradeTarget, 'nested', 'old-release-marker.txt');
+    if (upgradeResult.status !== 0) {
+      fail(`upgrade over an existing installation failed: ${(upgradeResult.stderr || upgradeResult.stdout || '').trim()}`);
+    } else if (!fs.existsSync(upgradedSentinel)) {
+      fail('upgrade did not install the new release files');
+    } else if (fs.existsSync(staleMarker)) {
+      fail('upgrade left stale files from the previous installation behind');
+    } else {
+      process.stdout.write('[test-release-installer] PASS: upgrade over an existing installation swaps cleanly\n');
+    }
+
+    // M-002 (hhhhu3 audit): SOURCE-EQUALS-INSTALL path. Re-running the
+    // installer inside the installed directory used to jump to a missing
+    // :shortcuts label (H-016); it must refresh shortcuts and exit cleanly.
+    const sameDirResult = runInstaller(upgradeTarget, {
+      MINIMAX_INSTALL_DIR: upgradeTarget,
+      MINIMAX_INSTALL_DESKTOP: desktop,
+      MINIMAX_INSTALL_START_MENU: startMenu,
+      MINIMAX_INSTALL_NO_LAUNCH: '1',
+    });
+    if (sameDirResult.status !== 0) {
+      fail(`source-equals-install path failed: ${(sameDirResult.stderr || sameDirResult.stdout || '').trim()}`);
+    } else {
+      process.stdout.write('[test-release-installer] PASS: running the installer inside the install directory refreshes shortcuts\n');
+    }
+
+    // M-002 (hhhhu3 audit): TAMPER REJECTION. A file modified after the
+    // manifest was written must fail the integrity check (fail closed).
+    const tamperSource = path.join(temp, 'tampered source');
+    fs.cpSync(mockSource, tamperSource, { recursive: true });
+    fs.appendFileSync(path.join(tamperSource, 'MiniMaxAssetTool.exe'), 'TAMPERED');
+    const tamperResult = runInstaller(tamperSource, {
+      MINIMAX_INSTALL_DIR: path.join(temp, 'tamper install'),
+      MINIMAX_INSTALL_DESKTOP: desktop,
+      MINIMAX_INSTALL_START_MENU: startMenu,
+      MINIMAX_INSTALL_NO_LAUNCH: '1',
+    });
+    if (tamperResult.status === 0) {
+      fail('installer accepted a tampered release tree (integrity check did not fail closed)');
+    } else {
+      process.stdout.write('[test-release-installer] PASS: a tampered release tree is rejected by the integrity check\n');
     }
   } finally {
     try { fs.rmSync(temp, { recursive: true, force: true }); } catch (_) {}
@@ -126,11 +217,14 @@ if (process.platform === 'win32' && fs.existsSync(bootstrapInstaller)) {
         fs.mkdirSync(path.dirname(target), { recursive: true });
         fs.writeFileSync(target, item.endsWith('.bin') ? crypto.randomBytes(16384) : 'installer test');
       }
+      // M-002 (hhhhu3 audit): the inner tree inside the archive also carries
+      // the mandatory FILES.sha256 manifest.
+      writeInnerManifest(appDir);
       // Two independent part zips, each holding a slice of the SAME top folder
       // (extracting both into one destination must merge into that folder).
       const partContents = [
         [`${baseName}\\MiniMaxAssetTool.exe`, `${baseName}\\resources`],
-        [`${baseName}\\nested`, `${baseName}\\${path.basename(bootstrapInstaller)}`],
+        [`${baseName}\\nested`, `${baseName}\\FILES.sha256`, `${baseName}\\${path.basename(bootstrapInstaller)}`],
       ];
       let madeOk = true;
       for (let i = 0; i < partContents.length; i++) {
@@ -153,17 +247,11 @@ if (process.platform === 'win32' && fs.existsSync(bootstrapInstaller)) {
           return `${digest}  ${name}`;
         });
         fs.writeFileSync(path.join(downloadDir, `${baseName}.sha256`), `${lines.join('\n')}\n`, 'utf8');
-        const result = spawnSync('cmd.exe', ['/d', '/c', path.join(downloadDir, path.basename(bootstrapInstaller))], {
-          cwd: downloadDir,
-          encoding: 'utf8',
-          windowsHide: true,
-          env: {
-            ...process.env,
-            MINIMAX_INSTALL_DIR: installTarget,
-            MINIMAX_INSTALL_DESKTOP: desktop,
-            MINIMAX_INSTALL_START_MENU: startMenu,
-            MINIMAX_INSTALL_NO_LAUNCH: '1',
-          },
+        const result = runInstaller(downloadDir, {
+          MINIMAX_INSTALL_DIR: installTarget,
+          MINIMAX_INSTALL_DESKTOP: desktop,
+          MINIMAX_INSTALL_START_MENU: startMenu,
+          MINIMAX_INSTALL_NO_LAUNCH: '1',
         });
         const expected = [
           path.join(installTarget, 'nested', 'bootstrap-sentinel.bin'),
@@ -182,3 +270,5 @@ if (process.platform === 'win32' && fs.existsSync(bootstrapInstaller)) {
     }
   }
 }
+
+

@@ -103,4 +103,21 @@ function relative(root, filePath) {
   return path.relative(root, filePath).replace(/\\/g, '/');
 }
 
-module.exports = { archiveFiles, infoFor, readPackage, releasePaths, relative, validateArchiveSequence };
+// B-002 (hhhhu3 audit): ONE canonical outer release-artifact inventory.
+// The outer <base>.sha256 manifest writer (zip-portable.js), the strict
+// verifier (verify-release.js), the signer (sign-release.js), and the
+// installer bootstrap all agree on exactly this file set — no component
+// computes its own list anymore. Entries are output-dir-relative paths.
+function outerManifestEntries(paths) {
+  const entries = [];
+  // The executable inside the unpacked tree is part of the published set.
+  if (fs.existsSync(paths.executable)) entries.push(relative(paths.output, paths.executable));
+  // Archive: single zip, or every independent part zip.
+  for (const archive of archiveFiles(paths)) entries.push(relative(paths.output, archive));
+  // The dual-purpose installer CMD published beside the archive(s).
+  const installer = path.join(paths.output, 'Install-MiniMax-Asset-Tool.cmd');
+  if (fs.existsSync(installer)) entries.push(relative(paths.output, installer));
+  return entries.sort();
+}
+
+module.exports = { archiveFiles, infoFor, outerManifestEntries, readPackage, releasePaths, relative, validateArchiveSequence };

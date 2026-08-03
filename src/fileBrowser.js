@@ -141,8 +141,25 @@ async function moveTo(src, destDir) {
     if (fssync.existsSync(dest)) {
       throw new Error('Destination "' + dest + '" appeared during the move — refusing to overwrite.');
     }
-    await fs.cp(src, dest, { recursive: true, force: false, errorOnExist: true });
-    await fs.rm(src, { recursive: true, force: true });
+    // M-016 (hhhhu3 audit): structured partial-success recovery for
+    // directory moves.
+    // 1) If the copy fails midway, remove the PARTIAL destination tree
+    //    we created (dest was verified absent above, so anything there
+    //    is ours) and report the failure — the source stays intact.
+    try {
+      await fs.cp(src, dest, { recursive: true, force: false, errorOnExist: true });
+    } catch (cpErr) {
+      try { await fs.rm(dest, { recursive: true, force: true }); } catch (_) {}
+      throw new Error('Directory move failed (destination cleaned up): ' + (cpErr.message || cpErr));
+    }
+    // 2) If the source removal fails after a complete copy, BOTH trees
+    //    exist. Report a structured partial success instead of a
+    //    generic error so the UI can tell the data is safe at `dest`.
+    try {
+      await fs.rm(src, { recursive: true, force: false });
+    } catch (rmErr) {
+      return { path: dest, partialSuccess: true, warning: 'Folder copied to destination but the source could not be fully removed: ' + (rmErr.message || rmErr) };
+    }
   } else {
     // Files: try atomic link+unlink (same-device). fs.link() fails with
     // EEXIST if dest was claimed between name-finding and commit — no
@@ -258,26 +275,51 @@ async function readFile(p, maxBytes = 2 * 1024 * 1024) {
   // replaced or expanded between stat and readFile. Open one descriptor
   // with no-follow semantics and read at most maxBytes + 1 to detect
   // oversized files without a separate stat call.
+  //
+  // M-017 (hhhhu3 audit): growth detection. If the file grows between
+  // stat and read but stays within maxBytes, the stat-sized buffer
+  // would fill and the old code returned a truncated preview. Re-stat
+  // through the SAME descriptor whenever the buffer fills and re-read
+  // with a grown buffer (bounded by maxBytes + 1) until the read
+  // completes or the file exceeds the cap.
   const fd = await fs.open(p, fssync.constants.O_RDONLY | (fssync.constants.O_NOFOLLOW || 0));
   try {
-    const st = await fd.stat();
+    let st = await fd.stat();
     if (st.size > maxBytes) {
       throw new Error(`File too large to preview (${st.size} bytes).`);
     }
-    // Read at most maxBytes + 1 to detect growth between stat and read.
-    const buf = Buffer.alloc(Math.min(st.size, maxBytes) + 1);
-    let totalRead = 0;
-    let pos = 0;
-    while (pos < buf.length) {
-      const { bytesRead } = await fd.read(buf, pos, buf.length - pos, totalRead);
-      if (bytesRead === 0) break;
-      totalRead += bytesRead;
-      pos += bytesRead;
+    let cap = Math.min(st.size, maxBytes) + 1;
+    for (let attempt = 0; attempt < 8; attempt++) {
+      const buf = Buffer.alloc(cap);
+      let totalRead = 0;
+      let pos = 0;
+      while (pos < buf.length) {
+        const { bytesRead } = await fd.read(buf, pos, buf.length - pos, totalRead);
+        if (bytesRead === 0) break;
+        totalRead += bytesRead;
+        pos += bytesRead;
+      }
+      if (totalRead > maxBytes) {
+        throw new Error(`File too large to preview (grew during read).`);
+      }
+      // Buffer did not fill → complete read, no undetected growth.
+      if (totalRead < buf.length) return buf.slice(0, totalRead);
+      // Buffer filled exactly: the file may have grown past stat.size.
+      // Re-stat via the open descriptor and re-read with a grown buffer.
+      const st2 = await fd.stat();
+      if (st2.size > maxBytes) {
+        throw new Error(`File too large to preview (grew during read).`);
+      }
+      const nextCap = Math.min(st2.size, maxBytes) + 1;
+      if (nextCap <= cap) {
+        // No observable growth yet the buffer filled — the file is
+        // changing under us; refuse to return possibly-truncated data.
+        throw new Error('File changed during preview read.');
+      }
+      cap = nextCap;
+      st = st2;
     }
-    if (totalRead > maxBytes) {
-      throw new Error(`File too large to preview (grew during read).`);
-    }
-    return buf.slice(0, totalRead);
+    throw new Error('File changed during preview read.');
   } finally {
     await fd.close();
   }

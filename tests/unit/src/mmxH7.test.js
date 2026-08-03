@@ -1,7 +1,9 @@
 // tests/unit/src/mmxH7.test.js
 // Regression coverage for the H7 mmx fixes:
 //   • H7-013: returned argv never contains the raw API key
-//   • H7-022: session-only mode passes the key via env, never writes to disk
+//   • H7-022: session-only mode never writes the key to disk
+//   • H-007 (hhhhu3 audit): the key travels over the fd-3 credential
+//     bridge — not via ~/.mmx/config.json, not via env, not via argv
 //   • H7-024: tryParseAll parses pretty-printed multi-line JSON objects
 //   • H7-025: a user-canceled job resolves with { canceled: true }
 const test = require('node:test');
@@ -77,29 +79,33 @@ test('tryParseAll handles braces inside string values (no false split)', (t) => 
   assert.equal(r[1].x, 1);
 });
 
-// ---------------- H7-013: redacted argv ----------------
+// ---------------- H7-013 / H-007: key travels over fd 3, never argv/env ----------------
 
-test('runMmx never returns the raw API key in argv (H7-013, HIGH-002: env fallback)', async (t) => {
-  // Intercept spawn so we don't actually launch a child, and force the
-  // env-based fallback path by stubbing the sync to return false.
-  const syncPath = path.join(ROOT, 'src', 'mmxApiKeySync');
-  require.cache[require.resolve(syncPath)] = { exports: { syncApiKeyToMmxCliConfig: () => false, _resetForTest: () => {} } };
+// Build a fake child process whose stdio[3] is a writable credential pipe.
+function fakeProcWithFd3(capture) {
+  return {
+    stdout: { on() {}, resume() {} },
+    stderr: { on() {}, resume() {} },
+    stdio: [null, null, null, { end(payload, enc) { capture.payload = payload; capture.enc = enc; } }],
+    on(ev, cb) { if (ev === 'close') setImmediate(() => cb(0)); },
+    kill() {},
+    killed: false,
+    pid: -1,
+    unref() {},
+  };
+}
+
+test('runMmx routes the key via the fd-3 credential bridge — never argv/env (H7-013, H-007)', async (t) => {
   const cp = require('child_process');
   let capturedEnv = null;
   let capturedArgs = null;
+  let capturedStdio = null;
+  const capture = {};
   t.mock.method(cp, 'spawn', (cmd, args, opts) => {
     capturedArgs = args;
     capturedEnv = opts && opts.env;
-    const fake = {
-      stdout: { on() {}, resume() {} },
-      stderr: { on() {}, resume() {} },
-      on(ev, cb) { if (ev === 'close') setImmediate(() => cb(0)); },
-      kill() {},
-      killed: false,
-      pid: -1,
-      unref() {},
-    };
-    return fake;
+    capturedStdio = opts && opts.stdio;
+    return fakeProcWithFd3(capture);
   });
   delete require.cache[MMX_PATH];
   const mmx2 = require(MMX_PATH);
@@ -107,42 +113,33 @@ test('runMmx never returns the raw API key in argv (H7-013, HIGH-002: env fallba
   const SECRET = 'sk-cp-DO-NOT-LEAK-1234567890';
   const r = await mmx2.runMmx({ args: ['quota'], apiKey: SECRET });
   assert.equal(r.ok, true); // close code 0
-  // HIGH-002: the key must NOT appear in argv at all.
+  // H-007: the key must NOT appear in argv at all.
   const joined = (capturedArgs || []).join(' ');
   assert.ok(!joined.includes(SECRET), `argv leaked the key: ${joined}`);
-  // HIGH-002: --api-key must not appear as a STANDALONE flag in spawn args.
-  // (The bootstrap code string contains the literal '--api-key' because it
-  // reconstructs argv *inside* the child — that's expected and safe since
-  // the key value comes from env, never from the OS command line.)
-  const argsWithoutBootstrap = (capturedArgs || []).filter((a, i) => i !== 1);
-  assert.ok(!argsWithoutBootstrap.includes('--api-key'), `argv must not contain standalone --api-key flag: ${argsWithoutBootstrap.join(' ')}`);
-  // HIGH-002: the key is routed via env MINIMAX_API_KEY + bootstrap.
-  assert.ok(capturedEnv && capturedEnv.MINIMAX_API_KEY === SECRET, 'key must be in env MINIMAX_API_KEY');
-  // The spawn uses the bootstrap: -e <bootstrap> ...fullArgs
-  assert.ok(capturedArgs && capturedArgs[0] === '-e', 'spawn must use -e bootstrap');
+  // The spawn uses the bridge bootstrap: -e <bootstrap> <entry> ...cliArgs
+  assert.ok(capturedArgs && capturedArgs[0] === '-e', 'spawn must use -e bridge bootstrap');
+  assert.ok(/mmx\.mjs$/.test(capturedArgs[2] || ''), 'the bundled mmx entry must follow the bootstrap');
+  assert.ok(!capturedArgs.includes('--api-key'), 'argv must not contain a standalone --api-key flag');
+  // H-007: no environment transport.
+  assert.ok(!capturedEnv || !capturedEnv.MINIMAX_API_KEY, 'the key must NOT be routed via env');
+  // H-007: stdio must carry a 4th (fd 3) pipe and the key arrives over it.
+  assert.ok(Array.isArray(capturedStdio) && capturedStdio.length === 4, 'spawn must open an fd-3 credential pipe');
+  assert.ok(capture.payload, 'sendCredential must write the payload to fd 3');
+  const parsed = JSON.parse(capture.payload);
+  assert.equal(parsed.apiKey, SECRET, 'the fd-3 payload must carry the key');
 });
 
 // ---------------- H7-022: session-only never writes to disk ----------------
 
-test('runMmx in session-only mode does NOT put the key in argv and tags the env (H7-022)', async (t) => {
-  // Intercept spawn to capture the env without actually launching anything.
+test('runMmx in session-only mode uses the same fd-3 bridge, no env/argv/disk (H7-022, H-007)', async (t) => {
   const cp = require('child_process');
   let capturedEnv = null;
   let capturedArgs = null;
-  const origSpawn = cp.spawn;
+  const capture = {};
   t.mock.method(cp, 'spawn', (cmd, args, opts) => {
     capturedEnv = opts && opts.env ? { ...opts.env } : null;
     capturedArgs = args ? args.slice() : null;
-    const fakeProc = {
-      stdout: { on() {}, resume() {} },
-      stderr: { on() {}, resume() {} },
-      on(ev, cb) { if (ev === 'close') setImmediate(() => cb(0)); },
-      kill() {},
-      killed: false,
-      pid: -1,
-      unref() {},
-    };
-    return fakeProc;
+    return fakeProcWithFd3(capture);
   });
   const mmx = freshMmx(t);
   const SECRET = 'sk-cp-SESSION-ONLY-KEY';
@@ -151,9 +148,10 @@ test('runMmx in session-only mode does NOT put the key in argv and tags the env 
   assert.ok(capturedArgs, 'spawn must have been called');
   assert.ok(!capturedArgs.join(' ').includes(SECRET), 'session-only key leaked into argv');
   assert.ok(!capturedArgs.includes('--api-key'), '--api-key flag must not be present in session-only mode');
-  // Key must be in the process-local env.
-  assert.equal(capturedEnv && capturedEnv.MINIMAX_API_KEY, SECRET, 'MINIMAX_API_KEY env must carry the session key');
-  assert.equal(capturedArgs[0], '-e', 'session-only mode must use the argv-hidden bootstrap');
+  // H-007: no environment transport — the key goes over fd 3 only.
+  assert.ok(!capturedEnv || !capturedEnv.MINIMAX_API_KEY, 'session key must not be routed via env');
+  assert.equal(capturedArgs[0], '-e', 'session-only mode must use the argv-hidden bridge bootstrap');
+  assert.equal(JSON.parse(capture.payload).apiKey, SECRET, 'the fd-3 payload must carry the session key');
 });
 
 // ---------------- H7-025: canceled resolves neutral ----------------

@@ -40,7 +40,10 @@ function attachDropTarget(elNode, destDir) {
     // BGR-009 fix: mint move grant (R1.3 gate).
     // gewv2 GEW-002 fix: ensureMove returns { ok, srcGrant, destGrant }.
     const mv = (window.GrantHelper) ? await window.GrantHelper.ensureMove(path, destDir) : undefined;
-    const r = await window.api.fbMove(path, destDir, mv && mv.srcGrant, mv && mv.destGrant);
+    // B-007 (hhhhu3 audit): move needs a one-shot intent token minted by
+    // the native confirmation (window.FbIntent).
+    const r = await window.FbIntent.move(path, destDir, mv && mv.srcGrant, mv && mv.destGrant);
+    if (window.FbIntent.isCanceled(r)) return; // user declined the native confirmation
     if (r.ok) {
       if (window.ToastService) window.ToastService.show('Moved.', { type: 'ok' });
       if (typeof window.refreshBrowser === 'function') await window.refreshBrowser();

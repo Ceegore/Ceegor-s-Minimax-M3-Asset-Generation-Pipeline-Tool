@@ -130,7 +130,8 @@
                   errors.push('upscale failed: ' + ((r && (r.stderr || r.error)) || 'unknown'));
                   // QA-018 fix: delete partial output on failure.
                   const _dg = (window.GrantHelper) ? await window.GrantHelper.ensureDelete(dst) : undefined;
-                  if (window.api && typeof window.api.fbDelete === 'function') window.api.fbDelete(dst, _dg).catch(() => {});
+                  // B-007 (hhhhu3 audit): delete via native confirmation (window.FbIntent).
+                  if (window.FbIntent) window.FbIntent.del(dst, _dg).catch(() => {});
                 }
               } else {
                 const tempOut = dst + '.tmp.png';
@@ -183,15 +184,17 @@
                     }
                   } finally {
                     const delGrant = (window.GrantHelper) ? await window.GrantHelper.ensureDelete(tempOut) : undefined;
-                    if (window.api && typeof window.api.fbDelete === 'function') {
-                      window.api.fbDelete(tempOut, delGrant).catch(() => {});
+                    // B-007 (hhhhu3 audit): delete via native confirmation (window.FbIntent).
+                    if (window.FbIntent) {
+                      window.FbIntent.del(tempOut, delGrant).catch(() => {});
                     }
                   }
                 } else {
                   errors.push('upscale failed: ' + ((r && (r.stderr || r.error)) || 'unknown'));
                   // QA-018 fix: delete partial tempOut on failure.
                   const _dg2 = (window.GrantHelper) ? await window.GrantHelper.ensureDelete(tempOut) : undefined;
-                  if (window.api && typeof window.api.fbDelete === 'function') window.api.fbDelete(tempOut, _dg2).catch(() => {});
+                  // B-007 (hhhhu3 audit): delete via native confirmation (window.FbIntent).
+                  if (window.FbIntent) window.FbIntent.del(tempOut, _dg2).catch(() => {});
                 }
               }
             } else {

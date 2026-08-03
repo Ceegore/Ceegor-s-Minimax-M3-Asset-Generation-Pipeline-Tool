@@ -100,7 +100,7 @@ async function refreshBrowser(opts = {}) {
   async function fbListWithGrant(dir) {
     if (!dir) return { ok: false, error: 'Path is required.' };
     const g = (window.GrantHelper && window.GrantHelper.ensureDirList) ? await window.GrantHelper.ensureDirList(dir) : undefined;
-    return (g && g.ok === false) ? g : window.api.fbList(dir, g);
+    return (g && g.ok === false) ? g : window.FbListPaged.drain(dir, g); // M-012: paginated drain
   }
   if (_refreshInFlight) {
     // Mark a single follow-up; the in-flight refresh will re-run

@@ -28,42 +28,95 @@ const MODALITY_STREAM = Object.freeze({
 });
 
 /**
+ * H-004 (hhhhu3 audit): packaged builds must never execute an ffprobe found
+ * on PATH — only pinned, release-verified binaries are acceptable there.
+ * @returns {boolean}
+ */
+function _isPackaged() {
+  try { return !!require('electron').app.isPackaged; } catch (_) { return false; }
+}
+
+/**
+ * H-004: executables inside the asar archive cannot be spawned; the builder
+ * unpacks them into app.asar.unpacked (asarUnpack rule).
+ * @param {string} p
+ * @returns {string}
+ */
+function _asarUnpacked(p) {
+  return p.replace(/app\.asar([/\\])/, 'app.asar.unpacked$1');
+}
+
+/**
+ * Discover the ffprobe binary. Order:
+ *   1. @ffprobe-installer/ffprobe — pinned npm dependency (H-004);
+ *   2. ffprobe bundled next to ffmpeg-static;
+ *   3. explicitly bundled copies in bin/ and resources/bin (verified by
+ *      scripts/runtime-assets.json in releases);
+ *   4. system PATH — ONLY in unpackaged (dev) mode. H-004 prohibits the
+ *      PATH fallback in packaged builds so an attacker-prepositioned
+ *      ffprobe.exe on PATH can never be executed by release code.
+ * M-022 (hhhhu3 audit): the result (including a negative one) is cached at
+ * module level — previously every artifact re-ran a synchronous
+ * `ffprobe -version` discovery (5 s timeout) that froze the main process.
+ * @returns {string|null}
+ */
+function _discoverFfprobe() {
+  const fs = require('fs');
+  const probeName = process.platform === 'win32' ? 'ffprobe.exe' : 'ffprobe';
+  // 1. Pinned bundled dependency.
+  try {
+    const pinned = require('@ffprobe-installer/ffprobe');
+    if (pinned && pinned.path && fs.existsSync(_asarUnpacked(pinned.path))) return _asarUnpacked(pinned.path);
+  } catch (_) {}
+  // 2. ffmpeg-static bundles ffprobe alongside ffmpeg in some layouts.
+  try {
+    const ffmpegPath = require('ffmpeg-static');
+    if (ffmpegPath) {
+      const probePath = _asarUnpacked(path.join(path.dirname(ffmpegPath), probeName));
+      if (fs.existsSync(probePath)) return probePath;
+    }
+  } catch (_) {}
+  // 3. Explicitly bundled copies (bin/ in dev, resources/bin in releases).
+  const bundledCandidates = [
+    path.join(__dirname, '..', '..', 'bin', probeName),
+    path.join(__dirname, '..', '..', 'resources', 'bin', probeName),
+  ];
+  try {
+    if (process.resourcesPath) bundledCandidates.push(path.join(process.resourcesPath, 'bin', probeName));
+  } catch (_) {}
+  for (const candidate of bundledCandidates) {
+    try { if (fs.existsSync(candidate)) return candidate; } catch (_) {}
+  }
+  // 4. System PATH — dev only (H-004).
+  if (_isPackaged()) return null;
+  try {
+    const { execFileSync } = require('child_process');
+    execFileSync(probeName, ['-version'], { timeout: 5000, windowsHide: true, stdio: 'ignore' });
+    return probeName;
+  } catch (_) {
+    return null; // ffprobe not available
+  }
+}
+
+// M-022 (hhhhu3 audit): module-level discovery cache. `undefined` = not yet
+// resolved; `null` = resolved-absent (also cached, so repeated provider
+// outputs cannot re-trigger the synchronous probe on every artifact).
+let _ffprobeCache;
+
+/**
  * Resolve the ffprobe binary path.
- * Uses ffmpeg-static's bundled ffprobe or falls back to system ffprobe.
  * M-004 (hhhhu2 audit): returns null when ffprobe cannot be found, so the
  * caller can produce a clear diagnostic instead of a cryptic spawn error.
  * @returns {string|null}
  */
 function resolveFfprobe() {
-  const fs = require('fs');
-  try {
-    // ffmpeg-static bundles ffprobe alongside ffmpeg
-    const ffmpegPath = require('ffmpeg-static');
-    if (ffmpegPath) {
-      const dir = path.dirname(ffmpegPath);
-      const probeName = process.platform === 'win32' ? 'ffprobe.exe' : 'ffprobe';
-      const probePath = path.join(dir, probeName);
-      if (fs.existsSync(probePath)) return probePath;
-    }
-  } catch (_) {}
-  // M-004: check for an explicitly bundled ffprobe in the app resources.
-  const bundledCandidates = [
-    path.join(__dirname, '..', '..', 'bin', process.platform === 'win32' ? 'ffprobe.exe' : 'ffprobe'),
-    path.join(__dirname, '..', '..', 'resources', 'bin', process.platform === 'win32' ? 'ffprobe.exe' : 'ffprobe'),
-  ];
-  for (const candidate of bundledCandidates) {
-    try { if (fs.existsSync(candidate)) return candidate; } catch (_) {}
-  }
-  // Fallback: system ffprobe (verify it exists)
-  const systemName = process.platform === 'win32' ? 'ffprobe.exe' : 'ffprobe';
-  try {
-    const { execFileSync } = require('child_process');
-    execFileSync(systemName, ['-version'], { timeout: 5000, windowsHide: true, stdio: 'ignore' });
-    return systemName;
-  } catch (_) {
-    return null; // ffprobe not available
-  }
+  if (_ffprobeCache !== undefined) return _ffprobeCache;
+  _ffprobeCache = _discoverFfprobe();
+  return _ffprobeCache;
 }
+
+/** Test hook: clear the discovery cache. */
+function _resetFfprobeCacheForTest() { _ffprobeCache = undefined; }
 
 /**
  * Probe a media file and validate it against modality constraints.
@@ -82,7 +135,7 @@ async function probeMedia(filePath, opts, signal) {
   const ffprobe = resolveFfprobe();
   // M-004 (hhhhu2 audit): fail with a clear diagnostic when ffprobe is absent.
   if (!ffprobe) {
-    return { ok: false, error: 'ffprobe is not available. Audio/video validation requires a bundled ffprobe binary. Reinstall the application or add ffprobe to PATH.' };
+    return { ok: false, error: 'ffprobe is not available. Audio/video validation requires the bundled ffprobe binary. Reinstall the application.' };
   }
   const maxDuration = opts.maxDurationSec || 3600; // 1 hour default
   const maxWidth = opts.maxWidth || 7680;
@@ -220,4 +273,4 @@ function validateProbeResult(data, resolve, constraints) {
   });
 }
 
-module.exports = { probeMedia, resolveFfprobe, PROBE_TIMEOUT_MS, MODALITY_STREAM };
+module.exports = { probeMedia, resolveFfprobe, _resetFfprobeCacheForTest, PROBE_TIMEOUT_MS, MODALITY_STREAM };

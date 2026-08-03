@@ -255,6 +255,12 @@
   <!-- P3.3 (DA-H-004): app-exit dirty guard — must load AFTER
        imageEditorOverlay.js (uses ImageEditorOverlay._getPersistedCtrl). -->
   <script src="overlays/imageEditorExitGuard.js"></script>
+  <!-- B-007 (hhhhu3 audit): destructive-op confirmation bridge (window.FbIntent)
+       and M-012: paginated directory listing drain (window.FbListPaged).
+       Both only depend on window.api and MUST load before fileBrowser1.js,
+       which drains a listing at load-time (refreshBrowser). -->
+  <script src="services/fbIntentBridge.js"></script>
+  <script src="services/fbListPaged.js"></script>
   <script src="services/fileBrowser1.js"></script>
   <script src="services/fileBrowser2a.js"></script>
   <script src="services/fileBrowser2b.js"></script>

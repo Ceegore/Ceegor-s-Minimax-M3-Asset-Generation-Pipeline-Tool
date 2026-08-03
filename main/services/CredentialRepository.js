@@ -54,6 +54,19 @@ function queueCleanup(id) {
 }
 
 /**
+ * H-008 (hhhhu3 audit): queueCleanup can itself throw (mkdirSync /
+ * writeFileSync failures). It is only ever called AFTER the new
+ * credential reference has been committed — an escape here would turn a
+ * successful replacement into a reported failure and encourage retries
+ * that create more blobs. This wrapper converts any such throw into a
+ * silent cleanup miss (the old blob simply survives).
+ * @param {string} id - Secret ID to queue
+ */
+function safeQueueCleanup(id) {
+  try { queueCleanup(id); } catch (_) { /* committed op must never fail on cleanup */ }
+}
+
+/**
  * Get the persisted credential reference from config.
  * @returns {string} The credential ID or empty string
  */
@@ -86,7 +99,7 @@ function replacePersisted(value) {
   }
   const oldId = persistedReference();
   const { id: newId } = blobs.writeNew('minimax-primary', value.trim());
-  const cfg = cfgMod.read();
+  const cfg = Object.assign({}, cfgMod.read()); // copy: never mutate the reader's object pre-commit
   cfg.api_key = ''; // tolerated only in-memory during migration
   cfg.api_credential_id = newId;
   try {
@@ -100,10 +113,11 @@ function replacePersisted(value) {
   // M-008 (hhhhu2 audit): separate transaction success from cleanup status.
   // Cleanup failures must never convert a committed replacement into a
   // generic failure. Wrap all cleanup in try/catch and report via
-  // cleanupPending.
+  // cleanupPending. H-008 (hhhhu3 audit): safeQueueCleanup additionally
+  // guards the deferred-queue write itself.
   let cleanupPending = false;
   if (oldId && oldId !== newId) {
-    try { blobs.remove(oldId); } catch (_) { queueCleanup(oldId); cleanupPending = true; }
+    try { blobs.remove(oldId); } catch (_) { safeQueueCleanup(oldId); cleanupPending = true; }
   }
   if (clearApiKeyFromMmxCliConfig() !== true) cleanupPending = true;
   return { hasApiKey: true, persisted: true, cleanupPending };
@@ -121,7 +135,7 @@ function useSessionOnly(value) {
   }
   const oldId = persistedReference();
   session.setSessionCredential(value.trim());
-  const cfg = cfgMod.read();
+  const cfg = Object.assign({}, cfgMod.read()); // copy: never mutate the reader's object pre-commit
   cfg.api_key = '';
   cfg.api_credential_id = '';
   try {
@@ -134,7 +148,8 @@ function useSessionOnly(value) {
   if (oldId) {
     // M-008/M-009 (hhhhu2 audit): cleanup failures are reported via
     // cleanupPending, never thrown. Deferred blob cleanup is included.
-    try { blobs.remove(oldId); } catch (_) { queueCleanup(oldId); cleanupPending = true; }
+    // H-008 (hhhhu3 audit): safeQueueCleanup cannot throw out.
+    try { blobs.remove(oldId); } catch (_) { safeQueueCleanup(oldId); cleanupPending = true; }
   }
   if (clearApiKeyFromMmxCliConfig() !== true) cleanupPending = true;
   return { hasApiKey: true, persisted: false, cleanupPending };
@@ -146,7 +161,7 @@ function useSessionOnly(value) {
  */
 function clearPrimary() {
   const oldId = persistedReference();
-  const cfg = cfgMod.read();
+  const cfg = Object.assign({}, cfgMod.read()); // copy: never mutate the reader's object pre-commit
   cfg.api_key = '';
   cfg.api_credential_id = '';
   cfgMod.write(cfg); // stop all future resolution first
@@ -154,10 +169,80 @@ function clearPrimary() {
 
   let cleanupPending = false;
   if (oldId) {
-    try { blobs.remove(oldId); } catch (_) { queueCleanup(oldId); cleanupPending = true; }
+    try { blobs.remove(oldId); } catch (_) { safeQueueCleanup(oldId); cleanupPending = true; }
   }
   if (clearApiKeyFromMmxCliConfig() !== true) cleanupPending = true;
   return { hasApiKey: false, cleanupPending };
+}
+
+/**
+ * H-009 (hhhhu3 audit): ONE transaction for a config:set key action.
+ *
+ * The caller passes the fully merged, sanitized settings object it wants
+ * committed; this function performs EXACTLY ONE cfgMod.write per action,
+ * fusing the credential change and the settings change into a single
+ * atomic commit. Explicit states:
+ *   • committed        — the single write succeeded (normal return);
+ *   • cleanup-pending  — committed, but legacy residue (old blob /
+ *                        ~/.mmx copy) could not be removed yet
+ *                        (cleanupPending: true);
+ *   • failed           — threw BEFORE the commit (nothing changed on
+ *                        disk; a fresh blob, if any, was rolled back).
+ *
+ * This replaces the old two-write flow (repository write + second generic
+ * config write) where the second write could fail after the credential
+ * was already committed, reporting a false failure.
+ *
+ * @param {{action: 'keep'|'replace'|'clear', value?: string, config: object}} opts
+ * @returns {{hasApiKey: boolean, persisted?: boolean, cleanupPending: boolean}}
+ * @throws {AppError|Error} Only when the commit itself fails (pre-commit)
+ */
+function commitKeyAction({ action, value, config }) {
+  if (!config || typeof config !== 'object' || Array.isArray(config)) {
+    throw new AppError(CODES.INVALID_ARGUMENT, 'commitKeyAction requires a config object.');
+  }
+  const cfg = Object.assign({}, config);
+  const oldId = persistedReference();
+  if (action === 'replace') {
+    if (typeof value !== 'string' || value.trim().length === 0) {
+      throw new AppError(CODES.INVALID_ARGUMENT, 'API key is required.');
+    }
+    // Blob first, so the committed reference always resolves.
+    const { id: newId } = blobs.writeNew('minimax-primary', value.trim());
+    cfg.api_key = ''; // never persist plaintext
+    cfg.api_credential_id = newId;
+    try {
+      cfgMod.write(cfg); // THE single atomic commit point
+    } catch (error) {
+      try { blobs.remove(newId); } catch (_) {} // roll back the fresh blob
+      throw error; // nothing committed — caller may report failure cleanly
+    }
+    session.clearSessionCredential();
+    let cleanupPending = false;
+    if (oldId && oldId !== newId) {
+      try { blobs.remove(oldId); } catch (_) { safeQueueCleanup(oldId); cleanupPending = true; }
+    }
+    if (clearApiKeyFromMmxCliConfig() !== true) cleanupPending = true;
+    return { hasApiKey: true, persisted: true, cleanupPending };
+  }
+  if (action === 'clear') {
+    cfg.api_key = '';
+    cfg.api_credential_id = '';
+    cfgMod.write(cfg); // commit first: the reference is gone before blob removal
+    session.clearSessionCredential();
+    let cleanupPending = false;
+    if (oldId) {
+      try { blobs.remove(oldId); } catch (_) { safeQueueCleanup(oldId); cleanupPending = true; }
+    }
+    if (clearApiKeyFromMmxCliConfig() !== true) cleanupPending = true;
+    return { hasApiKey: false, cleanupPending };
+  }
+  // 'keep': re-commit the settings with the EXISTING reference intact and
+  // any plaintext stripped.
+  cfg.api_key = '';
+  cfg.api_credential_id = oldId;
+  cfgMod.write(cfg);
+  return { hasApiKey: !!oldId, persisted: !!oldId, cleanupPending: false };
 }
 
 /**
@@ -182,5 +267,6 @@ module.exports = {
   useSessionOnly,
   clearPrimary,
   migrateLegacy,
+  commitKeyAction,
   queueCleanup,
 };

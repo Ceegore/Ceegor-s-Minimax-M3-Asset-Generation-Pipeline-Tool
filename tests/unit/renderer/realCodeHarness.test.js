@@ -295,6 +295,11 @@ test('HARNESS 2: fileBrowser1 exports the supported-file filter', () => {
   // defined at the top of app.js). Provide minimal stubs.
   win.$ = (sel) => win.document.getElementById(sel);
   win.$$ = (sel) => [];
+  // M-012 (hhhhu3 audit): fileBrowser1 lists via window.FbListPaged.drain;
+  // load the real bridge first (it falls back to the fbList stub above
+  // because the paginated surface is not present in this mock).
+  delete require.cache[require.resolve(path.join(ROOT, 'renderer', 'services', 'fbListPaged.js'))];
+  require(path.join(ROOT, 'renderer', 'services', 'fbListPaged.js'));
   // The IIFE also calls refreshBrowser() at load time. The
   // fbList stub returns {ok:true, items:[]}, so refreshBrowser
   // walks through and re-renders (the render touches $('#fb-list')

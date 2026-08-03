@@ -7,6 +7,12 @@
  * Backup cleanup failure never removes a successfully activated and
  * verified runtime.
  *
+ * L-002 (hhhhu3 audit) scope note: recovery is invoked by the NEXT
+ * `node scripts/setup.js` run (RuntimeInstaller.recover()), not
+ * automatically on app boot. States not covered by the rollback rules
+ * below surface as an error for a manual re-run — "recoverable" here
+ * does not mean "self-healing in every crash window".
+ *
  * Directory layout (sibling paths on the same volume):
  *   bin/                         active runtime
  *   .bin-stage-<transactionId>/  fully verified candidate
@@ -14,7 +20,8 @@
  *   .setup-transaction.json      state marker in project-controlled parent
  *
  * States:
- *   STAGING → VERIFIED_STAGE → BACKED_UP → ACTIVATED → VERIFIED_ACTIVE → COMMITTED → CLEANED
+ *   STAGING → VERIFIED_STAGE → BACKED_UP → ACTIVATING → ACTIVATED
+ *   → VERIFIED_ACTIVE → COMMITTED → CLEANED
  *
  * Rollback rules:
  *   - before ACTIVATED: remove stage only
@@ -78,11 +85,14 @@ class RuntimeInstaller {
 
   /**
    * Begin a new installation transaction.
+   * @param {{ verifyFn?: (activePath: string) => boolean }} [opts]
    * @returns {{ transactionId: string, stagePath: string }}
    */
-  begin() {
-    // First, recover any incomplete transaction
-    this.recover();
+  begin(opts = {}) {
+    // First, recover any incomplete transaction.
+    // H-013 (hhhhu3 audit): forward the verification callback so recovery of
+    // an interrupted activation is VERIFIED instead of committed blindly.
+    this.recover(opts);
 
     const transactionId = crypto.randomUUID();
     const { stagePath } = this.siblingPaths(transactionId);
@@ -145,7 +155,13 @@ class RuntimeInstaller {
       writeMarker(this.markerPath, marker);
     }
 
-    // Activate: rename stage to active
+    // Activate: rename stage to active.
+    // H-012 (hhhhu3 audit): journal the activation intent BEFORE the rename.
+    // A crash between renameSync and the ACTIVATED marker used to leave an
+    // unverified active runtime that recovery would accept; recovery now
+    // sees ACTIVATING and reconciles active/stage/backup with the verifier.
+    marker.state = 'ACTIVATING';
+    writeMarker(this.markerPath, marker);
     fs.renameSync(marker.stagePath, this.activePath);
     marker.state = 'ACTIVATED';
     writeMarker(this.markerPath, marker);
@@ -196,7 +212,7 @@ class RuntimeInstaller {
 
     if (marker.state === 'COMMITTED' || marker.state === 'CLEANED') return;
 
-    if (marker.state === 'ACTIVATED' || marker.state === 'VERIFIED_ACTIVE') {
+    if (marker.state === 'ACTIVATED' || marker.state === 'VERIFIED_ACTIVE' || marker.state === 'ACTIVATING') {
       // Active was renamed but not committed — rollback
       this._rollbackToBackup(marker);
     } else if (marker.state === 'BACKED_UP' || marker.state === 'BACKING_UP') {
@@ -233,8 +249,8 @@ class RuntimeInstaller {
     if (!marker || marker.schemaVersion !== SCHEMA_VERSION || !marker.transactionId) {
       return { recovered: false, error: 'Invalid transaction marker schema.' };
     }
-    // H-009: accept transient BACKING_UP state as valid.
-    const validStates = [...VALID_STATES, 'BACKING_UP'];
+    // H-009: accept transient BACKING_UP/ACTIVATING intent states as valid.
+    const validStates = [...VALID_STATES, 'BACKING_UP', 'ACTIVATING'];
     if (!validStates.includes(marker.state)) {
       return { recovered: false, error: `Invalid state: ${marker.state}` };
     }
@@ -264,14 +280,35 @@ class RuntimeInstaller {
 
       case 'BACKING_UP':
       case 'BACKED_UP':
-        // Backup exists but stage was not yet renamed to active
-        // Restore backup to active
-        if (marker.backupPath && fs.existsSync(marker.backupPath) && !fs.existsSync(this.activePath)) {
+      case 'ACTIVATING': {
+        // H-012 (hhhhu3 audit): if the stage was ALREADY renamed to active
+        // (crash between the rename and the ACTIVATED marker), the active
+        // tree is UNVERIFIED — reconcile it with the verifier; never accept
+        // it blindly and never delete the backup first.
+        if (fs.existsSync(this.activePath)) {
+          const verifyFn = opts && opts.verifyFn;
+          if (verifyFn && verifyFn(this.activePath)) {
+            // Verified — commit the interrupted activation.
+            if (marker.backupPath && fs.existsSync(marker.backupPath)) {
+              try { fs.rmSync(marker.backupPath, { recursive: true, force: true }); } catch (_) {}
+            }
+            this._removeMarker();
+            return { recovered: true, action: 'committed-verified-activation' };
+          }
+          // Unverifiable or failed — restore the known-good backup and move
+          // the unverified active tree aside.
+          this._rollbackToBackup(marker);
+          this._removeMarker();
+          return { recovered: true, action: 'rolled-back-unverified-activation' };
+        }
+        // The stage rename did not complete — restore backup to active.
+        if (marker.backupPath && fs.existsSync(marker.backupPath)) {
           fs.renameSync(marker.backupPath, this.activePath);
         }
         this._removeStage(marker);
         this._removeMarker();
         return { recovered: true, action: 'restored-backup' };
+      }
 
       case 'ACTIVATED':
       case 'VERIFIED_ACTIVE': {
@@ -280,18 +317,32 @@ class RuntimeInstaller {
         // verification succeeds.
         if (fs.existsSync(this.activePath)) {
           const verifyFn = opts && opts.verifyFn;
-          if (verifyFn && !verifyFn(this.activePath)) {
+          if (verifyFn && verifyFn(this.activePath)) {
+            // Verified — commit and delete the backup.
+            if (marker.backupPath && fs.existsSync(marker.backupPath)) {
+              try { fs.rmSync(marker.backupPath, { recursive: true, force: true }); } catch (_) {}
+            }
+            this._removeMarker();
+            return { recovered: true, action: 'committed-interrupted-activation' };
+          }
+          if (verifyFn) {
             // Verification failed — rollback to backup
             this._rollbackToBackup(marker);
             this._removeMarker();
             return { recovered: true, action: 'rolled-back-failed-verification' };
           }
-          // Verified (or no verifyFn provided) — commit
+          // H-013 (hhhhu3 audit): no verifier was supplied. NEVER commit an
+          // interrupted activation in that case — restore the known-good
+          // backup instead of deleting it behind an unverified runtime.
           if (marker.backupPath && fs.existsSync(marker.backupPath)) {
-            try { fs.rmSync(marker.backupPath, { recursive: true, force: true }); } catch (_) {}
+            this._rollbackToBackup(marker);
+            this._removeMarker();
+            return { recovered: true, action: 'rolled-back-unverifiable-activation' };
           }
+          // No verifier and no backup to restore — keep the active tree;
+          // there is no safer alternative.
           this._removeMarker();
-          return { recovered: true, action: 'committed-interrupted-activation' };
+          return { recovered: true, action: 'kept-active-no-backup-available' };
         }
         // Active missing — rollback
         this._rollbackToBackup(marker);

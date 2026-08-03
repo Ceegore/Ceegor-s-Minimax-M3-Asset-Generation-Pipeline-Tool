@@ -20,7 +20,7 @@
  * cannot supply an offset into another session.
  */
 
-const fs = require('fs');
+const fs = require('fs').promises;
 const path = require('path');
 const crypto = require('crypto');
 const { CODES, AppError } = require('../errors/AppError');
@@ -65,6 +65,13 @@ async function boundedLstat(paths, concurrency) {
   return results;
 }
 
+// M-013 (hhhhu3 audit): cursors are random opaque tokens tracked
+// server-side. The renderer can never supply (or guess) an offset — it
+// must present the exact token issued with the previous page.
+function mintCursor() {
+  return crypto.randomBytes(16).toString('hex');
+}
+
 class DirectoryListingService {
   /**
    * @param {{ now?: () => number }} [opts]
@@ -106,10 +113,12 @@ class DirectoryListingService {
       throw new AppError(CODES.INVALID_ARGUMENT, `Unsupported direction: ${direction}`);
     }
 
-    // Canonicalize and validate directory
+    // Canonicalize and validate directory.
+    // L-004 (hhhhu3 audit): async lstat/readdir so a very large or
+    // slow/network-backed folder never stalls the Main event loop.
     const canonicalDir = path.resolve(dir);
     let dirStat;
-    try { dirStat = fs.lstatSync(canonicalDir); } catch (_) {
+    try { dirStat = await fs.lstat(canonicalDir); } catch (_) {
       throw new AppError(CODES.INVALID_ARGUMENT, 'Directory not found.');
     }
     if (dirStat.isSymbolicLink()) {
@@ -125,7 +134,7 @@ class DirectoryListingService {
     // Read directory entries once
     let dirents;
     try {
-      dirents = fs.readdirSync(canonicalDir, { withFileTypes: true });
+      dirents = await fs.readdir(canonicalDir, { withFileTypes: true });
     } catch (e) {
       throw new AppError(CODES.INVALID_ARGUMENT, `Cannot read directory: ${e.message}`);
     }
@@ -205,20 +214,27 @@ class DirectoryListingService {
       directoryVersion,
       createdAt: this.now(),
       lastAccess: this.now(),
+      // M-013 (hhhhu3 audit): server-tracked cursor state. The token
+      // handed to the renderer is random; the offset it represents is
+      // never disclosed, so a caller cannot skip, repeat, or rewind.
+      expectedCursor: null,
+      expectedOffset: 0,
     };
     this.sessions.set(sessionId, session);
     this._trackSender(senderId, sessionId);
     this._scheduleEviction();
 
     // Return first page
-    const cursor = String(pageSize); // opaque cursor = next offset
     const pageItems = items.slice(0, pageSize);
+    const hasMore = items.length > pageSize;
+    session.expectedOffset = pageSize;
+    session.expectedCursor = hasMore ? mintCursor() : null;
     return {
       sessionId,
-      cursor,
+      cursor: session.expectedCursor,
       items: pageItems,
       totalCount: items.length,
-      hasMore: items.length > pageSize,
+      hasMore,
       directoryVersion,
     };
   }
@@ -226,9 +242,9 @@ class DirectoryListingService {
   /**
    * Get the next page of a listing session.
    * @param {{ sessionId: string, cursor: string, senderId: number }} opts
-   * @returns {{ cursor: string, items: object[], hasMore: boolean, directoryVersion: string }}
+   * @returns {Promise<{ cursor: string|null, items: object[], hasMore: boolean, directoryVersion: string }>}
    */
-  listNext(opts) {
+  async listNext(opts) {
     const { sessionId, cursor, senderId } = opts;
     const session = this.sessions.get(sessionId);
     if (!session || session.senderId !== senderId) {
@@ -241,9 +257,17 @@ class DirectoryListingService {
       throw new AppError(CODES.INVALID_ARGUMENT, 'Listing session expired.');
     }
 
+    // M-013 (hhhhu3 audit): the cursor must be the EXACT random token
+    // issued with the previous page. Offsets are server-tracked, so the
+    // renderer cannot skip, repeat, or rewind pages.
+    if (!session.expectedCursor || typeof cursor !== 'string' || cursor !== session.expectedCursor) {
+      throw new AppError(CODES.INVALID_ARGUMENT, 'Invalid listing cursor. Restart the listing session.');
+    }
+
     // Check directory version (detect changes)
     try {
-      const dirStat = fs.lstatSync(session.canonicalDir);
+      // L-004 (hhhhu3 audit): async lstat — no Main-thread stall.
+      const dirStat = await fs.lstat(session.canonicalDir);
       const currentVersion = `${dirStat.mtimeMs}`;
       const storedMtime = session.directoryVersion.split(':')[0];
       if (currentVersion !== storedMtime) {
@@ -257,14 +281,16 @@ class DirectoryListingService {
     }
 
     session.lastAccess = this.now();
-    const offset = parseInt(cursor, 10) || 0;
+    const offset = session.expectedOffset;
     const pageItems = session.items.slice(offset, offset + session.pageSize);
-    const nextCursor = String(offset + session.pageSize);
+    const hasMore = offset + session.pageSize < session.items.length;
+    session.expectedOffset = offset + session.pageSize;
+    session.expectedCursor = hasMore ? mintCursor() : null;
 
     return {
-      cursor: nextCursor,
+      cursor: session.expectedCursor,
       items: pageItems,
-      hasMore: offset + session.pageSize < session.items.length,
+      hasMore,
       directoryVersion: session.directoryVersion,
     };
   }

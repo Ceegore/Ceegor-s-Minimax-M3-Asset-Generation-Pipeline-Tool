@@ -18,26 +18,13 @@ const { findNodeExe, findMmxEntry, needsRunAsNode, isWindows } = require('./mmxR
 const { currentGenProcs, procsByJobId, getActiveProcs, killWithEscalation: _killWithEscalation, cancelOne, cancelByJobId, cancelAll } = require('./mmxProcTracker');
 
 const AGENT_FLAGS = ['--non-interactive'];
-// mmx-cli 1.0.18 notices MINIMAX_API_KEY but does not promote it to the
-// non-interactive command context. This bootstrap consumes the ephemeral env
-// value inside the child and injects it into process.argv only after spawn, so
-// the key never appears in the operating-system process command line.
-const SESSION_KEY_BOOTSTRAP = "const{pathToFileURL}=require('url');const[e,...a]=process.argv.slice(1);const k=process.env.MINIMAX_API_KEY;delete process.env.MINIMAX_API_KEY;process.argv=[process.execPath,e,...a,'--api-key',k];import(pathToFileURL(e).href)";
-
-// Route the API key through mmx-cli's own config file instead of --api-key argv.
-// On Windows, any local process can read every other process's argv via WMI,
-// exposing the key for the entire call duration. mmx-cli resolves auth from
-// ~/.mmx/config.json, so we sync the key into that file before each spawn and
-// let mmx-cli read it directly. File exposure requires filesystem access (which
-// already implies the attacker could read our config.txt), so this narrows the
-// exposure surface. The sync is best-effort: a failure falls back to the
-// legacy --api-key argv path so the call still works when ~/.mmx is unwritable.
-// The API-key sync lives in src/mmxApiKeySync.js. It tracks the file's
-// mtime+size so an external `mmx config set` is detected even when the
-// in-memory hash matches. The test harness clears both the mmx.js and
-// mmxApiKeySync.js module caches in withMmxMocks so the latest `fs` mock
-// is picked up.
-const { syncApiKeyToMmxCliConfig: _syncApiKeyToMmxCliConfig } = require('./mmxApiKeySync');
+// H-007 (hhhhu3 audit): the API key travels over file descriptor 3 via
+// src/mmxCredentialBridge.js — no ~/.mmx/config.json copy, no environment
+// variable, no argv exposure. The bridge's bootstrap reads the key from
+// fd 3 INSIDE the child and injects it into process.argv only after the
+// OS process command line has been created (AUD-001 "fd 3, no environment
+// and no persistent CLI copy" is now the live behavior).
+const credentialBridge = require('./mmxCredentialBridge');
 
 // Build a minimal env for the spawned mmx process. We deliberately do
 // NOT pass `process.env` wholesale: that would leak every environment
@@ -174,9 +161,9 @@ function safeCall(cb, ...args) {
 //
 // Note: this is purely a defence against a renderer that TRIES to
 // bypass the SessionCredentialStore flow. The legitimate API key
-// routing (--api-key argv fallback when ~/.mmx sync fails) still
-// runs in its own controlled block below — that path uses the
-// Main-side `apiKey` parameter, not the renderer's `args`.
+// routing (the fd-3 credential bridge, H-007) still runs in its own
+// controlled block below — that path uses the Main-side `apiKey`
+// parameter, not the renderer's `args`.
 // R2.4: argv sanitizer lives in src/mmxArgSanitizer.js.
 
 // cwd validation: see src/mmxCwd.js for the full rationale. We accept cwd
@@ -235,46 +222,39 @@ function runMmx({ args, apiKey, cwd, onLog, onChunk, jobId, sessionOnly }) {
     // R2.4: defence-in-depth against a renderer that tries to smuggle
     // `--api-key=VALUE` or `--api-key VALUE` into the spawn argv.
     const sanitisedArgs = _stripRendererSuppliedApiKey(args);
-    const fullArgs = [
-      ...r.prefix,
+    const cliArgs = [
       ...sanitisedArgs,
       '--output', 'json',
       ...AGENT_FLAGS,
     ];
-    // Route the API key through mmx-cli's own ~/.mmx/config.json instead of
-    // --api-key argv. argv is readable by any local process on Windows via
-    // WMI; the file path is readable only via filesystem access (which already
-    // implies the attacker could read our config.txt). When the sync fails
-    // (e.g. ~/.mmx is read-only), fall back to the legacy --api-key argv so
-    // the call still works.
-    //
-    // Session-only mode (H7-022): the user opted out of persisting the key.
-    // We must NOT write it to ~/.mmx/config.json (that would break the
-    // "credentials never touch disk" promise). The argv fallback would also
-    // put the key on disk via the OS command audit log, so we route the key
-    // through an ephemeral process-local env var and child bootstrap instead. The
-    // env is never persisted and dies with the child process.
-    let keySyncedToConfig = false;
-    let keyInArgv = false;
+    // fullArgs (prefix + cli) is used for diagnostics and the keyless path;
+    // the credential-bridge path spawns `node -e <bootstrap> <entry> <cli>`.
+    const fullArgs = [...r.prefix, ...cliArgs];
+    // H-007 (hhhhu3 audit): route the API key through the fd-3 credential
+    // bridge. The key never touches ~/.mmx/config.json, the child env, or
+    // the OS command line — the bridge bootstrap reads it from fd 3 inside
+    // the child and appends --api-key to process.argv only after spawn.
+    // Session-only and persisted keys use the SAME transport; session-only
+    // additionally never had (and still has no) disk copy anywhere.
     let childEnv = buildChildEnv();
     let spawnArgs = fullArgs;
+    let spawnStdio;
+    let bridgeKey = null;
     if (apiKey) {
-      if (sessionOnly) {
-        // Ephemeral env: process-local, never written to disk, gone when the
-        // child exits. The bootstrap injects --api-key only inside the child,
-        // after the OS process command line has already been created.
-        childEnv = { ...childEnv, MINIMAX_API_KEY: apiKey };
-        spawnArgs = ['-e', SESSION_KEY_BOOTSTRAP, ...fullArgs];
-      } else {
-        keySyncedToConfig = _syncApiKeyToMmxCliConfig(apiKey);
-        if (!keySyncedToConfig) {
-          // HIGH-002: NO argv fallback. When ~/.mmx sync fails, use the
-          // same ephemeral env+bootstrap path as session-only mode. The
-          // key never appears in the OS process command line.
-          childEnv = { ...childEnv, MINIMAX_API_KEY: apiKey };
-          spawnArgs = ['-e', SESSION_KEY_BOOTSTRAP, ...fullArgs];
-        }
+      if (!r.entry) {
+        // No bundled mmx entry (external `mmx` on PATH): there is no fd-3
+        // transport and no safe fallback — fail closed instead of writing
+        // the key to disk or the environment (AUD-001 / H-007).
+        const msg = '[mmx] no secure credential transport available: the bundled mmx-cli entry was not found. Run `node scripts/setup.js` to install the bundled runtime.';
+        safeCall(onLog, msg);
+        safeCall(onChunk, { line: msg, jobId: jobId || null, kind: 'stderr' });
+        resolveP({ ok: false, code: -1, canceled: false, stdout: '', stderr: msg, parsed: null, command: r.command || '', argv: [] });
+        return;
       }
+      const prepared = credentialBridge.prepare(r.entry, cliArgs);
+      spawnArgs = prepared.argv;
+      spawnStdio = prepared.stdio;
+      bridgeKey = apiKey;
     }
     // Build a REDACTED argv copy for IPC/diagnostics (H7-013). R2.4: delegated to mmxResultRedactor.
     const redactedArgs = _redactArgv(fullArgs);
@@ -320,7 +300,7 @@ function runMmx({ args, apiKey, cwd, onLog, onChunk, jobId, sessionOnly }) {
       if (needsRunAsNode(r.command)) childEnv = { ...childEnv, ELECTRON_RUN_AS_NODE: '1' };
       // Use a whitelisted env instead of the full process.env — see
       // buildChildEnv for the rationale.
-      proc = spawn(r.command, spawnArgs, { cwd: safeCwd, windowsHide: true, env: childEnv });
+      proc = spawn(r.command, spawnArgs, Object.assign({ cwd: safeCwd, windowsHide: true, env: childEnv }, spawnStdio ? { stdio: spawnStdio } : {}));
       // Track every active proc in a Set so cancelOne(proc) can kill a
       // specific in-flight generation while leaving sibling procs (e.g. a
       // parallel quota check) alone. cancelAll() remains the "panic" button.
@@ -347,6 +327,22 @@ function runMmx({ args, apiKey, cwd, onLog, onChunk, jobId, sessionOnly }) {
       // than undefined for the IPC marshal.
       resolveP({ ok: false, code: -1, canceled: false, stdout: '', stderr: String(err), parsed: null, command: r.command || '', argv: redactedArgs });
       return;
+    }
+
+    // H-007: hand the key to the child over fd 3 now that the process
+    // exists. A broken credential pipe is a hard failure — kill the child
+    // and report instead of letting it run unauthenticated.
+    if (bridgeKey) {
+      try {
+        credentialBridge.sendCredential(proc, bridgeKey);
+      } catch (credErr) {
+        clearTimeout(killTimer);
+        try { proc.kill(); } catch (_) {}
+        currentGenProcs.delete(proc);
+        if (jobId) procsByJobId.delete(jobId);
+        resolveP({ ok: false, code: -1, canceled: false, stdout: '', stderr: 'mmx: credential bridge failed: ' + ((credErr && credErr.message) || credErr), parsed: null, command: r.command || '', argv: redactedArgs });
+        return;
+      }
     }
 
     proc.stdout.on('data', (b) => {

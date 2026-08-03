@@ -702,7 +702,7 @@ test('P5 DA-M-017: clipboard temp files cleaned in finally (revert guard)', () =
   const code = fs.readFileSync(path.join(ROOT, 'renderer', 'pipeline', 'pipelineImport.js'), 'utf8');
   assert.ok(/tempPaths/.test(code), 'must track temp paths');
   assert.ok(/finally/.test(code), 'cleanup must be in a finally block');
-  assert.ok(/fbDelete\(tp/.test(code), 'must delete each temp file');
+  assert.ok(/FbIntent\.del\(tp/.test(code), 'must delete each temp file (via the B-007 confirm bridge)');
   assert.ok(/dirR && dirR\.ok === false/.test(code), 'must check fbEnsureDir result');
 });
 

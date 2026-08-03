@@ -29,6 +29,11 @@ function _fetchSignal(signal, timeoutMs) {
 // H-004 (hhhhu2 audit): bounded response body reading. A malicious or
 // malfunctioning endpoint must not be able to exhaust main-process memory.
 const MAX_JSON_BYTES = 4 * 1024 * 1024;   // 4 MB for JSON responses
+// M-006 (hhhhu3 audit): image generation responses can carry base64 payloads
+// up to the finalizer's 100 MiB image budget. Base64 inflates ~4/3, so cap
+// the images() JSON body at 160 MiB instead of the generic 4 MiB (which
+// rejected valid large images). All other endpoints keep the 4 MiB cap.
+const MAX_IMAGE_JSON_BYTES = 160 * 1024 * 1024;
 const MAX_ERROR_BYTES = 16 * 1024;         // 16 KB for error bodies
 const MAX_BINARY_BYTES = 100 * 1024 * 1024; // 100 MB for binary (speech)
 
@@ -77,7 +82,40 @@ async function _errorText(res) {
 // Max time (ms) to poll an async video job before giving up.
 const VIDEO_MAX_WAIT_MS = 10 * 60 * 1000; // 10 minutes
 
-async function listModels({ baseUrl, apiKey, signal }) {
+// M-007 (hhhhu3 audit): abortable polling delay — cancellation no longer has
+// to wait out the full 3 s sleep. The abort listener is removed when the
+// timer resolves normally (M-008 pattern) so long jobs don't accumulate
+// listeners on the job signal.
+function abortableDelay(ms, signal) {
+  return new Promise((resolve, reject) => {
+    if (signal && signal.aborted) return reject(new Error('cancelled'));
+    let onAbort;
+    const timer = setTimeout(() => {
+      if (signal && onAbort) signal.removeEventListener('abort', onAbort);
+      resolve();
+    }, ms);
+    if (signal) {
+      onAbort = () => { clearTimeout(timer); reject(new Error('cancelled')); };
+      signal.addEventListener('abort', onAbort, { once: true });
+    }
+  });
+}
+
+// H-001 (hhhhu3 audit): every function accepts an injected `http` client
+// (SafeHttpClient contract: json(url, options, policy) / bytes(...)).
+// Production IPC callers always inject it — DNS pinning, redirect policy and
+// unified caps then apply to listing/submit/poll, not just output downloads.
+// The fetch paths below remain ONLY for direct unit tests (no injection).
+
+async function listModels({ baseUrl, apiKey, signal, http }) {
+  if (http) {
+    // MED-007: 15 s ceiling preserved via the client's total-timeout policy.
+    const j = await http.json(_base(baseUrl) + '/models', {
+      headers: { Authorization: 'Bearer ' + apiKey },
+      signal,
+    }, { maxJsonBytes: MAX_JSON_BYTES, maxErrorBytes: MAX_ERROR_BYTES, totalTimeoutMs: 15000 });
+    return (j.data || []).map((m) => m.id).filter(Boolean);
+  }
   // MED-007: enforce a 15s timeout so a hung /models endpoint cannot
   // block the settings UI indefinitely.
   const res = await fetch(_base(baseUrl) + '/models', {
@@ -89,16 +127,27 @@ async function listModels({ baseUrl, apiKey, signal }) {
   return (j.data || []).map((m) => m.id).filter(Boolean);
 }
 
-async function images({ baseUrl, apiKey, model, prompt, params, signal }) {
+async function images({ baseUrl, apiKey, model, prompt, params, signal, http }) {
   const body = Object.assign({ model, prompt, n: 1, response_format: 'b64_json' }, params || {});
-  const res = await fetch(_base(baseUrl) + '/images/generations', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + apiKey },
-    body: JSON.stringify(body),
-    signal: _fetchSignal(signal),
-  });
-  if (!res.ok) throw new Error('images HTTP ' + res.status + ': ' + await _errorText(res));
-  const j = await _jsonBounded(res); // H-004: bounded
+  let j;
+  if (http) {
+    // H-001: DNS-pinned submit. M-006: cap aligned to the 100 MiB image budget.
+    j = await http.json(_base(baseUrl) + '/images/generations', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + apiKey },
+      body: JSON.stringify(body),
+      signal,
+    }, { maxJsonBytes: MAX_IMAGE_JSON_BYTES, maxErrorBytes: MAX_ERROR_BYTES });
+  } else {
+    const res = await fetch(_base(baseUrl) + '/images/generations', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + apiKey },
+      body: JSON.stringify(body),
+      signal: _fetchSignal(signal),
+    });
+    if (!res.ok) throw new Error('images HTTP ' + res.status + ': ' + await _errorText(res));
+    j = await _jsonBounded(res, MAX_IMAGE_JSON_BYTES); // H-004 bounded, M-006 cap
+  }
   return (j.data || []).map((d) => {
     // FUNC-023: detect format from bytes, not hardcoded 'png'.
     let ext = 'png';
@@ -122,21 +171,32 @@ async function images({ baseUrl, apiKey, model, prompt, params, signal }) {
   });
 }
 
-async function speech({ baseUrl, apiKey, model, input, voice, format, params, signal }) {
+async function speech({ baseUrl, apiKey, model, input, voice, format, params, signal, http }) {
   const fmt = format || 'mp3';
   const body = Object.assign({ model, input, voice: voice || 'alloy', response_format: fmt }, params || {});
   // QA-015 fix: derive the effective format AFTER merging params (which may
   // override response_format). The returned ext must match the actual format
   // sent to the API, not the UI selection that params may have overridden.
   const effectiveFmt = body.response_format || fmt;
-  const res = await fetch(_base(baseUrl) + '/audio/speech', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + apiKey },
-    body: JSON.stringify(body),
-    signal: _fetchSignal(signal),
-  });
-  if (!res.ok) throw new Error('speech HTTP ' + res.status + ': ' + await _errorText(res));
-  const buf = await _readBounded(res, MAX_BINARY_BYTES); // H-004: bounded
+  let buf;
+  if (http) {
+    // H-001: DNS-pinned binary download with the same 100 MB cap.
+    buf = await http.bytes(_base(baseUrl) + '/audio/speech', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + apiKey },
+      body: JSON.stringify(body),
+      signal,
+    }, { maxBytes: MAX_BINARY_BYTES });
+  } else {
+    const res = await fetch(_base(baseUrl) + '/audio/speech', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + apiKey },
+      body: JSON.stringify(body),
+      signal: _fetchSignal(signal),
+    });
+    if (!res.ok) throw new Error('speech HTTP ' + res.status + ': ' + await _errorText(res));
+    buf = await _readBounded(res, MAX_BINARY_BYTES); // H-004: bounded
+  }
   return [{ b64: buf.toString('base64'), url: null, ext: effectiveFmt, contentType: 'audio/' + effectiveFmt }];
 }
 
@@ -144,16 +204,27 @@ async function speech({ baseUrl, apiKey, model, input, voice, format, params, si
 // the poll is written defensively (multiple fallbacks).
 // HIGH-003: parse unsigned_urls from completed response.
 // MED-011: handle 'cancelled'/'expired' terminal states.
-async function video({ baseUrl, apiKey, model, prompt, params, signal, onProgress, onSubmitted }) {
+async function video({ baseUrl, apiKey, model, prompt, params, signal, onProgress, onSubmitted, http }) {
   const FETCH_TIMEOUT_MS = 30000; // MED-010: per-fetch timeout
-  const sub = await fetch(_base(baseUrl) + '/videos', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + apiKey },
-    body: JSON.stringify(Object.assign({ model, prompt }, params || {})),
-    signal: _fetchSignal(signal, FETCH_TIMEOUT_MS),
-  });
-  if (!sub.ok) throw new Error('video submit HTTP ' + sub.status + ': ' + await _errorText(sub));
-  const j = await _jsonBounded(sub); // H-004: bounded
+  let j;
+  if (http) {
+    // H-001: DNS-pinned submit; paid POST is never replayed (no redirects).
+    j = await http.json(_base(baseUrl) + '/videos', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + apiKey },
+      body: JSON.stringify(Object.assign({ model, prompt }, params || {})),
+      signal,
+    }, { maxJsonBytes: MAX_JSON_BYTES, maxErrorBytes: MAX_ERROR_BYTES, totalTimeoutMs: FETCH_TIMEOUT_MS });
+  } else {
+    const sub = await fetch(_base(baseUrl) + '/videos', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + apiKey },
+      body: JSON.stringify(Object.assign({ model, prompt }, params || {})),
+      signal: _fetchSignal(signal, FETCH_TIMEOUT_MS),
+    });
+    if (!sub.ok) throw new Error('video submit HTTP ' + sub.status + ': ' + await _errorText(sub));
+    j = await _jsonBounded(sub); // H-004: bounded
+  }
   const id = j.id || j.job_id || (j.data && j.data.id);
   if (!id) throw new Error('video submit: no job id in response');
 
@@ -179,13 +250,23 @@ async function video({ baseUrl, apiKey, model, prompt, params, signal, onProgres
   for (;;) {
     if (signal && signal.aborted) throw new Error('cancelled');
     if (Date.now() - start > VIDEO_MAX_WAIT_MS) throw new Error('video poll timed out after 10 min');
-    await new Promise((r) => setTimeout(r, 3000));
-    const st = await fetch(pollBase, {
-      headers: { Authorization: 'Bearer ' + apiKey },
-      signal: _fetchSignal(signal, FETCH_TIMEOUT_MS),
-    });
-    if (!st.ok) throw new Error('video poll HTTP ' + st.status);
-    const s = await _jsonBounded(st); // H-004: bounded
+    // M-007 (hhhhu3 audit): abortable polling sleep — cancel takes effect
+    // immediately instead of waiting out the 3 s timer.
+    await abortableDelay(3000, signal);
+    let s;
+    if (http) {
+      s = await http.json(pollBase, {
+        headers: { Authorization: 'Bearer ' + apiKey },
+        signal,
+      }, { maxJsonBytes: MAX_JSON_BYTES, maxErrorBytes: MAX_ERROR_BYTES, totalTimeoutMs: FETCH_TIMEOUT_MS });
+    } else {
+      const st = await fetch(pollBase, {
+        headers: { Authorization: 'Bearer ' + apiKey },
+        signal: _fetchSignal(signal, FETCH_TIMEOUT_MS),
+      });
+      if (!st.ok) throw new Error('video poll HTTP ' + st.status);
+      s = await _jsonBounded(st); // H-004: bounded
+    }
     if (onProgress) onProgress({ stage: s.status || 'running', pct: s.progress != null ? s.progress : null });
 
     if (s.status === 'completed' || s.status === 'succeeded') {

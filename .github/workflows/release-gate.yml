@@ -7,6 +7,13 @@
 # integrity, manifest verification, SBOM, and size-limit enforcement.
 # A release must ONLY be published from a green run of this workflow.
 #
+# B-003 (hhhhu3 audit): the pipeline now performs the deliberate sequence
+#   identity -> build (Authenticode via electron-builder when signing
+#   secrets exist) -> SBOM -> Minisign manifest signing -> strict
+#   verification
+# and it FAILS with explicit missing-secret diagnostics instead of running
+# a strict verifier that can never pass. Only tag-triggered runs publish.
+#
 # The fast PR gate (ci.yml) remains the first line of defense; this
 # workflow is the mandatory second gate before any artifact reaches
 # GitHub Releases.
@@ -19,12 +26,25 @@ on:
     tags:
       - 'v*'
   workflow_dispatch:
+    inputs:
+      version:
+        description: 'Release version this run targets (must equal package.json version)'
+        required: true
+        type: string
 
 jobs:
   release-gate:
     name: Full release verification
     runs-on: windows-latest
-    timeout-minutes: 30
+    timeout-minutes: 40
+    env:
+      IS_TAG_RELEASE: ${{ startsWith(github.ref, 'refs/tags/') }}
+      # M-001 (hhhhu3 audit): manual runs must declare the version they build.
+      RELEASE_EXPECTED_VERSION: ${{ inputs.version }}
+      # Authenticode: electron-builder signs every PE it emits when these are
+      # present. The strict verifier re-checks every binary afterwards.
+      WIN_CSC_LINK: ${{ secrets.WIN_CSC_LINK }}
+      WIN_CSC_KEY_PASSWORD: ${{ secrets.WIN_CSC_KEY_PASSWORD }}
     steps:
       - uses: actions/checkout@v7
 
@@ -48,19 +68,84 @@ jobs:
       - name: Assert release identity
         run: npm run assert:identity
 
+      # B-003 (hhhhu3 audit): install a PINNED Minisign build and fail with an
+      # explicit diagnostic when it cannot be verified. Pinned zip from the
+      # official 0.11 release; SHA-256 measured and locked here.
+      - name: Install pinned Minisign
+        shell: pwsh
+        run: |
+          $url = 'https://github.com/jedisct1/minisign/releases/download/0.11/minisign-0.11-win64.zip'
+          $expected = 'B9C31C2C3034F81F0E5F5D92CBCC20E67A9671B6E5455661588638848DC58031'
+          $zip = Join-Path $env:RUNNER_TEMP 'minisign-0.11-win64.zip'
+          Invoke-WebRequest -Uri $url -OutFile $zip
+          $actual = (Get-FileHash -Algorithm SHA256 $zip).Hash
+          if ($actual -ne $expected) {
+            throw "Pinned Minisign download failed the SHA-256 check: expected $expected, got $actual"
+          }
+          Expand-Archive -LiteralPath $zip -DestinationPath (Join-Path $env:RUNNER_TEMP 'minisign')
+          $exe = Get-ChildItem -Path (Join-Path $env:RUNNER_TEMP 'minisign') -Recurse -Filter minisign.exe | Select-Object -First 1
+          if (-not $exe) { throw 'Minisign archive did not contain minisign.exe' }
+          Add-Content -Path $env:GITHUB_PATH -Value $exe.DirectoryName
+          & $exe.FullName -v
+
+      # B-003 (hhhhu3 audit): prepare the signing material and fail with
+      # explicit missing-secret diagnostics. A tag release MUST be signed;
+      # a manual dry run may proceed without secrets (it never publishes).
+      - name: Prepare signing material
+        shell: pwsh
+        run: |
+          $tag = ($env:IS_TAG_RELEASE -eq 'true')
+          $problems = @()
+          if (-not $env:WIN_CSC_LINK) { $problems += 'WIN_CSC_LINK (Authenticode certificate, base64 or path)' }
+          if (-not $env:WIN_CSC_KEY_PASSWORD) { $problems += 'WIN_CSC_KEY_PASSWORD (Authenticode certificate password)' }
+          if (-not $env:MINISIGN_KEY_B64) { $problems += 'MINISIGN_KEY_B64 (Minisign secret key file, base64)' }
+          if (-not $env:MINISIGN_PUB_KEY) { $problems += 'MINISIGN_PUB_KEY (Minisign public key line)' }
+          if ($problems.Count -gt 0) {
+            $msg = "Missing release signing secret(s): " + ($problems -join '; ')
+            if ($tag) { throw $msg + ". A tag release cannot be built without signing. Configure the secrets in the repository settings." }
+            Write-Warning "$msg - continuing as an UNSIGNED manual dry run (no publication)."
+          }
+          if ($env:MINISIGN_KEY_B64) {
+            $keyPath = Join-Path $env:RUNNER_TEMP 'minisign.key'
+            [IO.File]::WriteAllBytes($keyPath, [Convert]::FromBase64String($env:MINISIGN_KEY_B64))
+            Add-Content -Path $env:GITHUB_ENV -Value "MINISIGN_KEY_PATH=$keyPath"
+          }
+          if ($env:MINISIGN_PUB_KEY) {
+            # The strict verifier and the published artifact set both read the
+            # pinned public key from the repository root.
+            Set-Content -Path 'minisign.pub' -Value $env:MINISIGN_PUB_KEY -Encoding ascii
+          }
+          if ($tag) {
+            Add-Content -Path $env:GITHUB_ENV -Value 'REQUIRE_CODE_SIGNING=1'
+          }
+        env:
+          MINISIGN_KEY_B64: ${{ secrets.MINISIGN_KEY_B64 }}
+          MINISIGN_PUB_KEY: ${{ secrets.MINISIGN_PUB_KEY }}
+
       - name: Build portable release
         run: node scripts/zip-portable.js
 
       - name: Generate SBOM
         run: node scripts/generate-sbom.js
 
-      - name: Installer smoke test
-        run: npm run test:installer
+      # B-003 (hhhhu3 audit): sign the outer manifest BEFORE strict
+      # verification — the verifier requires the .minisig to exist.
+      - name: Sign release manifest (Minisign)
+        if: env.MINISIGN_KEY_PATH != ''
+        run: npm run sign:release
 
       - name: Verify release (strict: archive, authenticode, manifest, provenance, SBOM)
+        if: env.IS_TAG_RELEASE == 'true'
         run: npm run verify:release
 
+      - name: Verify release (lenient dry run for untagged manual builds)
+        if: env.IS_TAG_RELEASE != 'true'
+        run: node scripts/verify-release.js --require-archive --require-provenance --require-sbom --skip-integrity
+
+      # M-001 (hhhhu3 audit): only a tag-triggered run uploads publication
+      # output. A manual dispatch run must never produce "release artifacts".
       - name: Upload release artifacts
+        if: env.IS_TAG_RELEASE == 'true'
         uses: actions/upload-artifact@v7
         with:
           name: release-artifacts

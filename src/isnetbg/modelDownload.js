@@ -87,7 +87,22 @@ function sweepStaleTemps(dir, maxAgeMs = 6 * 60 * 60 * 1000) {
   return { removed, failed };
 }
 
-async function downloadModel(modelKey, onProgress) {
+/**
+ * Download a registered model.
+ *
+ * B-004 (hhhhu3 audit): an explicit `opts.destDir` is supported so offline
+ * transactions (npm run setup) can download into their STAGE directory
+ * instead of the live writable-override tree. In a plain node process
+ * `assetPaths.userDataPath` is empty and `resolveWritableOverride()` would
+ * throw — and even when initialized it would write outside the setup
+ * transaction. The runtime (IPC) path keeps using the override resolver.
+ *
+ * @param {string} modelKey
+ * @param {(info: {downloaded: number, total: number}) => void} [onProgress]
+ * @param {{ destDir?: string }} [opts] - explicit destination directory;
+ *   the model file is written to <destDir>/<model.file>.
+ */
+async function downloadModel(modelKey, onProgress, opts = {}) {
   const resolvedKey = resolveModelKey(modelKey);
   const m = getModel(resolvedKey);
 
@@ -103,11 +118,19 @@ async function downloadModel(modelKey, onProgress) {
 
   try {
     // Determine destination path.
+    // B-004 (hhhhu3 audit): a caller-supplied destination directory wins and
+    // never consults the runtime override resolver. Otherwise:
     // H-065: downloads must target the writable override dir exclusively —
     // resolveAsset() returns the bundled (read-only in packaged builds)
     // path whenever a bundled copy of the model exists.
-    const assetPaths = require('../assetPaths');
-    const destPath = assetPaths.resolveWritableOverride('models', m.file);
+    let destPath;
+    if (opts && typeof opts.destDir === 'string' && opts.destDir) {
+      await fsp.mkdir(opts.destDir, { recursive: true });
+      destPath = path.join(opts.destDir, m.file);
+    } else {
+      const assetPaths = require('../assetPaths');
+      destPath = assetPaths.resolveWritableOverride('models', m.file);
+    }
 
     const tmp = destPath + '.tmp-' + process.pid + '-' + crypto.randomUUID();
 

@@ -27,6 +27,9 @@ const { isStrictDescendant } = require('./pathRelation');
 // Low-level filesystem primitives (atomic journal writes, link-safe path
 // checks, hashing, fsync) — split out for the lint size budget.
 const { writeJsonSync, isRegularFile, ancestorsAreRegular, hashFileSync, fsyncFile } = require('./transactionFileUtils');
+// M-010 (hhhhu3 audit): recovery-time journal validation + link-safety
+// helpers — split out for the lint size budget.
+const { isRealDirectory, validateRecoveryJournal } = require('./transactionRecoveryUtils');
 
 const SCHEMA_VERSION = 1;
 const VALID_STATES = Object.freeze([
@@ -328,13 +331,23 @@ class OutputTransactionService {
       try {
         const raw = fs.readFileSync(journalFile, 'utf8');
         const journal = JSON.parse(raw);
-        // Schema validation
+        // Schema validation. M-010: invalid journals are preserved for
+        // manual review — they are evidence, never silently discarded.
         if (!journal || journal.schemaVersion !== SCHEMA_VERSION || !journal.transactionId) {
           result.errors.push(`Invalid journal schema: ${entry}`);
+          result.manualReview++;
           continue;
         }
         if (!VALID_STATES.includes(journal.state)) {
           result.errors.push(`Invalid state in journal: ${entry}`);
+          result.manualReview++;
+          continue;
+        }
+        // M-010: strict shape validation before ANY filesystem action.
+        const validationError = validateRecoveryJournal(journal);
+        if (validationError) {
+          result.errors.push(`Journal validation failed for ${entry}: ${validationError}`);
+          result.manualReview++;
           continue;
         }
         this._recoverJournal(journal, journalFile, result);
@@ -352,18 +365,28 @@ class OutputTransactionService {
    * @param {{ recovered: number, manualReview: number, errors: string[] }} result
    */
   _recoverJournal(journal, journalFile, result) {
+    // M-010 (hhhhu3 audit): the canonical root must be a real directory
+    // (lstat, not stat) before any recovery touches it. A root that is a
+    // file or symlink goes to manual review instead of being operated on.
+    if (!isRealDirectory(journal.canonicalRoot)) {
+      result.manualReview++;
+      return;
+    }
     switch (journal.state) {
       case 'PREPARING':
       case 'PREPARED':
-        // Never reached INSTALLING — remove stage data and journal
-        try { fs.rmSync(journal.stageDir, { recursive: true, force: true }); } catch (_) {}
+        // Never reached INSTALLING — remove stage data and journal.
+        // M-010: recursive delete only on a real (non-symlink) stage dir.
+        if (isRealDirectory(journal.stageDir)) {
+          try { fs.rmSync(journal.stageDir, { recursive: true, force: true }); } catch (_) {}
+        }
         try { fs.unlinkSync(journalFile); } catch (_) {}
         result.recovered++;
         break;
 
       case 'INSTALLING': {
         // Some files may have been installed — rollback those, then clean stage.
-        // M-011 (hhhhu2 audit): also reconcile files with installing:true.
+        // M-011 (hhhhu2/hhhhu3 audit): also reconcile files with installing:true.
         let safe = true;
         for (const file of (journal.files || [])) {
           // Reconcile mid-install files (intent journaled, crash before completion)
@@ -378,6 +401,12 @@ class OutputTransactionService {
                 fs.unlinkSync(file.finalPath);
               } catch (_) { safe = false; break; }
             }
+            // M-011: record reconciliation so a second recovery run is
+            // idempotent and does not re-process this file.
+            file.installing = false;
+            try {
+              writeJsonSync(journalFile, journal);
+            } catch (_) { safe = false; break; }
             continue;
           }
           if (!file.installed) continue;
@@ -390,9 +419,20 @@ class OutputTransactionService {
             if (actualHash !== file.sha256) { safe = false; break; }
             fs.unlinkSync(file.finalPath);
           } catch (_) { safe = false; break; }
+          // M-011 (hhhhu3 audit): persist the journal after EACH successful
+          // recovery deletion. If recovery later fails on another file, a
+          // second recovery run sees the already-deleted files as not
+          // installed instead of being stuck in manual review forever.
+          file.installed = false;
+          try {
+            writeJsonSync(journalFile, journal);
+          } catch (_) { safe = false; break; }
         }
         if (safe) {
-          try { fs.rmSync(journal.stageDir, { recursive: true, force: true }); } catch (_) {}
+          // M-010: recursive delete only on a real (non-symlink) stage dir.
+          if (isRealDirectory(journal.stageDir)) {
+            try { fs.rmSync(journal.stageDir, { recursive: true, force: true }); } catch (_) {}
+          }
           try { fs.unlinkSync(journalFile); } catch (_) {}
           result.recovered++;
         } else {
@@ -403,8 +443,10 @@ class OutputTransactionService {
       }
 
       case 'COMMITTED':
-        // Outputs are valid — just clean up stage/journal
-        try { fs.rmSync(journal.stageDir, { recursive: true, force: true }); } catch (_) {}
+        // Outputs are valid — just clean up stage/journal (M-010: real-dir gate).
+        if (isRealDirectory(journal.stageDir)) {
+          try { fs.rmSync(journal.stageDir, { recursive: true, force: true }); } catch (_) {}
+        }
         try { fs.unlinkSync(journalFile); } catch (_) {}
         result.recovered++;
         break;

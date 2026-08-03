@@ -288,8 +288,8 @@ test('P5 DA-M-005: runHeal catch deletes the healed OUTPUT (not just the bake te
   const allCatch = block.match(/catch\s*\(\s*\w+\s*\)\s*\{[\s\S]*?(?=\s*\}\s*finally|\s*\}\s*\}\s*\(\);)/g);
   const r52Catch = allCatch ? allCatch.find((c) => /pushedPreSnapshot/.test(c)) : null;
   assert.ok(r52Catch, 'DA-M-005: must have the R5.2 cancel-cleanup catch block');
-  assert.ok(/fbDelete\(healOutPath/.test(r52Catch),
-    'DA-M-005: the cancel-cleanup catch must fbDelete(healOutPath) so a failed reload does not orphan the healed output');
+  assert.ok(/FbIntent\.del\(healOutPath/.test(r52Catch),
+    'DA-M-005: the cancel-cleanup catch must FbIntent.del(healOutPath) so a failed reload does not orphan the healed output');
   assert.ok(/healOutPath !== tmpPath/.test(r52Catch),
     'DA-M-005: the output cleanup must be guarded by healOutPath !== tmpPath (never double-delete the same file)');
 });

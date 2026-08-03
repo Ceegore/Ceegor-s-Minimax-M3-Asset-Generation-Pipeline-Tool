@@ -86,11 +86,11 @@
         r = await window.api.isnetbgRun(tmpSrc, tmpOut, { model, useGpu, ...postOpts }, isnetGrant);
       } finally {
         // BGR-009 fix: mint delete grant (R1.3 gate).
-        try { if (window.api.fbDelete) { const dg = (window.GrantHelper) ? await window.GrantHelper.ensureDelete(tmpSrc) : undefined; await window.api.fbDelete(tmpSrc, dg); } } catch (_) {}
+        try { if (window.FbIntent) { const dg = (window.GrantHelper) ? await window.GrantHelper.ensureDelete(tmpSrc) : undefined; await window.FbIntent.del(tmpSrc, dg); } } catch (_) {} // B-007 (hhhhu3 audit): delete via native confirmation
       }
       if (!r || !r.ok) {
         // BGR-009 fix: mint delete grant (R1.3 gate).
-        try { if (window.api.fbDelete) { const dg = (window.GrantHelper) ? await window.GrantHelper.ensureDelete(tmpOut) : undefined; await window.api.fbDelete(tmpOut, dg); } } catch (_) {}
+        try { if (window.FbIntent) { const dg = (window.GrantHelper) ? await window.GrantHelper.ensureDelete(tmpOut) : undefined; await window.FbIntent.del(tmpOut, dg); } } catch (_) {} // B-007 (hhhhu3 audit): delete via native confirmation
         throw new Error((r && r.error) || 'background removal failed');
       }
       // KGO7-010: surface a silent model substitution (one shared impl).
@@ -130,7 +130,7 @@
         // must not leave the temp output file behind — P.path only starts
         // tracking outPath as the asset's backing file on the SUCCESS path,
         // so on this catch tmpOut is still an orphaned temp file.
-        try { if (window.api.fbDelete) { const dg = (window.GrantHelper) ? await window.GrantHelper.ensureDelete(tmpOut) : undefined; await window.api.fbDelete(tmpOut, dg); } } catch (_) {}
+        try { if (window.FbIntent) { const dg = (window.GrantHelper) ? await window.GrantHelper.ensureDelete(tmpOut) : undefined; await window.FbIntent.del(tmpOut, dg); } } catch (_) {} // B-007 (hhhhu3 audit): delete via native confirmation
         throw e;
       }
     } catch (e) {

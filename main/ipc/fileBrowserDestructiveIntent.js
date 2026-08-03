@@ -10,10 +10,44 @@
 'use strict';
 
 const path = require('path');
+const fsp = require('fs').promises;
 const { secureHandle } = require('./secureHandle');
 const { OperationIntentService } = require('../services/OperationIntentService');
 
 const intentService = new OperationIntentService();
+
+// M-014 (hhhhu3 audit): non-consuming grant authorization + canonical
+// realpath BEFORE the native dialog. Uses PathGrantService.preflight so a
+// single-use grant is not consumed by the confirmation step — the execute
+// handler still performs the consuming authorize. The token binds the
+// service's canonical realpath (not the renderer's path.resolve string)
+// plus the file identity observed at confirmation time.
+function preflightGrant(grantId, operation, p) {
+  if (!grantId || typeof grantId !== 'string') {
+    return { ok: false, error: 'grantId is required for ' + operation + ' on ' + p };
+  }
+  // Lazy require: grantAuthorizer pattern — always see the CURRENT
+  // defaultService (tests rebuild the singleton between cases).
+  const { defaultService: pathGrantService } = require('../services/PathGrantService');
+  return pathGrantService.preflight(grantId, { operation, path: p });
+}
+
+/**
+ * M-014 (hhhhu3 audit): capture the current file identity ({dev, ino})
+ * of a canonical path. Returns null when the path does not exist yet
+ * (rename/move destinations) or cannot be stat'ed; the identity check
+ * then matches only a null identity at execution time.
+ * @param {string} p
+ * @returns {Promise<{dev: number, ino: number}|null>}
+ */
+async function captureIdentity(p) {
+  try {
+    const st = await fsp.lstat(p);
+    return { dev: st.dev, ino: st.ino };
+  } catch (_) {
+    return null;
+  }
+}
 
 /**
  * Register fb:confirmDestructive.
@@ -27,18 +61,38 @@ function registerConfirmDestructive(deps) {
     if (!operation || !sourcePath || !sourceGrantId) {
       return { ok: false, error: 'operation, sourcePath, and sourceGrantId are required.' };
     }
+    if (!['delete', 'move', 'rename'].includes(operation)) {
+      return { ok: false, error: 'operation must be delete, move, or rename.' };
+    }
+    // M-014 (hhhhu3 audit): authorize the source grant BEFORE prompting.
+    const srcAuthz = preflightGrant(sourceGrantId, operation, sourcePath);
+    if (!srcAuthz.ok) return { ok: false, error: srcAuthz.error };
+    // When a destination is supplied (move always, rename when the
+    // renderer pre-computes the target path), it must also be in grant
+    // scope before we prompt about it.
+    let canonicalDestination = null;
+    if (destinationPath) {
+      const destAuthz = preflightGrant(destinationGrantId || sourceGrantId, 'write', destinationPath);
+      if (!destAuthz.ok) return { ok: false, error: destAuthz.error };
+      canonicalDestination = destAuthz.canonicalPath;
+    }
+    const canonicalSource = srcAuthz.canonicalPath;
+    // M-014: bind the current file identity so a target swap between
+    // confirmation and execution is rejected.
+    const sourceIdentity = await captureIdentity(canonicalSource);
     const labels = { delete: 'Delete', move: 'Move', rename: 'Rename' };
     const label = labels[operation] || operation;
     return intentService.confirm(e, {
       title: label + ' confirmation',
-      message: `${label} "${path.basename(sourcePath)}"?`,
-      detail: destinationPath ? `Destination: ${destinationPath}` : undefined,
+      message: `${label} "${path.basename(canonicalSource)}"?`,
+      detail: canonicalDestination ? `Destination: ${canonicalDestination}` : undefined,
       confirmLabel: label,
       operation,
-      canonicalSource: path.resolve(sourcePath),
-      canonicalDestination: destinationPath ? path.resolve(destinationPath) : null,
+      canonicalSource,
+      canonicalDestination,
       sourceGrantId,
       destinationGrantId: destinationGrantId || null,
+      sourceIdentity,
     });
   });
 }
@@ -67,4 +121,4 @@ function consumeIntent(e, intentId, actual) {
   }
 }
 
-module.exports = { intentService, registerConfirmDestructive, consumeIntent };
+module.exports = { intentService, registerConfirmDestructive, consumeIntent, captureIdentity };

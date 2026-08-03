@@ -49,6 +49,10 @@ const DEFAULT_LIMITS = Object.freeze({
     maxHeight: 16384,
     maxPixels: 100_000_000,
     maxFrames: 300,
+    // H-005 (hhhhu3 audit): aggregate decoded raw-pixel budget. A 100 MP
+    // animated image with 300 frames would otherwise force sharp to allocate
+    // pages*width*height*channels bytes (tens of gigabytes) in raw().toBuffer().
+    maxDecodedBytes: 512 * 1024 * 1024,
   }),
   audio: Object.freeze({
     maxBytes: 100 * 1024 * 1024,
@@ -85,7 +89,9 @@ const MAGIC_BYTES = Object.freeze({
 const MODALITY_TYPES = Object.freeze({
   image: new Set(['png', 'jpeg', 'webp', 'gif']),
   audio: new Set(['mp3', 'wav', 'flac', 'ogg', 'aac']),
-  video: new Set(['mp4', 'webm']),
+  // M-021 (hhhhu3 audit): EBML DocType 'matroska' is classified as 'mkv',
+  // distinct from 'webm', so a Matroska file is never saved as .webm.
+  video: new Set(['mp4', 'webm', 'mkv']),
 });
 
 /**
@@ -107,11 +113,44 @@ function detectType(header) {
       header.slice(0, 3).toString('ascii') === 'ID3') return 'mp3';
   if (header.length >= 8 && header.slice(4, 8).equals(MAGIC_BYTES.mp4)) return 'mp4';
   // M-002 (hhhhu2 audit): WebM/Matroska EBML header detection.
-  if (header.length >= 4 && header.slice(0, 4).equals(MAGIC_BYTES.webm)) return 'webm';
+  // M-021 (hhhhu3 audit): distinguish via the EBML DocType element — generic
+  // EBML is NOT blindly labeled webm; DocType 'matroska' yields 'mkv'.
+  if (header.length >= 4 && header.slice(0, 4).equals(MAGIC_BYTES.webm)) {
+    return ebmlDocType(header) === 'matroska' ? 'mkv' : 'webm';
+  }
   if (header.length >= 12 && header.slice(0, 4).equals(MAGIC_BYTES.wav) &&
       header.slice(8, 12).toString('ascii') === 'WAVE') return 'wav';
   if (header.slice(0, 4).equals(MAGIC_BYTES.ogg)) return 'ogg';
   if (header.slice(0, 4).equals(MAGIC_BYTES.flac)) return 'flac';
+  return null;
+}
+
+/**
+ * M-021 (hhhhu3 audit): read the EBML DocType string from an EBML header.
+ *
+ * Layout after the 4-byte EBML magic (0x1A 0x45 0xDF 0xA3): the EBML head
+ * element ID 0x1A45DFA3 is already consumed, then a VINT size, then child
+ * elements. The DocType element has ID 0x4282 and a small string payload.
+ * We scan a bounded prefix (64 bytes covers all conformant headers) for the
+ * element ID, read its VINT size, and return the payload as ASCII.
+ *
+ * @param {Buffer} header - Header bytes (at least the first 4 EBML magic bytes).
+ * @returns {string|null} 'webm', 'matroska', or null when unreadable.
+ */
+function ebmlDocType(header) {
+  if (!header || header.length < 5) return null;
+  for (let i = 4; i + 2 < header.length; i++) {
+    if (header[i] !== 0x42 || header[i + 1] !== 0x82) continue;
+    const sizeByte = header[i + 2];
+    // Only support the common 1-byte VINT size (length marker in high bits).
+    if (!sizeByte || (sizeByte & 0x80) === 0) continue;
+    const size = sizeByte & 0x7F;
+    if (size <= 0 || i + 3 + size > header.length) continue;
+    const docType = header.slice(i + 3, i + 3 + size).toString('ascii');
+    // DocType must be printable ASCII to be trusted.
+    if (!/^[\x20-\x7E]+$/.test(docType)) return null;
+    return docType;
+  }
   return null;
 }
 
@@ -204,8 +243,11 @@ async function finalize(descriptor, opts) {
     throw new AppError(CODES.RESPONSE_INVALID, `Artifact too small (${bytes} bytes).`);
   }
 
-  // Step 3: Detect type from bytes
-  const header = readHeader(rawStagePath, 16);
+  // Step 3: Detect type from bytes.
+  // M-021 (hhhhu3 audit): read 64 bytes so the EBML DocType element
+  // (typically within the first ~40 bytes) is available for webm/mkv
+  // discrimination.
+  const header = readHeader(rawStagePath, 64);
   const detectedType = detectType(header);
   if (!detectedType) {
     cleanup(rawStagePath);
@@ -227,6 +269,7 @@ async function finalize(descriptor, opts) {
       maxHeight: limits.maxHeight,
       maxPixels: limits.maxPixels,
       maxFrames: limits.maxFrames,
+      maxDecodedBytes: limits.maxDecodedBytes, // H-005: aggregate budget
     });
     if (!decode.ok) {
       cleanup(rawStagePath);
@@ -313,7 +356,7 @@ function cleanup(filePath) {
  * Enforces pixel limit to prevent decompression bombs.
  *
  * @param {string} filePath - Path to the image file.
- * @param {{ maxWidth?: number, maxHeight?: number, maxPixels?: number, maxFrames?: number }} [opts]
+ * @param {{ maxWidth?: number, maxHeight?: number, maxPixels?: number, maxFrames?: number, maxDecodedBytes?: number }} [opts]
  * @returns {Promise<{ok: true, width: number, height: number, frames: number} | {ok: false, error: string}>}
  */
 async function validateImageDecode(filePath, opts) {
@@ -348,6 +391,16 @@ async function validateImageDecode(filePath, opts) {
     const frames = meta.pages || 1;
     if (opts.maxFrames && frames > opts.maxFrames) {
       return { ok: false, error: `Image has ${frames} frames, exceeding maximum ${opts.maxFrames}.` };
+    }
+    // H-005 (hhhhu3 audit): enforce an aggregate decoded-byte budget BEFORE
+    // decoding. sharp's raw output for an animated image is
+    // pages × width × height × channels — permitted per-axis/per-frame
+    // limits alone still allow multi-gigabyte allocations.
+    const maxDecodedBytes = opts.maxDecodedBytes || DEFAULT_LIMITS.image.maxDecodedBytes;
+    const channels = meta.channels || 4;
+    const decodedEstimate = frames * meta.width * meta.height * channels;
+    if (decodedEstimate > maxDecodedBytes) {
+      return { ok: false, error: `Decoded image size (~${Math.ceil(decodedEstimate / (1024 * 1024))} MB across ${frames} frame(s)) exceeds the ${Math.floor(maxDecodedBytes / (1024 * 1024))} MB validation budget.` };
     }
     // M-003: Force full pixel decode to catch truncated/corrupt images that
     // expose valid metadata but fail during actual decompression.
@@ -386,8 +439,8 @@ async function validateAndFinalize(opts) {
       return { ok: false, error: `File too small (${st.size} bytes, minimum ${minSize}).` };
     }
 
-    // Magic byte check
-    const header = readHeader(filePath, 16);
+    // Magic byte check (M-021: 64-byte header so EBML DocType is visible)
+    const header = readHeader(filePath, 64);
     const expectedType = (opts.expectedType || '').toLowerCase();
     if (!checkMagicBytes(header, expectedType)) {
       return { ok: false, error: `File does not match expected magic bytes for '${opts.expectedType}'.` };
@@ -437,6 +490,7 @@ module.exports = {
   validateImageDecode,
   checkMagicBytes,
   detectType,
+  ebmlDocType,
   MAGIC_BYTES,
   MIN_ARTIFACT_SIZE,
   SHARP_PIXEL_LIMIT,

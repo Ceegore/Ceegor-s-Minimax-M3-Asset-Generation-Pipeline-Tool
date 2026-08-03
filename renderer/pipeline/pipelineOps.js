@@ -66,7 +66,7 @@
       }
       if (_cancel[item.id]) {
         // H-011: delete partial output only if this op still owns it (cancel+restart race guard).
-        if (dst && item._activeOpId === opId) { try { const dg = window.GrantHelper ? await window.GrantHelper.ensureDelete(dst) : undefined; if (!dg || dg.ok !== false) await window.api.fbDelete(dst, dg); } catch (_) {} }
+        if (dst && item._activeOpId === opId) { try { const dg = window.GrantHelper ? await window.GrantHelper.ensureDelete(dst) : undefined; if (!dg || dg.ok !== false) await window.FbIntent.del(dst, dg); } catch (_) {} }
         item.status = 'idle'; PipelineBoard.updateCard(item); return;
       }
       if (!dst) throw new Error('Operation produced no output file.');
@@ -160,7 +160,7 @@
             if (!r || !r.ok) {
               // BGR-009 fix: mint delete grant for temp cleanup.
               const delGrant = (window.GrantHelper) ? await window.GrantHelper.ensureDelete(tempOut) : undefined;
-              if (!delGrant || delGrant.ok !== false) window.api.fbDelete(tempOut, delGrant).catch(() => {}); // R8: don't forward a {ok:false} grant object to the IPC (it can never authorise)
+              if (!delGrant || delGrant.ok !== false) window.FbIntent.del(tempOut, delGrant).catch(() => {}); // R8: don't forward a {ok:false} grant object to the IPC (it can never authorise)
               throw new Error((r && (r.stderr || r.error)) || 'Real-ESRGAN failed');
             }
             try {
@@ -198,7 +198,7 @@
             } finally {
               const delGrant2 = (window.GrantHelper) ? await window.GrantHelper.ensureDelete(tempOut) : undefined;
               if (window.api && typeof window.api.fbDelete === 'function' && (!delGrant2 || delGrant2.ok !== false)) {
-                window.api.fbDelete(tempOut, delGrant2).catch(() => {}); // R8: don't forward a {ok:false} grant object
+                window.FbIntent.del(tempOut, delGrant2).catch(() => {}); // R8: don't forward a {ok:false} grant object
               }
             }
             return dstPng;

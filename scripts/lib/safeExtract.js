@@ -84,7 +84,7 @@ function validateEntry(entryName, destDir) {
  * @param {string} archivePath
  * @param {string} destDir
  * @param {{ maxEntries?: number }} [opts]
- * @returns {Promise<{ ok: boolean, entries?: string[], error?: string }>}
+ * @returns {Promise<{ ok: boolean, entries?: string[], fileEntries?: string[], error?: string }>}
  */
 async function listAndValidate(archivePath, destDir, opts = {}) {
   const sevenZip = resolve7za();
@@ -106,6 +106,7 @@ async function listAndValidate(archivePath, destDir, opts = {}) {
         return;
       }
       const entries = [];
+      const fileEntries = [];
       let totalUncompressed = 0;
       for (const line of lines) {
         // 7z -ba format: date time attrs size compressed name
@@ -134,8 +135,11 @@ async function listAndValidate(archivePath, destDir, opts = {}) {
           return;
         }
         entries.push(name);
+        // M-020 (hhhhu3 audit): track non-directory entries so the extracted
+        // tree can be compared against the VALIDATED listing afterwards.
+        if (!/^d/i.test(attrs)) fileEntries.push(name);
       }
-      resolve({ ok: true, entries });
+      resolve({ ok: true, entries, fileEntries });
     });
   });
 }
@@ -156,9 +160,28 @@ async function extractZip(archivePath, destDir, opts = {}) {
   // H-012: Extract to a staging directory, not directly to destination.
   const stagingDir = destDir + '.extract-stage-' + process.pid + '-' + Date.now().toString(36);
 
+  // M-020 (hhhhu3 audit): bind the archive's identity BEFORE validation so a
+  // replacement between validation and extraction is detected. stat identity
+  // is re-checked before AND after extraction; the extracted tree must also
+  // match the validated entry list exactly.
+  let statBefore;
+  try { statBefore = fs.statSync(archivePath); } catch (e) {
+    return { ok: false, error: `Archive not accessible: ${e.message}` };
+  }
+  const identity = { size: statBefore.size, mtimeMs: statBefore.mtimeMs };
+  const archiveUnchanged = () => {
+    try {
+      const st = fs.statSync(archivePath);
+      return st.size === identity.size && st.mtimeMs === identity.mtimeMs;
+    } catch (_) { return false; }
+  };
+
   // Step 1: Validate all entries before extraction
   const listing = await listAndValidate(archivePath, stagingDir, { maxEntries: opts.maxEntries });
   if (!listing.ok) return { ok: false, error: listing.error };
+  if (!archiveUnchanged()) {
+    return { ok: false, error: 'Archive changed between validation and extraction.' };
+  }
 
   // Step 2: Create staging directory
   fs.mkdirSync(stagingDir, { recursive: true });
@@ -197,21 +220,51 @@ async function extractZip(archivePath, destDir, opts = {}) {
     return result;
   }
 
+  // M-020 (hhhhu3 audit): the archive must be unchanged after extraction, and
+  // the extracted tree must correspond EXACTLY to the validated entry list —
+  // a local replacement between listing and extraction is rejected here.
+  if (!archiveUnchanged()) {
+    try { fs.rmSync(stagingDir, { recursive: true, force: true }); } catch (_) {}
+    return { ok: false, error: 'Archive changed between validation and extraction.' };
+  }
+  const expected = new Set((listing.fileEntries || []).map((n) => n.toLowerCase()));
+  const actual = new Set();
+  (function walk(dir, prefix) {
+    for (const ent of fs.readdirSync(dir, { withFileTypes: true })) {
+      const rel = prefix ? `${prefix}/${ent.name}` : ent.name;
+      if (ent.isDirectory()) { walk(path.join(dir, ent.name), rel); continue; }
+      actual.add(rel.toLowerCase());
+    }
+  })(stagingDir, '');
+  if (actual.size !== expected.size || [...actual].some((n) => !expected.has(n))) {
+    try { fs.rmSync(stagingDir, { recursive: true, force: true }); } catch (_) {}
+    return { ok: false, error: 'Extracted content does not match the validated archive listing.' };
+  }
+
   // Step 4: Atomically activate — move existing dest aside, rename staging in.
+  // H-014 (hhhhu3 audit): the backup path lives OUTSIDE the try block so a
+  // failed staging→dest rename can restore the previous destination instead
+  // of stranding it under a .old-* name while reporting failure.
+  const backupDir = destDir + '.old-' + Date.now().toString(36);
+  let backedUp = false;
   try {
-    const backupDir = destDir + '.old-' + Date.now().toString(36);
     if (fs.existsSync(destDir)) {
       fs.renameSync(destDir, backupDir);
+      backedUp = true;
     }
     fs.renameSync(stagingDir, destDir);
     // Clean up old directory best-effort.
-    if (fs.existsSync(backupDir)) {
+    if (backedUp && fs.existsSync(backupDir)) {
       try { fs.rmSync(backupDir, { recursive: true, force: true }); } catch (_) {}
     }
     return { ok: true };
   } catch (e) {
-    // Activation failed — clean up staging.
+    // Activation failed — clean up staging, then restore the backup so the
+    // original destination is never lost.
     try { fs.rmSync(stagingDir, { recursive: true, force: true }); } catch (_) {}
+    if (backedUp && !fs.existsSync(destDir)) {
+      try { fs.renameSync(backupDir, destDir); } catch (_) {}
+    }
     return { ok: false, error: `Activation failed: ${e.message}` };
   }
 }

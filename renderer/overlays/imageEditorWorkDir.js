@@ -54,9 +54,10 @@
   async function cleanupStaleWorkDirs(configOut) {
     try {
       const base = configOut.replace(/\\/g, '/').replace(/\/+$/, '') + '/image/.editor-work';
-      if (!window.api || typeof window.api.fbList !== 'function') return;
+      if (!window.api) return;
       const _g = (window.GrantHelper && window.GrantHelper.ensureDirList) ? await window.GrantHelper.ensureDirList(base) : undefined;
-      const listing = (_g && _g.ok === false) ? _g : await window.api.fbList(base, _g);
+      // M-012 (hhhhu3 audit): paginated listing drain.
+      const listing = (_g && _g.ok === false) ? _g : await window.FbListPaged.drain(base, _g);
       if (!listing || !listing.ok || !Array.isArray(listing.items)) return;
       const cutoff = Date.now() - 24 * 60 * 60 * 1000; // 24h ago
       // QA-010 fix: never delete directories that are currently active.
@@ -66,7 +67,8 @@
         if (activeKeys.some((k) => k.endsWith('/' + entry.name))) continue;
         if (entry.mtimeMs && entry.mtimeMs < cutoff) {
           const delGrant = (window.GrantHelper) ? await window.GrantHelper.ensureDelete(entry.path) : undefined;
-          if (window.api.fbDelete) await window.api.fbDelete(entry.path, delGrant).catch(() => {});
+          // B-007 (hhhhu3 audit): delete via native confirmation (window.FbIntent).
+          if (window.FbIntent) await window.FbIntent.del(entry.path, delGrant).catch(() => {});
         }
       }
     } catch (_) { /* best-effort cleanup */ }

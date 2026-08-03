@@ -387,9 +387,8 @@ async function upscaleImageFileRealesrgan(srcPath, multiplier, reStatus) {
     // QA-018: delete partial output on failure.
     if (!reSuccess) {
       const _dg = (window.GrantHelper) ? await window.GrantHelper.ensureDelete(tempOut) : undefined;
-      if (window.api && typeof window.api.fbDelete === 'function') {
-        window.api.fbDelete(tempOut, _dg).catch(() => {});
-      }
+      // B-007 (hhhhu3 audit): delete via native confirmation (window.FbIntent).
+      if (window.FbIntent) window.FbIntent.del(tempOut, _dg).catch(() => {});
     }
   }
 
@@ -431,9 +430,8 @@ async function upscaleImageFileRealesrgan(srcPath, multiplier, reStatus) {
   } finally {
     // Best-effort cleanup of intermediate temp file
     const delGrant = (window.GrantHelper) ? await window.GrantHelper.ensureDelete(tempOut) : undefined;
-    if (window.api && typeof window.api.fbDelete === 'function') {
-      window.api.fbDelete(tempOut, delGrant).catch(() => {});
-    }
+    // B-007 (hhhhu3 audit): delete via native confirmation (window.FbIntent).
+    if (window.FbIntent) window.FbIntent.del(tempOut, delGrant).catch(() => {});
   }
 }
 

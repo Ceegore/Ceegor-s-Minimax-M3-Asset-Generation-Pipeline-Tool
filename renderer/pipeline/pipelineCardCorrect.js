@@ -35,7 +35,8 @@
         } finally {
           // BGR-009 fix: mint delete grant for temp cleanup (R1.3 gate).
           const delGrant = (window.GrantHelper) ? await window.GrantHelper.ensureDelete(temp) : undefined;
-          window.api.fbDelete(temp, delGrant).catch(() => {});
+          // B-007 (hhhhu3 audit): delete via native confirmation (window.FbIntent).
+          window.FbIntent.del(temp, delGrant).catch(() => {});
         }
       },
       onSaved: () => {

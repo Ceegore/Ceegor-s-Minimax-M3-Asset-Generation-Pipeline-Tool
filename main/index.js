@@ -215,14 +215,54 @@ app.whenReady().then(() => {
     const providersStore = require('../src/providersStore');
     const { ProviderCredentialRepository } = require('./services/ProviderCredentialRepository');
     const blobStore = require('./services/SecretBlobStore');
-    const providersPath = path.join(app.getPath('userData'), 'providers.json');
-    const providerCredRepo = new ProviderCredentialRepository({ blobStore, providersPath });
+    // B-005 (hhhhu3 audit): the repository MUST operate on the SAME
+    // providers.json the live store uses. providersStore.file() is the one
+    // Main-owned path (configDir()/providers.json). The previous independent
+    // calculation (userData/providers.json) diverged in packaged builds,
+    // where configDir() is the exe directory — migration and credential
+    // resolution hit a different file than the live store.
+    const providerCredRepo = new ProviderCredentialRepository({ blobStore, providersPath: providersStore.file() });
     // One-time migration of legacy plaintext apiKey fields to encrypted blobs.
     try { providerCredRepo.migrateLegacy(); } catch (_) {}
     // Register the new repository so IPC handlers can resolve keys through it.
     providersStore.registerCredentialRepository(providerCredRepo);
   } catch (e) {
     _queueLog('[main] ProviderCredentialRepository init failed: ' + ((e && e.message) || e));
+  }
+
+  // H-006 (hhhhu3 audit): migrate a legacy PLAINTEXT primary api_key to the
+  // encrypted blob store at startup. Without this, existing users keep
+  // storing and using a plaintext key indefinitely unless they manually
+  // re-save Settings. Failures (e.g. both legacy + secure fields present)
+  // are logged, never fatal — the resolver retries migration on demand.
+  try {
+    const credentialRepo = require('./services/CredentialRepository');
+    const migration = credentialRepo.migrateLegacy();
+    if (migration && migration.migrated) {
+      _queueLog('[main] migrated legacy primary api_key to encrypted credential store');
+    }
+  } catch (e) {
+    _queueLog('[main] primary credential migration failed: ' + ((e && e.message) || e));
+  }
+
+  // H-003 (hhhhu3 audit): run output-transaction recovery at startup, before
+  // renderer creation. A crash mid-commit leaves journals + staged/installed
+  // files; recover() deterministically rolls back or cleans them so the
+  // advertised crash-consistency guarantee is delivered automatically.
+  // Best-effort: a recovery failure is logged and never blocks boot.
+  try {
+    const { OutputTransactionService } = require('./services/OutputTransactionService');
+    const txnService = new OutputTransactionService({
+      journalDir: path.join(app.getPath('userData'), 'output-transactions'),
+    });
+    const recovery = txnService.recover();
+    if (recovery.recovered || recovery.manualReview || recovery.errors.length) {
+      _queueLog('[main] output-transaction recovery: recovered=' + recovery.recovered
+        + ' manualReview=' + recovery.manualReview
+        + (recovery.errors.length ? ' errors=' + recovery.errors.join(' | ').slice(0, 500) : ''));
+    }
+  } catch (e) {
+    _queueLog('[main] output-transaction recovery failed: ' + ((e && e.message) || e));
   }
 
   for (const entry of ipcRegistrars) {
@@ -291,9 +331,19 @@ function _wipeSessionStoreBestEffort() {
     sessionStore.clearSessionCredential();
   } catch (_) { /* best-effort */ }
 }
+// M-015 (hhhhu3 audit): destroy the destructive-intent service on window
+// close so unconfirmed/unused tokens never survive past the session that
+// minted them (the tokens are sender-bound anyway; the renderer is gone).
+function _destroyIntentServiceBestEffort() {
+  try {
+    const { intentService } = require('./ipc/fileBrowserDestructiveIntent');
+    intentService.destroy();
+  } catch (_) { /* best-effort */ }
+}
 app.on('browser-window-created', (_e, win) => {
   if (!win || win.isDestroyed()) return;
   win.on('closed', _wipeSessionStoreBestEffort);
+  win.on('closed', _destroyIntentServiceBestEffort);
 });
 
 // Graceful shutdown: ask the renderer to flush in-flight job summaries,

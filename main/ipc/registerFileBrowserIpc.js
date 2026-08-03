@@ -38,7 +38,7 @@ const { authorizePath: _authorizePath } = require('./grantAuthorizer');
 const { secureHandle } = require('./secureHandle');
 // H-013 (hhhhu2 audit): native destructive-operation intent confirmation
 // (fb:confirmDestructive + consumeIntent) — split into its own module.
-const { registerConfirmDestructive, consumeIntent } = require('./fileBrowserDestructiveIntent');
+const { registerConfirmDestructive, consumeIntent, captureIdentity } = require('./fileBrowserDestructiveIntent');
 // M-014 (hhhhu2 audit): paginated directory listing handlers
 // (fb:listStart / fb:listNext / fb:listClose / fb:listDrives).
 const { registerListingHandlers } = require('./fileBrowserListingIpc');
@@ -145,12 +145,16 @@ function register(deps) {
     const targetPath = pathUtils.normalize(path.join(dirOfP, newName));
     const targetAuthz = _authorizePath(grantId, 'write', targetPath);
     if (!targetAuthz.ok) return targetAuthz;
+    // M-014 (hhhhu3 audit): canonical realpath + re-observed identity reject
+    // a target swap between confirmation and execution.
+    const renameIdentity = await captureIdentity(authz.canonicalPath);
     // H-013: consume the intent token.
     const renameIntentErr = consumeIntent(e, intentId, {
       operation: 'rename',
-      canonicalSource: path.resolve(p),
-      canonicalDestination: path.resolve(targetPath),
+      canonicalSource: authz.canonicalPath,
+      canonicalDestination: targetAuthz.canonicalPath,
       sourceGrantId: grantId,
+      sourceIdentity: renameIdentity,
     });
     if (renameIntentErr) return renameIntentErr;
     try { return { ok: true, ...(await fb.rename(p, newName)) }; }
@@ -166,11 +170,14 @@ function register(deps) {
     if (typeof p !== 'string' || !p) return { ok: false, error: 'p is required.' };
     const authz = _authorizePath(grantId, 'delete', p);
     if (!authz.ok) return authz;
+    // M-014 (hhhhu3 audit): canonical realpath + re-observed identity.
+    const deleteIdentity = await captureIdentity(authz.canonicalPath);
     // H-013: consume the intent token.
     const deleteIntentErr = consumeIntent(e, intentId, {
       operation: 'delete',
-      canonicalSource: path.resolve(p),
+      canonicalSource: authz.canonicalPath,
       sourceGrantId: grantId,
+      sourceIdentity: deleteIdentity,
     });
     if (deleteIntentErr) return deleteIntentErr;
     try { return { ok: true, path: await fb.deletePath(p) }; }
@@ -190,13 +197,16 @@ function register(deps) {
     if (!srcAuthz.ok) return srcAuthz;
     const destAuthz = _authorizePath(destGrantId || grantId, 'write', destPath);
     if (!destAuthz.ok) return destAuthz;
+    // M-014 (hhhhu3 audit): canonical realpath + re-observed identity.
+    const moveIdentity = await captureIdentity(srcAuthz.canonicalPath);
     // H-013: consume the intent token.
     const moveIntentErr = consumeIntent(e, intentId, {
       operation: 'move',
-      canonicalSource: path.resolve(src),
-      canonicalDestination: path.resolve(destPath),
+      canonicalSource: srcAuthz.canonicalPath,
+      canonicalDestination: destAuthz.canonicalPath,
       sourceGrantId: grantId,
       destinationGrantId: destGrantId || grantId,
+      sourceIdentity: moveIdentity,
     });
     if (moveIntentErr) return moveIntentErr;
     try { return { ok: true, ...(await fb.moveTo(src, destDir)) }; }

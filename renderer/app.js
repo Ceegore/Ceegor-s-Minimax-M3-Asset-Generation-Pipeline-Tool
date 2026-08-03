@@ -331,12 +331,13 @@ async function init() {
     const dest = state.fbDir || state.config.output_dir || '';
     if (!dest) { toast('No destination folder.', 'err'); return; }
     (window.fbBulkAction || (() => {}))('Move', async (path) => {
-      // BGR-009 fix: mint move grant (R1.3 gate).
-      // gewv2 GEW-002 fix: ensureMove now returns { ok, srcGrant, destGrant }
-      // (dual grants when src/destDir don't share a trusted common ancestor).
+      // BGR-009 fix: mint move grant (R1.3 gate). gewv2 GEW-002: ensureMove
+      // returns { ok, srcGrant, destGrant } (dual grants, no common ancestor).
       const mv = (window.GrantHelper) ? await window.GrantHelper.ensureMove(path, dest) : undefined;
       if (mv && mv.ok === false) throw new Error(mv.error || 'move grant failed');
-      const r = await window.api.fbMove(path, dest, mv && mv.srcGrant, mv && mv.destGrant);
+      // B-007 (hhhhu3 audit): confirm-then-execute via window.FbIntent.
+      const r = await window.FbIntent.move(path, dest, mv && mv.srcGrant, mv && mv.destGrant);
+      if (window.FbIntent.isCanceled(r)) return; // user declined the native confirmation
       if (!r || !r.ok) throw new Error((r && r.error) || 'move failed');
     });
   });
@@ -359,13 +360,10 @@ async function init() {
     const audioExts = ['.mp3', '.wav', '.flac', '.ogg', '.m4a', '.opus', '.pcm', '.aac', '.wma', '.aif', '.aiff'];
     const audioPaths = paths.filter((p) => audioExts.includes('.' + (p.split('.').pop() || '').toLowerCase()));
     if (!audioPaths.length) { toast('None of the selected files are audio. The audio cutter only works on .mp3/.wav/.flac/etc.', 'warn', 5000); return; }
-    // H-048 (_5 audit): the audio cutter is an interactive SINGLE-file
-    // editor. The old bulk path opened the cutter for the first audio
-    // file only, yet fbBulkAction counted EVERY selected path as a
-    // success ("N items ok") — a misleading bulk-trim that silently
-    // skipped files. Until a real batch trim exists (one shared settings
-    // dialog + sequential audioCut with a per-file result), the action is
-    // gated to exactly one audio file and renamed "Audio cutter".
+    // H-048 (_5 audit): the audio cutter is an interactive SINGLE-file editor.
+    // The old bulk path opened the cutter for the first audio file only, yet
+    // counted EVERY selected path as a success. Until a real batch trim exists,
+    // the action is gated to exactly one audio file (renamed "Audio cutter").
     if (audioPaths.length !== 1) {
       toast(`The audio cutter edits one file at a time. Select exactly one audio file (you have ${audioPaths.length}).`, 'warn', 6000);
       return;
@@ -381,7 +379,9 @@ async function init() {
     (window.fbBulkAction || (() => {}))('Delete', async (path) => {
       // BGR-009 fix: mint delete grant (R1.3 gate).
       const deleteGrant = (window.GrantHelper) ? await window.GrantHelper.ensureDelete(path) : undefined;
-      const r = await window.api.fbDelete(path, deleteGrant);
+      // B-007 (hhhhu3 audit): confirm-then-execute via window.FbIntent.
+      const r = await window.FbIntent.del(path, deleteGrant);
+      if (window.FbIntent.isCanceled(r)) return; // user declined the native confirmation
       if (!r || !r.ok) throw new Error((r && r.error) || 'delete failed');
     });
   });

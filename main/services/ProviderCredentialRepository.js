@@ -10,13 +10,17 @@
  *
  * This repository:
  * - Stores provider API keys as immutable encrypted blobs via SecretBlobStore
- * - providers.json holds only credential_id references, never raw keys
+ * - providers.json files WRITTEN BY THIS REPOSITORY hold only credential_id
+ *   references, never raw keys (L-002 hhhhu3 audit: legacy stores may still
+ *   carry raw apiKey/_sessionKey fields — clear()/migrate actively strip
+ *   them; do not infer that every existing providers.json is secret-free)
  * - Provides typed read/replace/clear operations with crash-safe ordering
  * - Returns secret-free DTOs for renderer consumption
  */
 
 const fs = require('fs');
 const path = require('path');
+const { randomUUID } = require('crypto');
 const { CODES, AppError } = require('../errors/AppError');
 
 class ProviderCredentialRepository {
@@ -52,13 +56,20 @@ class ProviderCredentialRepository {
 
   /**
    * Write the providers store atomically.
+   * M-005 (hhhhu3 audit): a UNIQUE tmp name per write — a fixed `.tmp`
+   * suffix made concurrent writes collide and clobber each other.
    * @param {object} data
    */
   _writeStore(data) {
     const json = JSON.stringify(data, null, 2);
-    const tmp = this.providersPath + '.tmp';
-    fs.writeFileSync(tmp, json, { mode: 0o600 });
-    fs.renameSync(tmp, this.providersPath);
+    const tmp = this.providersPath + '.tmp-' + randomUUID();
+    try {
+      fs.writeFileSync(tmp, json, { mode: 0o600 });
+      fs.renameSync(tmp, this.providersPath);
+    } catch (e) {
+      try { fs.unlinkSync(tmp); } catch (_) {}
+      throw e;
+    }
   }
 
   /**
@@ -140,12 +151,20 @@ class ProviderCredentialRepository {
     // Step 1: Write new blob
     const { id: newId } = this.blobStore.writeNew(`provider-${providerId}`, apiKey);
 
-    // Step 2: Swap reference in store
+    // Step 2: Swap reference in store.
+    // M-005 (hhhhu3 audit): if the metadata write fails, remove the blob
+    // we just created — otherwise it stays orphaned forever.
     const oldId = provider.credential_id || null;
     provider.credential_id = newId;
     delete provider.apiKey; // Remove any legacy plaintext
     delete provider._sessionKey;
-    this._writeStore(store);
+    try {
+      this._writeStore(store);
+    } catch (e) {
+      provider.credential_id = oldId || undefined;
+      try { this.blobStore.remove(newId); } catch (_) {}
+      throw e;
+    }
 
     // Step 3: Clean old blob (best-effort, non-blocking)
     if (oldId && oldId !== newId) {
@@ -173,7 +192,15 @@ class ProviderCredentialRepository {
       const oldId = provider.credential_id;
       delete provider.credential_id;
       delete provider.apiKey;
-      this._writeStore(store);
+      try {
+        this._writeStore(store);
+      } catch (e) {
+        // M-005 (hhhhu3 audit): the disk still references the old blob —
+        // revert the session map so resolution stays consistent, then
+        // surface the failure.
+        this._sessionKeys.delete(providerId);
+        throw e;
+      }
       try { this.blobStore.remove(oldId); } catch (_) {}
     }
   }
@@ -205,29 +232,46 @@ class ProviderCredentialRepository {
   /**
    * Migrate legacy plaintext apiKey fields to encrypted blobs.
    * Called once during startup or on first access.
+   *
+   * M-005 (hhhhu3 audit): commit EACH provider's migration (blob +
+   * metadata) before moving to the next. The old shape wrote all blobs
+   * first and the metadata once at the end — a failed metadata write
+   * orphaned every blob while the plaintext stayed on disk. Now a
+   * failed metadata write removes the blob it just created and keeps
+   * the plaintext for a future retry.
    * @returns {{ migrated: number, failed: number }}
    */
   migrateLegacy() {
     const store = this._readStore();
     let migrated = 0;
     let failed = 0;
-    let dirty = false;
 
     for (const provider of (store.providers || [])) {
       if (provider.apiKey && typeof provider.apiKey === 'string' && provider.apiKey.length > 0) {
+        const plaintext = provider.apiKey;
+        let blobId = null;
         try {
-          const { id: blobId } = this.blobStore.writeNew(`provider-${provider.id}`, provider.apiKey);
-          provider.credential_id = blobId;
-          delete provider.apiKey;
-          dirty = true;
+          ({ id: blobId } = this.blobStore.writeNew(`provider-${provider.id}`, plaintext));
+        } catch (_) {
+          failed++;
+          continue;
+        }
+        provider.credential_id = blobId;
+        delete provider.apiKey;
+        try {
+          this._writeStore(store);
           migrated++;
         } catch (_) {
+          // Roll back: remove the orphan blob and restore the plaintext
+          // field so the key is not lost.
+          try { this.blobStore.remove(blobId); } catch (_) {}
+          provider.apiKey = plaintext;
+          delete provider.credential_id;
           failed++;
         }
       }
     }
 
-    if (dirty) this._writeStore(store);
     return { migrated, failed };
   }
 }

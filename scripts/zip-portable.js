@@ -32,6 +32,7 @@ const crypto = require('crypto');
 const path = require('path');
 const { spawn, spawnSync } = require('child_process');
 const { verifyRuntimeAssets } = require('./lib/runtimeAssets');
+const { outerManifestEntries, releasePaths } = require('./releaseArtifacts');
 
 const ROOT = path.resolve(__dirname, '..');
 const DIST = path.join(ROOT, 'dist-out');
@@ -118,6 +119,21 @@ function writeProvenance() {
       asarSha256 = crypto.createHash('sha256').update(fs.readFileSync(asarPath)).digest('hex');
     }
   } catch (_) { /* best-effort */ }
+  // M-023 (hhhhu3 audit): record independent CI evidence when the build runs
+  // inside GitHub Actions. The workflow run URL is the verifiable proof that
+  // the test gates executed for this commit — a commit message claiming
+  // "N tests pass" is NOT evidence and must not be relied on.
+  let ci = null;
+  if (process.env.GITHUB_ACTIONS === 'true') {
+    ci = {
+      provider: 'github-actions',
+      workflow: process.env.GITHUB_WORKFLOW || null,
+      runUrl: (process.env.GITHUB_SERVER_URL && process.env.GITHUB_REPOSITORY && process.env.GITHUB_RUN_ID)
+        ? `${process.env.GITHUB_SERVER_URL}/${process.env.GITHUB_REPOSITORY}/actions/runs/${process.env.GITHUB_RUN_ID}`
+        : null,
+      sha: process.env.GITHUB_SHA || null,
+    };
+  }
   const record = {
     version: VERSION,
     electronVersion,
@@ -125,6 +141,7 @@ function writeProvenance() {
     commit,
     commitDirty,
     asarSha256,
+    ci,
     builtAt: new Date().toISOString(),
   };
   fs.writeFileSync(provPath, JSON.stringify(record, null, 2) + '\n', 'utf8');
@@ -324,17 +341,14 @@ function printPrivilegeFix() {
     fail('packaged dependency check failed: ' + ((e && e.message) || e));
   }
 
+  // ---- Step 1.7 (M-024): per-file integrity manifest inside the release ----
+  // B-001 (hhhhu3 audit): FILES.sha256 is written BEFORE the installer test —
+  // the installer fails closed when the manifest is absent, so the old order
+  // (test first, manifest second) made every portable build fail. Every file
+  // that ships in the tree (including the installer CMD copied below) must
+  // already be in place, otherwise the completeness check rejects the tree.
   log('');
-  log('Step 1.7: testing the no-admin installer and its shortcuts...');
-  try {
-    await run(process.execPath, [path.join(ROOT, 'scripts', 'test-release-installer.js'), UNPACKED], { cwd: ROOT });
-  } catch (e) {
-    fail('installer test failed: ' + ((e && e.message) || e));
-  }
-
-  // ---- Step 1.8 (M-024): per-file integrity manifest inside the release ----
-  log('');
-  log('Step 1.8: writing per-file integrity manifest (FILES.sha256)...');
+  log('Step 1.7: writing per-file integrity manifest (FILES.sha256)...');
   {
     const SKIP_NAMES = new Set(['FILES.sha256']);
     const lines = [];
@@ -355,6 +369,14 @@ function printPrivilegeFix() {
     lines.sort((a, b) => a.slice(66).localeCompare(b.slice(66)));
     fs.writeFileSync(path.join(UNPACKED, 'FILES.sha256'), lines.join('\n') + '\n', 'utf8');
     log('  ' + lines.length + ' files hashed');
+  }
+
+  log('');
+  log('Step 1.8: testing the no-admin installer and its shortcuts...');
+  try {
+    await run(process.execPath, [path.join(ROOT, 'scripts', 'test-release-installer.js'), UNPACKED], { cwd: ROOT });
+  } catch (e) {
+    fail('installer test failed: ' + ((e && e.message) || e));
   }
 
   // ---- Step 2: zip the release folder ----
@@ -474,16 +496,22 @@ function printPrivilegeFix() {
   // directly when it is run from inside the extracted release.
   const easyInstallerPath = path.join(DIST, 'Install-MiniMax-Asset-Tool.cmd');
   await fsp.copyFile(path.join(ROOT, 'Install MiniMax Asset Tool.cmd'), easyInstallerPath);
-  // Write a .sha256 checksum manifest alongside the archive(s).
+  // B-002 (hhhhu3 audit): write the outer .sha256 manifest from the ONE
+  // canonical release-artifact inventory (releaseArtifacts.outerManifestEntries)
+  // so the strict verifier, signer, and installer bootstrap all agree on the
+  // exact same file set — executable, archive part(s), and installer CMD.
+  const canonicalEntries = outerManifestEntries(releasePaths(ROOT));
   const checksumLines = [];
-  for (const fp of [...finalPaths, easyInstallerPath]) {
+  for (const rel of canonicalEntries) {
+    const fp = path.join(DIST, rel);
+    if (!fs.existsSync(fp)) fail(`canonical release artifact is missing: ${rel}`);
     const h = crypto.createHash('sha256');
     const fd = fs.openSync(fp, 'r');
     const buf = Buffer.alloc(64 * 1024);
     let n;
     while ((n = fs.readSync(fd, buf, 0, buf.length, null)) > 0) h.update(buf.slice(0, n));
     fs.closeSync(fd);
-    checksumLines.push(h.digest('hex') + '  ' + path.basename(fp));
+    checksumLines.push(h.digest('hex') + '  ' + rel);
   }
   fs.writeFileSync(MANIFEST_PATH, checksumLines.join('\n') + '\n', 'utf8');
 

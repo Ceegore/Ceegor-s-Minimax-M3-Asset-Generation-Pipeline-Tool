@@ -142,6 +142,13 @@ function loadSection07(apiOverrides, stateOverrides) {
   win.addEventListener = () => {};
   win.removeEventListener = () => {};
   win.api = api;
+  // B-007 (hhhhu3 audit): section07 routes deletions through window.FbIntent
+  // (confirm-then-execute). Delegate to the spied api.fbDelete so the tests
+  // keep observing which paths the chain targets.
+  win.FbIntent = {
+    del: (p, _grant) => api.fbDelete(p),
+    isCanceled: () => false,
+  };
   win.state = state;
   win.escapeHtml = escapeHtml;
   win.setStatus = setStatus;
@@ -415,13 +422,15 @@ test('PP-6: full chain (upscale+crop+removebg+optimize) must keep original and l
 });
 
 // ---------------------------------------------------------------------------
-// PP-7: Source-level invariant — every `fbDelete(displayFile)` call in
+// PP-7: Source-level invariant — every `FbIntent.del(displayFile)` call in
 //       section07's runPostProcessChain must be guarded by
 //       `displayFile !== srcPath` (either on the same line or in the
 //       immediately-preceding lines). Uses a simple line-neighbourhood
 //       check, robust to arrow-fn / template-string braces.
+//       (B-007 hhhhu3 audit: the calls moved from window.api.fbDelete to
+//       window.FbIntent.del; the guard invariant is unchanged.)
 // ---------------------------------------------------------------------------
-test('PP-7: every fbDelete(displayFile) in runPostProcessChain must be guarded by displayFile !== srcPath', () => {
+test('PP-7: every FbIntent.del(displayFile) in runPostProcessChain must be guarded by displayFile !== srcPath', () => {
   const src = fs.readFileSync(SECTION07, 'utf8');
   // Only inspect the part BEFORE the showUpscaleDirect modal (which has
   // its own legitimately-unguarded fbDelete calls on chain-created
@@ -431,8 +440,8 @@ test('PP-7: every fbDelete(displayFile) in runPostProcessChain must be guarded b
   const violations = [];
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i];
-    if (!/\bfbDelete\(/.test(line)) continue;
-    if (!/fbDelete\(\s*displayFile\b/.test(line)) continue;
+    if (!/FbIntent\.del\(/.test(line)) continue;
+    if (!/FbIntent\.del\(\s*displayFile\b/.test(line)) continue;
     if (/^\s*\/\//.test(line) || /^\s*\*/.test(line)) continue;
     // Look back up to 3 lines for the guard
     const window = lines.slice(Math.max(0, i - 3), i + 1).join('\n');
@@ -442,7 +451,7 @@ test('PP-7: every fbDelete(displayFile) in runPostProcessChain must be guarded b
     }
   }
   assert.equal(violations.length, 0,
-    'SYS-004: every fbDelete(displayFile) call in runPostProcessChain must be guarded by `displayFile !== srcPath`. Violations:\n' + violations.join('\n'));
+    'SYS-004: every FbIntent.del(displayFile) call in runPostProcessChain must be guarded by `displayFile !== srcPath`. Violations:\n' + violations.join('\n'));
 });
 
 // ---------------------------------------------------------------------------

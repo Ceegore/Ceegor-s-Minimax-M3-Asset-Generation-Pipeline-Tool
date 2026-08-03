@@ -99,10 +99,11 @@
   // extension filter drops the .meta.json / .tmp / .part files mmx-cli
   // sometimes leaves behind.
   async function listRunDirFiles(dir) {
-    if (!dir || !window.api || typeof window.api.fbList !== 'function') return [];
+    if (!dir || !window.api) return [];
     try {
       const _g = (window.GrantHelper && window.GrantHelper.ensureDirList) ? await window.GrantHelper.ensureDirList(dir) : undefined;
-      const list = (_g && _g.ok === false) ? _g : await window.api.fbList(dir, _g);
+      // M-012 (hhhhu3 audit): paginated listing drain.
+      const list = (_g && _g.ok === false) ? _g : await window.FbListPaged.drain(dir, _g);
       if (list && list.ok && Array.isArray(list.items)) {
         return list.items
           .filter((it) => !it.isDir && ['.png', '.jpg', '.jpeg', '.webp'].includes(it.ext))
@@ -260,8 +261,9 @@
         const keep = !(ctxOverrides && ctxOverrides.keepPartialOutputs === false);
         let partialPaths = runSubdir ? await listRunDirFiles(runSubdir) : [];
         if (runSubdir && !keep) {
-          if (window.api && typeof window.api.fbDelete === 'function') {
-            try { const dg = (window.GrantHelper) ? await window.GrantHelper.ensureDelete(runSubdir) : undefined; await window.api.fbDelete(runSubdir, dg); } catch (_) { /* best-effort */ }
+          if (window.FbIntent) {
+            // B-007 (hhhhu3 audit): delete via native confirmation (window.FbIntent).
+            try { const dg = (window.GrantHelper) ? await window.GrantHelper.ensureDelete(runSubdir) : undefined; await window.FbIntent.del(runSubdir, dg); } catch (_) { /* best-effort */ }
           }
           partialPaths = [];
         }
@@ -291,9 +293,10 @@
       // dead run_<id>/ folders. The fb:delete call is best-effort — a
       // permissions error or an OS-level failure must NOT mask the original
       // mmx error we're returning to the caller.
-      if (runSubdir && window.api && typeof window.api.fbDelete === 'function') {
+      if (runSubdir && window.FbIntent) {
         // BGR-009 fix: mint delete grant (R1.3 gate).
-        try { const dg = (window.GrantHelper) ? await window.GrantHelper.ensureDelete(runSubdir) : undefined; await window.api.fbDelete(runSubdir, dg); } catch (_) { /* best-effort */ }
+        // B-007 (hhhhu3 audit): delete via native confirmation (window.FbIntent).
+        try { const dg = (window.GrantHelper) ? await window.GrantHelper.ensureDelete(runSubdir) : undefined; await window.FbIntent.del(runSubdir, dg); } catch (_) { /* best-effort */ }
       }
       return { ok: false, outFile, error: r.stderr || r.error || 'mmx failed' };
     }

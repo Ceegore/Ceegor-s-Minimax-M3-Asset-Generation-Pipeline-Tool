@@ -181,43 +181,34 @@ test('L13 FIX: mmx.js cancel uses SIGKILL escalation', () => {
 });
 
 // ============================================================================
-// L14: mmx.js routes the API key through ~/.mmx/config.json instead of argv
+// L14: mmx.js routes the API key through the fd-3 credential bridge
+//      (H-007, hhhhu3 audit — supersedes the old ~/.mmx/config.json sync)
 // ============================================================================
-test('L14 FIX: mmx.js syncs the API key to ~/.mmx/config.json + drops argv on success', () => {
-  // v1.1 (lint-size split + BUG-N4 fix): the API-key sync was
-  // extracted to src/mmxApiKeySync.js so mmx.js stays under
-  // the 500-line HARD limit AND so the sync can track the
-  // file's mtime+size (the BUG-N4 fix for "external `mmx
-  // config set` not detected" — the inline version in mmx.js
-  // did not have room for the stat tracking). The mmx.js
-  // caller now imports the helper; the L14 fix itself is
-  // unchanged in behaviour.
+test('L14 FIX: mmx.js routes the API key via the fd-3 credential bridge (no disk/env/argv)', () => {
+  // H-007 (hhhhu3 audit): the previous transports — syncing the key into
+  // ~/.mmx/config.json and the ephemeral MINIMAX_API_KEY env bootstrap —
+  // were replaced by src/mmxCredentialBridge.js: the key is written to the
+  // child's file descriptor 3 after spawn and injected into process.argv
+  // only INSIDE the child. No persistent CLI copy, no environment, no argv.
   const s = src('src/mmx.js');
-  const sync = src('src/mmxApiKeySync.js');
-  assert.ok(sync.includes('syncApiKeyToMmxCliConfig'),
-    'mmxApiKeySync.js must export syncApiKeyToMmxCliConfig');
-  assert.ok(sync.includes('.mmx'),
-    'the sync must target the ~/.mmx directory');
-  assert.ok(sync.includes('config.json'),
-    'the sync must write to config.json');
-  assert.ok(s.includes('mmxApiKeySync'),
-    'mmx.js must import the sync helper from mmxApiKeySync');
-  // H7-013/022 + HIGH-002: the --api-key argv fallback is REMOVED entirely.
-  // When the sync fails, the key is routed via ephemeral env MINIMAX_API_KEY
-  // + a child-process bootstrap that injects it into process.argv only AFTER
-  // the OS command line has been created. Assert the new pattern.
-  assert.ok(/keySyncedToConfig = _syncApiKeyToMmxCliConfig\(apiKey\)/.test(s),
-    'the sync must be attempted for the persistent (non-session-only) path');
-  assert.ok(/if \(!keySyncedToConfig\) \{[\s\S]*?MINIMAX_API_KEY/.test(s),
-    'HIGH-002: when sync fails, key must be routed via env MINIMAX_API_KEY (no argv fallback)');
-  assert.ok(/SESSION_KEY_BOOTSTRAP/.test(s),
-    'HIGH-002: the bootstrap script must be used to inject the key inside the child');
-  assert.ok(/sessionOnly[\s\S]*?MINIMAX_API_KEY/.test(s),
-    'session-only mode must route the key via an ephemeral env var, not disk (H7-022)');
+  const bridge = src('src/mmxCredentialBridge.js');
+  assert.ok(s.includes("require('./mmxCredentialBridge')"),
+    'mmx.js must import the fd-3 credential bridge');
+  assert.ok(/credentialBridge\.prepare\(/.test(s),
+    'runMmx must build the spawn via credentialBridge.prepare()');
+  assert.ok(/credentialBridge\.sendCredential\(/.test(s),
+    'runMmx must hand the key over via credentialBridge.sendCredential()');
+  assert.ok(/stdio/.test(bridge) && /pipe/.test(bridge),
+    'the bridge must open an fd-3 pipe for the credential');
+  // H-007: the legacy transports are GONE from the live path.
+  assert.ok(!/syncApiKeyToMmxCliConfig/.test(s),
+    'H-007: mmx.js must no longer sync the key into ~/.mmx/config.json');
+  assert.ok(!/MINIMAX_API_KEY/.test(s),
+    'H-007: mmx.js must no longer route the key via the MINIMAX_API_KEY env var');
+  assert.ok(!/SESSION_KEY_BOOTSTRAP/.test(s),
+    'H-007: the env-based bootstrap must be replaced by the fd-3 bridge');
   assert.ok(/redactedArgs/.test(s),
     'the returned argv must be redacted so the key never reaches the renderer (H7-013)');
-  assert.ok(sync.includes('chmod'),
-    'the synced config file must get restrictive permissions (chmod 0o600)');
 });
 
 // ============================================================================

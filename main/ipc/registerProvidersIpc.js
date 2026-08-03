@@ -74,14 +74,33 @@ function register({ getMainWindow }) {
   secureHandle('providers:getPublic', { getMainWindow }, () => {
     try {
       const d = providersStore.read();
-      const providers = (d.providers || []).map((p) => ({
-        id: p.id,
-        label: p.label,
-        kind: p.kind,
-        baseUrl: p.baseUrl || '',
-        hasKey: !!(p.apiKey && p.apiKey.length > 0),
-        apiKeyLast4: (p.apiKey && p.apiKey.length >= 4) ? p.apiKey.slice(-4) : '',
-      }));
+      // H-010 (hhhhu3 audit): key presence/state comes from the credential
+      // repository (persisted blob or in-memory session map), NEVER from a
+      // raw apiKey field — the public status and the live resolver must
+      // agree. The repository is constructed on the SAME providers.json the
+      // live store uses (B-005), so both views hit one file.
+      const credRepo = providersStore._getCredentialRepo();
+      let stateById = null;
+      if (credRepo && typeof credRepo.getPublic === 'function') {
+        try {
+          stateById = new Map(credRepo.getPublic().map((pub) => [pub.id, pub]));
+        } catch (_) { stateById = null; }
+      }
+      const providers = (d.providers || []).map((p) => {
+        const pub = stateById && stateById.get(p.id);
+        const hasKey = pub ? !!pub.hasKey : !!(p.apiKey && p.apiKey.length > 0);
+        return {
+          id: p.id,
+          label: p.label,
+          kind: p.kind,
+          baseUrl: p.baseUrl || '',
+          hasKey,
+          credentialState: pub ? pub.credentialState : ((p.apiKey && p.apiKey.length > 0) ? 'legacy-plaintext' : 'none'),
+          // Only the no-repo legacy path can show a tail; encrypted keys
+          // never expose even 4 chars through this DTO.
+          apiKeyLast4: (!pub && p.apiKey && p.apiKey.length >= 4) ? p.apiKey.slice(-4) : '',
+        };
+      });
       return { ok: true, providers, selections: d.selections || {} };
     } catch (_) {
       return { ok: true, providers: [], selections: {} };
@@ -142,7 +161,61 @@ function register({ getMainWindow }) {
           }
         }
       }
-      providersStore.write(data);
+      // B-006 (hhhhu3 audit): provider key changes are TYPED ACTIONS routed
+      // exclusively through the encrypted ProviderCredentialRepository. Raw
+      // key fields never reach the metadata store: they are lifted out of
+      // the payload here, the metadata is written key-free, and the key
+      // operations are applied afterwards (the providers must exist in the
+      // store before replacePersisted can bind a blob to them).
+      //
+      // Action resolution: an explicit `keyAction` wins; otherwise a
+      // non-empty apiKey means 'replace' and an absent/empty one means
+      // 'keep' (the renderer's "empty input = keep existing" contract).
+      const credRepo = providersStore._getCredentialRepo();
+      const keyOps = [];
+      if (data && Array.isArray(data.providers)) {
+        for (const p of data.providers) {
+          const rawKey = (typeof p.apiKey === 'string') ? p.apiKey.trim() : '';
+          let action = (typeof p.keyAction === 'string') ? p.keyAction : '';
+          if (action && action !== 'keep' && action !== 'replace' && action !== 'session' && action !== 'clear') {
+            return { ok: false, error: `Provider "${p.id}": keyAction must be 'keep', 'replace', 'session' or 'clear'.` };
+          }
+          if (!action) action = rawKey ? 'replace' : 'keep';
+          if ((action === 'replace' || action === 'session') && !rawKey) {
+            return { ok: false, error: `Provider "${p.id}": keyAction '${action}' requires a non-empty apiKey.` };
+          }
+          if (action !== 'keep') keyOps.push({ id: p.id, action, value: rawKey });
+          delete p.keyAction;
+          delete p.apiKey;      // raw keys never reach the metadata store
+          delete p._sessionKey;
+        }
+      }
+      const keyWarnings = [];
+      if (credRepo) {
+        providersStore.write(data); // metadata only — no key material
+        for (const op of keyOps) {
+          try {
+            if (op.action === 'replace') credRepo.replacePersisted(op.id, op.value);
+            else if (op.action === 'session') credRepo.useSessionOnly(op.id, op.value);
+            else if (op.action === 'clear') credRepo.clear(op.id);
+          } catch (opErr) {
+            // Metadata is committed; report the key failure as a warning so
+            // the renderer does not retry the whole save (which would
+            // re-write metadata needlessly).
+            keyWarnings.push(`Provider "${op.id}": key ${op.action} failed (${(opErr && opErr.message) || opErr})`);
+          }
+        }
+      } else {
+        // No encrypted repository registered (tests / dev without Main
+        // boot): keep the legacy plaintext flow functional.
+        for (const op of keyOps) {
+          if (op.action === 'clear') continue;
+          const entry = (data.providers || []).find((x) => x.id === op.id);
+          if (entry) entry.apiKey = op.value;
+        }
+        providersStore.write(data);
+      }
+      if (keyWarnings.length) return { ok: true, warnings: keyWarnings, error: keyWarnings.join('; ') };
       return { ok: true };
     }
     catch (e) { return { ok: false, error: String(e.message || e) }; }
@@ -172,7 +245,9 @@ function register({ getMainWindow }) {
       const gateSlot = cloudJobGate.acquire(p.baseUrl || providerId, { metadata: true });
       if (!gateSlot.ok) return { ok: false, error: gateSlot.error };
       try {
-        return { ok: true, models: await a.listModels({ baseUrl: p.baseUrl, apiKey: p.apiKey }) };
+        // H-001 (hhhhu3 audit): model listing goes through SafeHttpClient
+        // (DNS pinning, caps) like every other provider request.
+        return { ok: true, models: await a.listModels({ baseUrl: p.baseUrl, apiKey: p.apiKey, http: SafeHttpClient }) };
       } finally {
         cloudJobGate.release(gateSlot.id);
       }
@@ -232,8 +307,17 @@ function register({ getMainWindow }) {
       const fn = a && a[req.modality];
       if (!fn) return { ok: false, error: 'Provider ' + req.providerId + ' does not support ' + req.modality };
 
+      // H-002 (hhhhu3 audit): canonicalize and AUTHORIZE the output root
+      // BEFORE any mkdir, probe, transaction, or paid request. Previously
+      // writeProbe() created directories/files at the requested path with no
+      // grant check — a compromised renderer could mutate arbitrary
+      // OS-writable paths without a valid path grant.
+      const resolvedOut = path.resolve(req.outDir);
+      const rootAuth = authorizePath(req.grantId, 'write', path.join(resolvedOut, 'probe'));
+      if (!rootAuth.ok) return { ok: false, error: 'grant: ' + rootAuth.error };
+
       // H-016: write-probe BEFORE the paid API call — fail fast if outDir is unwritable.
-      const probe = writeProbe(req.outDir);
+      const probe = writeProbe(resolvedOut);
       if (!probe.ok) return { ok: false, error: probe.error };
 
       send({ stage: 'submitting' });
@@ -247,6 +331,9 @@ function register({ getMainWindow }) {
         format: req.format,
         params: req.params || {},
         signal: ctrl.signal,
+        // H-001 (hhhhu3 audit): inject the DNS-pinned HTTP client so the
+        // adapter's listing/submission/polling never touches global fetch.
+        http: SafeHttpClient,
         onProgress: (pr) => send(pr),
         // H-012: persist remote job identity for resume after restart/timeout.
         onSubmitted: (info) => {
@@ -271,11 +358,8 @@ function register({ getMainWindow }) {
       // and OutputTransactionService (journaled crash-consistent promotion).
       // SafeHttpClient provides DNS-pinned downloads for URL-based outputs.
       const finalizerModality = (req.modality === 'speech' || req.modality === 'music') ? 'audio' : req.modality;
-      const resolvedOut = path.resolve(req.outDir);
-
-      // Authorize the output root for writing.
-      const rootAuth = authorizePath(req.grantId, 'write', path.join(resolvedOut, 'probe'));
-      if (!rootAuth.ok) return { ok: false, error: 'grant: ' + rootAuth.error };
+      // H-002 (hhhhu3 audit): resolvedOut + grant authorization already
+      // happened above, BEFORE the probe and the paid call.
 
       // Begin a journaled transaction.
       const journalDir = path.join(app.getPath('userData'), 'output-transactions');

@@ -62,13 +62,15 @@
     try {
       await removeExistingOutput(dst, copiedAs);
       const renameGrant = (window.GrantHelper) ? await window.GrantHelper.ensureRename(copiedAs) : undefined;
-      const rn = await window.api.fbRename(copiedAs, path.basename(dst), renameGrant);
-      if (!rn || !rn.ok) throw new Error('Rename failed: ' + ((rn && rn.error) || 'unknown'));
+      // B-007 (hhhhu3 audit): rename needs a one-shot intent token minted
+      // by the native confirmation (window.FbIntent).
+      const rn = await window.FbIntent.rename(copiedAs, path.basename(dst), renameGrant);
+      if (!rn || !rn.ok) throw new Error('Rename failed: ' + ((rn && (rn.canceled ? 'canceled by user' : rn.error)) || 'unknown'));
     } catch (e) {
       // Swap failed — tidy the staged copy so no stray temp accumulates.
       try {
         const dg = (window.GrantHelper) ? await window.GrantHelper.ensureDelete(copiedAs) : undefined;
-        if (!dg || dg.ok !== false) window.api.fbDelete(copiedAs, dg).catch(() => {});
+        if (!dg || dg.ok !== false) window.FbIntent.del(copiedAs, dg).catch(() => {});
       } catch (_) { /* best-effort */ }
       throw e;
     }
@@ -85,13 +87,15 @@
     // BGR-009 fix: mint move grant (R1.3 gate).
     // gewv2 GEW-002 fix: ensureMove returns { ok, srcGrant, destGrant }.
     const mv = (window.GrantHelper) ? await window.GrantHelper.ensureMove(src, dstDir) : undefined;
-    const r = await window.api.fbMove(src, dstDir, mv && mv.srcGrant, mv && mv.destGrant);
-    if (!r || !r.ok) throw new Error((r && r.error) || 'Failed to move file');
+    // B-007 (hhhhu3 audit): move needs a one-shot intent token minted by
+    // the native confirmation (window.FbIntent).
+    const r = await window.FbIntent.move(src, dstDir, mv && mv.srcGrant, mv && mv.destGrant);
+    if (!r || !r.ok) throw new Error((r && (r.canceled ? 'Move canceled by user' : r.error)) || 'Failed to move file');
     const movedAs = r.path || path.join(dstDir, path.basename(src));
     if (!same(movedAs, dst)) {
       const renameGrant = (window.GrantHelper) ? await window.GrantHelper.ensureRename(movedAs) : undefined;
-      const rn = await window.api.fbRename(movedAs, dstName, renameGrant);
-      if (!rn || !rn.ok) throw new Error((rn && rn.error) || 'Rename failed');
+      const rn = await window.FbIntent.rename(movedAs, dstName, renameGrant);
+      if (!rn || !rn.ok) throw new Error((rn && (rn.canceled ? 'Rename canceled by user' : rn.error)) || 'Rename failed');
     }
   }
 
@@ -102,8 +106,10 @@
     const exists = await window.api.fbExists(dst, existsGrant).catch(() => null);
     if (!exists || !exists.exists || same(src, dst)) return;
     const deleteGrant = (window.GrantHelper) ? await window.GrantHelper.ensureDelete(dst) : undefined;
-    const deleted = await window.api.fbDelete(dst, deleteGrant);
-    if (!deleted || !deleted.ok) throw new Error((deleted && deleted.error) || 'Failed to replace existing output');
+    // B-007 (hhhhu3 audit): delete needs a one-shot intent token minted
+    // by the native confirmation (window.FbIntent).
+    const deleted = await window.FbIntent.del(dst, deleteGrant);
+    if (!deleted || !deleted.ok) throw new Error((deleted && (deleted.canceled ? 'Replace canceled by user' : deleted.error)) || 'Failed to replace existing output');
   }
 
   window.PipelineFileOps = { same, ensureDirFor, copyFileIntoPlace, moveFileIntoPlace, removeExistingOutput, path };

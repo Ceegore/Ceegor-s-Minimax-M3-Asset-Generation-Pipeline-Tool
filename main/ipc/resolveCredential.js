@@ -42,16 +42,17 @@ function _isSessionOnlyFromState(stateMod) {
   try { return !!(stateMod && stateMod.read && stateMod.read().apiKeyNoSave); } catch (_) { return false; }
 }
 
-let _cfgMod = null;
-let _stateMod = null;
-let _sessionStore = null;
-let _credentialRepo = null;
+// Deps are re-required on EVERY call (cheap: require.cache hit) instead of
+// memoized. Tests swap Module._load per scenario, and a module-level cache
+// would pin the FIRST loaded config/state/session modules for the whole
+// process, silently leaking stale mocks across scenarios.
 function _loadDeps() {
-  if (!_cfgMod) _cfgMod = require('../../src/config');
-  if (!_stateMod) _stateMod = require('../../src/state');
-  if (!_sessionStore) _sessionStore = require('../services/SessionCredentialStore');
-  if (!_credentialRepo) _credentialRepo = require('../services/CredentialRepository');
-  return { cfgMod: _cfgMod, stateMod: _stateMod, sessionStore: _sessionStore, credentialRepo: _credentialRepo };
+  return {
+    cfgMod: require('../../src/config'),
+    stateMod: require('../../src/state'),
+    sessionStore: require('../services/SessionCredentialStore'),
+    credentialRepo: require('../services/CredentialRepository'),
+  };
 }
 
 /**
@@ -83,26 +84,40 @@ function resolveCredential(payload, deps) {
     // B-002 fix: resolve through CredentialRepository (encrypted blob store)
     // instead of reading plaintext cfg.api_key directly. The repository
     // handles both the new credential_id path and legacy fallback.
+    // Snapshot the legacy key BEFORE the migration attempt: migration
+    // clears cfg.api_key in-memory before its config write commits, and a
+    // config module returning a shared object would otherwise leave the
+    // fallback below with an empty key after a failed migration.
+    const legacyKey = cfg && typeof cfg.api_key === 'string' ? cfg.api_key : '';
     if (_deps.credentialRepo) {
       try {
         const resolved = _deps.credentialRepo.resolvePrimary();
         if (resolved.apiKey) return resolved;
+      } catch (_) { /* fall through */ }
+      // H-006 (hhhhu3 audit): migrate a legacy plaintext key ON DEMAND.
+      // Startup migration (main/index.js) covers the normal boot; this
+      // second chance covers setups where it was skipped or failed. After
+      // a successful migration the key resolves from the encrypted store —
+      // plaintext is never actively used while it can still be migrated.
+      try {
+        const migrated = _deps.credentialRepo.migrateLegacy();
+        if (migrated && migrated.migrated) {
+          const resolved = _deps.credentialRepo.resolvePrimary();
+          if (resolved.apiKey) return resolved;
+        }
       } catch (_) { /* fall through to legacy path */ }
     }
-    return { apiKey: cfg && cfg.api_key ? cfg.api_key : null, sessionOnly: false };
+    // Last-resort legacy fallback (e.g. encrypted storage unavailable or
+    // deps-injected tests without a repository). Migration failures keep
+    // the user functional instead of stranding the key.
+    return { apiKey: legacyKey || null, sessionOnly: false };
   } catch (_) {
     return { apiKey: null, sessionOnly: false, error: 'mmx: failed to read persisted config' };
   }
 }
 
-// Test hook: reset the lazy-loaded deps so the next call re-requires
-// the modules. Used by unit tests that swap `require.cache` between
-// scenarios.
-function _resetForTest() {
-  _cfgMod = null;
-  _stateMod = null;
-  _sessionStore = null;
-  _credentialRepo = null;
-}
+// Test hook kept for API compatibility; deps are no longer memoized, so there
+// is nothing to reset.
+function _resetForTest() {}
 
 module.exports = { resolveCredential, _resetForTest };

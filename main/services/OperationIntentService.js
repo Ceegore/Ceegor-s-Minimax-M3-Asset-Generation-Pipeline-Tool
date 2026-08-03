@@ -18,6 +18,26 @@ const crypto = require('crypto');
 const { dialog } = require('electron');
 const { CODES, AppError } = require('../errors/AppError');
 
+// M-015 (hhhhu3 audit): how often expired tokens are proactively evicted.
+const SWEEP_INTERVAL_MS = 60_000;
+
+/**
+ * M-014 (hhhhu3 audit): compare a bound file identity ({dev, ino} from
+ * lstat) against the identity observed at execution time. A null/missing
+ * identity on both sides matches (test harnesses without a filesystem);
+ * one-sided identity never matches.
+ * @param {{dev?: number, ino?: number}|null|undefined} a
+ * @param {{dev?: number, ino?: number}|null|undefined} b
+ * @returns {boolean}
+ */
+function identityEqual(a, b) {
+  const hasA = !!(a && typeof a === 'object');
+  const hasB = !!(b && typeof b === 'object');
+  if (!hasA && !hasB) return true;
+  if (!hasA || !hasB) return false;
+  return a.dev === b.dev && a.ino === b.ino;
+}
+
 class OperationIntentService {
   /**
    * @param {{now?: () => number}} [opts] - Options for testing
@@ -26,6 +46,8 @@ class OperationIntentService {
     this.now = now;
     /** @type {Map<string, object>} */
     this.tokens = new Map();
+    /** @type {ReturnType<typeof setTimeout>|null} */
+    this._sweepTimer = null;
   }
 
   /**
@@ -53,7 +75,8 @@ class OperationIntentService {
    *   canonicalSource: string,
    *   canonicalDestination?: string|null,
    *   sourceGrantId: string,
-   *   destinationGrantId?: string|null
+   *   destinationGrantId?: string|null,
+   *   sourceIdentity?: {dev: number, ino: number}|null
    * }} spec - Confirmation specification
    * @returns {Promise<{ok: true, intentId: string} | {ok: false, canceled: true}>}
    */
@@ -79,9 +102,15 @@ class OperationIntentService {
       canonicalDestination: spec.canonicalDestination || null,
       sourceGrantId: spec.sourceGrantId,
       destinationGrantId: spec.destinationGrantId || null,
+      // M-014 (hhhhu3 audit): bind the file identity observed at
+      // confirmation time. The execute handler re-observes it and must
+      // match, so swapping the target (symlink/path replacement) between
+      // confirmation and execution is rejected.
+      sourceIdentity: spec.sourceIdentity || null,
       expiresAt: this.now() + 30_000, // 30-second validity
       consumed: false,
     });
+    this._scheduleSweep();
     return { ok: true, intentId: id };
   }
 
@@ -94,7 +123,8 @@ class OperationIntentService {
    *   canonicalSource: string,
    *   canonicalDestination?: string|null,
    *   sourceGrantId: string,
-   *   destinationGrantId?: string|null
+   *   destinationGrantId?: string|null,
+   *   sourceIdentity?: {dev: number, ino: number}|null
    * }} actual - The actual operation being performed
    * @returns {{ok: true}}
    * @throws {AppError} If token is invalid, expired, consumed, or mismatched
@@ -111,7 +141,8 @@ class OperationIntentService {
       && token.canonicalSource === actual.canonicalSource
       && token.canonicalDestination === (actual.canonicalDestination || null)
       && token.sourceGrantId === actual.sourceGrantId
-      && token.destinationGrantId === (actual.destinationGrantId || null);
+      && token.destinationGrantId === (actual.destinationGrantId || null)
+      && identityEqual(token.sourceIdentity, actual.sourceIdentity);
     if (!equal) throw new AppError(CODES.PATH_INTENT_MISMATCH, 'Confirmation does not match the requested operation.');
     token.consumed = true;
     this.tokens.delete(intentId);
@@ -119,10 +150,36 @@ class OperationIntentService {
   }
 
   /**
-   * Destroy the service, clearing all tokens.
+   * M-015 (hhhhu3 audit): proactively evict expired tokens instead of
+   * retaining them until consumed or process shutdown. Runs at most once
+   * a minute while any token exists; the timer is unref'd so it never
+   * holds the process open.
+   * @private
+   */
+  _scheduleSweep() {
+    if (this._sweepTimer) return;
+    this._sweepTimer = setTimeout(() => {
+      this._sweepTimer = null;
+      const now = this.now();
+      for (const [id, token] of this.tokens) {
+        if (now > token.expiresAt) this.tokens.delete(id);
+      }
+      if (this.tokens.size > 0) this._scheduleSweep();
+    }, SWEEP_INTERVAL_MS);
+    this._sweepTimer.unref?.();
+  }
+
+  /**
+   * Destroy the service, clearing all tokens and the sweep timer.
    * Call this on app/window close.
    */
-  destroy() { this.tokens.clear(); }
+  destroy() {
+    this.tokens.clear();
+    if (this._sweepTimer) {
+      clearTimeout(this._sweepTimer);
+      this._sweepTimer = null;
+    }
+  }
 }
 
-module.exports = { OperationIntentService };
+module.exports = { OperationIntentService, identityEqual };

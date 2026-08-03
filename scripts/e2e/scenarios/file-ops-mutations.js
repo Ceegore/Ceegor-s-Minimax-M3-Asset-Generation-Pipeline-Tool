@@ -9,6 +9,11 @@
 // Strategy: create a real file in the isolated OUT dir, then drive the
 // renderer's window.api.* methods (same code path as the context-menu
 // handlers) to exercise each IPC channel end-to-end.
+//
+// B-007 (hhhhu3 audit): rename/move/delete now REQUIRE a one-shot intent
+// token minted by fb:confirmDestructive. This scenario drives them through
+// the renderer's window.FbIntent bridge (confirm-then-execute); the harness
+// auto-accepts the native confirmation (dialog.showMessageBox patch).
 // ============================================================================
 
 const path = require('path');
@@ -46,10 +51,19 @@ module.exports = {
     check(mkdirRes && mkdirRes.ok, `fb:mkdir failed: ${mkdirRes && mkdirRes.error}`);
     check(fs.existsSync(path.join(OUT, 'e2e_subfolder')), 'fb:mkdir did not create the folder on disk');
 
-    // ---- fb:rename — rename the test file ----
+    // ---- B-007 guard: a tokenless mutation must be refused ----
+    const tokenless = await exec(`(async () => {
+      try {
+        return await window.api.fbDelete(${JSON.stringify(testFile)}, ${JSON.stringify(grant)});
+      } catch (e) { return { ok: false, error: e.message }; }
+    })()`);
+    check(tokenless && tokenless.ok === false, 'fb:delete without an intent token must be refused');
+    check(fs.existsSync(testFile), 'tokenless fb:delete must not remove the file');
+
+    // ---- fb:rename — rename the test file (via the FbIntent confirm bridge) ----
     const renameRes = await exec(`(async () => {
       try {
-        return await window.api.fbRename(${JSON.stringify(testFile)}, 'e2e_renamed.png', ${JSON.stringify(grant)});
+        return await window.FbIntent.rename(${JSON.stringify(testFile)}, 'e2e_renamed.png', ${JSON.stringify(grant)});
       } catch (e) { return { ok: false, error: e.message }; }
     })()`);
     check(renameRes && renameRes.ok, `fb:rename failed: ${renameRes && renameRes.error}`);
@@ -68,11 +82,11 @@ module.exports = {
     check(fs.existsSync(path.join(subDir, 'e2e_renamed.png')), 'fb:copy did not produce the copied file in the subfolder');
     check(fs.existsSync(renamedPath), 'fb:copy removed the source (should be a copy, not a move)');
 
-    // ---- fb:move — move the copied file back to OUT root ----
+    // ---- fb:move — move the copied file back to OUT root (via FbIntent) ----
     const copiedFile = path.join(subDir, 'e2e_renamed.png');
     const moveRes = await exec(`(async () => {
       try {
-        return await window.api.fbMove(${JSON.stringify(copiedFile)}, ${JSON.stringify(OUT)}, ${JSON.stringify(grant)}, ${JSON.stringify(grant)});
+        return await window.FbIntent.move(${JSON.stringify(copiedFile)}, ${JSON.stringify(OUT)}, ${JSON.stringify(grant)}, ${JSON.stringify(grant)});
       } catch (e) { return { ok: false, error: e.message }; }
     })()`);
     check(moveRes && moveRes.ok, `fb:move failed: ${moveRes && moveRes.error}`);
@@ -105,10 +119,10 @@ module.exports = {
     })()`);
     check(openRes && openRes.invoked, 'fb:openInExplorer IPC was not invoked');
 
-    // ---- fb:delete — delete the renamed file ----
+    // ---- fb:delete — delete the renamed file (via the FbIntent confirm bridge) ----
     const deleteRes = await exec(`(async () => {
       try {
-        return await window.api.fbDelete(${JSON.stringify(renamedPath)}, ${JSON.stringify(grant)});
+        return await window.FbIntent.del(${JSON.stringify(renamedPath)}, ${JSON.stringify(grant)});
       } catch (e) { return { ok: false, error: e.message }; }
     })()`);
     check(deleteRes && deleteRes.ok, `fb:delete failed: ${deleteRes && deleteRes.error}`);

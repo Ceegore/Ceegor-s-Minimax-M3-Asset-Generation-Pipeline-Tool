@@ -52,15 +52,65 @@ function _fetchSignal(signal, timeoutMs) {
 
 // H-005: abortable delay — rejects immediately when the signal fires instead
 // of waiting for the full timeout duration.
+// M-008 (hhhhu3 audit): the abort listener is removed again when the timer
+// resolves normally. Previously each poll left a one-time listener on the
+// (long-lived) job signal — hundreds accumulated on long jobs.
 function abortableDelay(ms, signal) {
   return new Promise((resolve, reject) => {
     if (signal && signal.aborted) return reject(new Error('cancelled'));
-    const timer = setTimeout(resolve, ms);
+    let onAbort;
+    const timer = setTimeout(() => {
+      if (signal && onAbort) signal.removeEventListener('abort', onAbort);
+      resolve();
+    }, ms);
     if (signal) {
-      const onAbort = () => { clearTimeout(timer); reject(new Error('cancelled')); };
+      onAbort = () => { clearTimeout(timer); reject(new Error('cancelled')); };
       signal.addEventListener('abort', onAbort, { once: true });
     }
   });
+}
+
+// H-011 (hhhhu3 audit): bounded response body reading for the fetch path.
+// `text().slice(...)` does NOT limit allocation — the stream is capped while
+// it is being read. The injected SafeHttpClient path (H-001) carries its own
+// caps; these constants bound the unit-test fallback only.
+const MAX_JSON_BYTES = 4 * 1024 * 1024;   // 4 MB for prediction JSON
+const MAX_ERROR_BYTES = 16 * 1024;         // 16 KB for error bodies
+
+/** Read a response body with a hard byte cap (Content-Length + stream counter). */
+async function _readBounded(res, maxBytes) {
+  const declared = Number((res.headers && res.headers.get && res.headers.get('content-length')) || 0);
+  if (declared > maxBytes) {
+    throw new Error('response too large (' + declared + ' bytes, cap ' + maxBytes + ')');
+  }
+  const reader = res.body.getReader();
+  const chunks = [];
+  let total = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    total += value.byteLength;
+    if (total > maxBytes) {
+      reader.cancel().catch(() => {});
+      throw new Error('response exceeded ' + maxBytes + ' byte cap');
+    }
+    chunks.push(value);
+  }
+  return Buffer.concat(chunks.map((c) => Buffer.from(c)), total);
+}
+
+/** Read and parse JSON with a size cap (H-011). */
+async function _jsonBounded(res) {
+  const buf = await _readBounded(res, MAX_JSON_BYTES);
+  return JSON.parse(buf.toString('utf8'));
+}
+
+/** Read bounded error text (H-011). */
+async function _errorText(res) {
+  try {
+    const buf = await _readBounded(res, MAX_ERROR_BYTES);
+    return buf.toString('utf8').slice(0, 400);
+  } catch (_) { return ''; }
 }
 
 function _ext(u) {
@@ -70,25 +120,50 @@ function _ext(u) {
 
 // Core submit-poll loop.
 // model: "owner/name" (latest) or "owner/name:version". input: model-specific object.
-async function run({ apiKey, model, input, signal, onProgress }) {
+// H-001 (hhhhu3 audit): `http` is the injected SafeHttpClient — production
+// callers always provide it so submit/poll receive DNS pinning, redirect
+// policy and unified caps. The fetch path remains for direct unit tests and
+// is now fully bounded (H-011).
+// M-009 (hhhhu3 audit): accepts and invokes `onSubmitted` with the remote
+// prediction identity so replicate video jobs reach the remote-job ledger.
+async function run({ apiKey, model, input, signal, onProgress, onSubmitted, http }) {
   // H-006: validate and encode model identifier before URL construction.
   const parsed = validateModel(model);
   const versioned = parsed.version !== null;
   const modelPath = encodeURIComponent(parsed.owner) + '/' + encodeURIComponent(parsed.name);
   const url = versioned ? HOST + '/predictions' : HOST + '/models/' + modelPath + '/predictions';
   const body = versioned ? { version: parsed.version, input } : { input };
-  const sub = await fetch(url, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      Authorization: 'Bearer ' + apiKey,
-      Prefer: 'wait',
-    },
-    body: JSON.stringify(body),
-    signal: _fetchSignal(signal), // H-005: per-request timeout
-  });
-  if (!sub.ok) throw new Error('replicate submit HTTP ' + sub.status + ': ' + (await sub.text().catch(() => '')).slice(0, 400));
-  let pred = await sub.json();
+  let pred;
+  if (http) {
+    pred = await http.json(url, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: 'Bearer ' + apiKey,
+        Prefer: 'wait',
+      },
+      body: JSON.stringify(body),
+      signal,
+    }, { maxJsonBytes: MAX_JSON_BYTES, maxErrorBytes: MAX_ERROR_BYTES });
+  } else {
+    const sub = await fetch(url, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: 'Bearer ' + apiKey,
+        Prefer: 'wait',
+      },
+      body: JSON.stringify(body),
+      signal: _fetchSignal(signal), // H-005: per-request timeout
+    });
+    if (!sub.ok) throw new Error('replicate submit HTTP ' + sub.status + ': ' + await _errorText(sub));
+    pred = await _jsonBounded(sub); // H-011: bounded
+  }
+
+  // M-009: notify the caller of the remote job identity (ledger persistence).
+  if (onSubmitted) {
+    try { onSubmitted({ remoteJobId: pred && pred.id ? pred.id : null, pollUrl: (pred && pred.urls && pred.urls.get) || null }); } catch (_) { /* ledger is best-effort */ }
+  }
 
   const start = Date.now();
   while (!['succeeded', 'failed', 'canceled'].includes(pred.status)) {
@@ -104,12 +179,19 @@ async function run({ apiKey, model, input, signal, onProgress }) {
       throw new Error('replicate: poll URL origin mismatch (expected api.replicate.com, got ' + pollUrl.origin + ')');
     }
     await abortableDelay(2000, signal); // H-005: abortable polling wait
-    const g = await fetch(pred.urls.get, {
-      headers: { Authorization: 'Bearer ' + apiKey },
-      signal: _fetchSignal(signal), // H-005: per-request timeout
-    });
-    if (!g.ok) throw new Error('replicate poll HTTP ' + g.status);
-    pred = await g.json();
+    if (http) {
+      pred = await http.json(pred.urls.get, {
+        headers: { Authorization: 'Bearer ' + apiKey },
+        signal,
+      }, { maxJsonBytes: MAX_JSON_BYTES, maxErrorBytes: MAX_ERROR_BYTES });
+    } else {
+      const g = await fetch(pred.urls.get, {
+        headers: { Authorization: 'Bearer ' + apiKey },
+        signal: _fetchSignal(signal), // H-005: per-request timeout
+      });
+      if (!g.ok) throw new Error('replicate poll HTTP ' + g.status);
+      pred = await _jsonBounded(g); // H-011: bounded
+    }
     if (onProgress) onProgress({ stage: pred.status, pct: null });
   }
   if (pred.status !== 'succeeded') throw new Error('replicate ' + pred.status + ': ' + (pred.error || ''));

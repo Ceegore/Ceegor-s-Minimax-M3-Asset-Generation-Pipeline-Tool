@@ -64,7 +64,10 @@ function promptRename(it) {
       if (newName === it.name) { close(); return; }
       // BGR-009 fix: mint rename grant (R1.3 gate).
       const renameGrant = (window.GrantHelper) ? await window.GrantHelper.ensureRename(it.path) : undefined;
-      const r = await window.api.fbRename(it.path, newName, renameGrant);
+      // B-007 (hhhhu3 audit): rename needs a one-shot intent token minted
+      // by the native confirmation (window.FbIntent).
+      const r = await window.FbIntent.rename(it.path, newName, renameGrant);
+      if (window.FbIntent.isCanceled(r)) return; // user declined the native confirmation
       if (!r.ok) { toast('Rename failed: ' + r.error, 'err'); return; }
       toast('Renamed.', 'ok');
       await refreshBrowser();
@@ -80,7 +83,10 @@ async function promptMove(it) {
   // BGR-009 fix: mint move grant (R1.3 gate).
   // gewv2 GEW-002 fix: ensureMove returns { ok, srcGrant, destGrant }.
   const mv = (window.GrantHelper) ? await window.GrantHelper.ensureMove(it.path, dest) : undefined;
-  const r = await window.api.fbMove(it.path, dest, mv && mv.srcGrant, mv && mv.destGrant);
+  // B-007 (hhhhu3 audit): move needs a one-shot intent token minted by
+  // the native confirmation (window.FbIntent).
+  const r = await window.FbIntent.move(it.path, dest, mv && mv.srcGrant, mv && mv.destGrant);
+  if (window.FbIntent.isCanceled(r)) return; // user declined the native confirmation
   if (!r.ok) toast(r.error, 'err'); else {
     toast('Moved.', 'ok');
     // Same as confirmDelete: if the moved file was being previewed,
@@ -102,7 +108,10 @@ async function confirmDelete(it) {
     ok.addEventListener('click', async () => {
       // BGR-009 fix: mint delete grant (R1.3 gate).
       const deleteGrant = (window.GrantHelper) ? await window.GrantHelper.ensureDelete(it.path) : undefined;
-      const r = await window.api.fbDelete(it.path, deleteGrant);
+      // B-007 (hhhhu3 audit): delete needs a one-shot intent token minted
+      // by the native confirmation (window.FbIntent).
+      const r = await window.FbIntent.del(it.path, deleteGrant);
+      if (window.FbIntent.isCanceled(r)) return; // user declined the native confirmation
       if (!r.ok) toast(r.error, 'err'); else { toast('Deleted.', 'ok'); await refreshBrowser(); }
       // If the deleted file was the one being previewed, clear the
       // preview pane — otherwise it holds a broken <img> with an

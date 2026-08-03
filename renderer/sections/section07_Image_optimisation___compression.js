@@ -205,7 +205,7 @@ async function runPostProcessChain(srcPath, opts) {
           const cropped = await cropImageFile(displayFile, x, y, w, h);
           // R6.1: defensive guard (upscale ALWAYS produces a new file).
           // BGR-009 fix: mint delete grant (R1.3 gate).
-          if (displayFile !== srcPath) { const dg = (window.GrantHelper) ? await window.GrantHelper.ensureDelete(displayFile) : undefined; window.api.fbDelete(displayFile, dg).catch(() => {}); }
+          if (displayFile !== srcPath) { const dg = (window.GrantHelper) ? await window.GrantHelper.ensureDelete(displayFile) : undefined; window.FbIntent.del(displayFile, dg).catch(() => {}); } // B-007 (hhhhu3 audit): delete via native confirmation
           displayFile = cropped;
           toast(`Upscaled ${state.upscaleSettings.multiplier}× and cropped to ${w} × ${h} → ${cropped}`, 'ok', 4000);
         } catch (cropErr) {
@@ -237,7 +237,7 @@ async function runPostProcessChain(srcPath, opts) {
         if (displayFile !== srcPath) {
           // BGR-009 fix: mint delete grant (R1.3 gate).
           const dg = (window.GrantHelper) ? await window.GrantHelper.ensureDelete(displayFile) : undefined;
-          window.api.fbDelete(displayFile, dg).catch(() => {});
+          window.FbIntent.del(displayFile, dg).catch(() => {}); // B-007 (hhhhu3 audit): delete via native confirmation
         }
         displayFile = noBg;
       }
@@ -285,7 +285,7 @@ async function runPostProcessChain(srcPath, opts) {
         if (displayFile !== srcPath) {
           // BGR-009 fix: mint delete grant (R1.3 gate).
           const dg = (window.GrantHelper) ? await window.GrantHelper.ensureDelete(displayFile) : undefined;
-          window.api.fbDelete(displayFile, dg).catch(() => {});
+          window.FbIntent.del(displayFile, dg).catch(() => {}); // B-007 (hhhhu3 audit): delete via native confirmation
         }
         displayFile = r.outputPath;
       }
@@ -1125,7 +1125,7 @@ async function showUpscaleDirect(srcPath, targets, opts) {
           // Drop the intermediate (full-upscaled) file — the user
           // asked for the cropped one, not the raw intermediate.
           // BGR-009 fix: mint delete grant (R1.3 gate).
-          { const dg = (window.GrantHelper) ? await window.GrantHelper.ensureDelete(upscaled) : undefined; window.api.fbDelete(upscaled, dg).catch(() => {}); }
+          { const dg = (window.GrantHelper) ? await window.GrantHelper.ensureDelete(upscaled) : undefined; window.FbIntent.del(upscaled, dg).catch(() => {}); } // B-007 (hhhhu3 audit): delete via native confirmation
           out = cropped;
         }
         // Optional background removal. Non-fatal: a missing / failed
@@ -1139,7 +1139,7 @@ async function showUpscaleDirect(srcPath, targets, opts) {
             if (noBg !== out) {
               // BGR-009 fix: mint delete grant (R1.3 gate).
               const dg = (window.GrantHelper) ? await window.GrantHelper.ensureDelete(out) : undefined;
-              window.api.fbDelete(out, dg).catch(() => {});
+              window.FbIntent.del(out, dg).catch(() => {}); // B-007 (hhhhu3 audit): delete via native confirmation
               out = noBg;
             }
             bgRemoved = true;

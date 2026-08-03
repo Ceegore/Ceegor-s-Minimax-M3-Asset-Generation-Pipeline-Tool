@@ -72,6 +72,12 @@ function setupWindowMock(searchValue, typeFilterValue) {
 }
 
 function loadFb1() {
+  // M-012 (hhhhu3 audit): fileBrowser1 lists via window.FbListPaged.drain;
+  // load the real bridge first (it falls back to the fbList stub because
+  // the paginated surface is not present in this mock).
+  const FB_LIST_PAGED = path.join(ROOT, 'renderer', 'services', 'fbListPaged.js');
+  delete require.cache[require.resolve(FB_LIST_PAGED)];
+  require(FB_LIST_PAGED);
   delete require.cache[require.resolve(FB1)];
   try {
     require(FB1);

@@ -89,29 +89,48 @@ require.cache[txnMod] = {
   },
 };
 
+// H-001 (hhhhu3 audit): registerProvidersIpc now injects SafeHttpClient into
+// the adapters, so the network is stubbed at the SafeHttpClient boundary
+// (queued responses) instead of via globalThis.fetch.
+const httpMod = require.resolve('../../../../main/services/SafeHttpClient');
+require.cache[httpMod] = {
+  exports: {
+    json: async (url, options = {}) => {
+      const next = httpResponses.shift();
+      if (!next) throw new Error('SafeHttpClient stub: no queued response for ' + url);
+      if (next.hang) {
+        return new Promise((resolve, reject) => {
+          const timer = setTimeout(() => resolve(next.json), 30000);
+          if (options && options.signal) {
+            options.signal.addEventListener('abort', () => {
+              clearTimeout(timer);
+              reject(new Error('The operation was aborted'));
+            });
+          }
+        });
+      }
+      if (next.error) throw new Error(next.error);
+      return next.json;
+    },
+    bytes: async (url) => {
+      const next = httpResponses.shift();
+      if (!next) throw new Error('SafeHttpClient stub: no queued response for ' + url);
+      if (next.error) throw new Error(next.error);
+      return next.bytes;
+    },
+    toFile: async () => { throw new Error('SafeHttpClient stub: toFile not queued'); },
+  },
+};
+
 // Now load the registrar (it will call ipcMain.handle for each channel).
 delete require.cache[require.resolve('../../../../main/ipc/registerProvidersIpc')];
 const { register } = require('../../../../main/ipc/registerProvidersIpc');
 register({ getMainWindow: () => null });
 
-// ---- Mock fetch ----
-let fetchResponses = [];
-const realFetch = globalThis.fetch;
-beforeEach(() => { fetchResponses = []; });
-afterEach(() => { globalThis.fetch = realFetch; });
-
-function jsonResp(data, ok = true) {
-  const buf = Buffer.from(JSON.stringify(data), 'utf8');
-  let sent = false;
-  return {
-    ok, status: ok ? 200 : 500,
-    headers: { get: (k) => k === 'content-length' ? String(buf.length) : null },
-    body: { getReader: () => ({ read: async () => { if (sent) return { done: true, value: undefined }; sent = true; return { done: false, value: new Uint8Array(buf) }; }, cancel: async () => {} }) },
-    json: async () => data,
-    text: async () => JSON.stringify(data),
-    arrayBuffer: async () => buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength),
-  };
-}
+// ---- Queued SafeHttpClient responses (H-001 hhhhu3 audit) ----
+let httpResponses = [];
+beforeEach(() => { httpResponses = []; });
+afterEach(() => { httpResponses = []; });
 
 // ---- Tests ----
 
@@ -121,9 +140,9 @@ test('providers:generate writes b64 output to disk', async () => {
   assert.ok(handler, 'handler registered');
 
   // Mock the adapter call: the store returns openrouter (kind=openrouter),
-  // and the openaiCompat.images adapter will be called. We mock fetch to
-  // return a b64 image response.
-  globalThis.fetch = async () => jsonResp({ data: [{ b64_json: Buffer.from('PNG-DATA').toString('base64') }] });
+  // and the openaiCompat.images adapter will be called. The injected
+  // SafeHttpClient is stubbed to return a b64 image response.
+  httpResponses.push({ json: { data: [{ b64_json: Buffer.from('PNG-DATA').toString('base64') }] } });
 
   const r = await handler({}, {
     jobId: 'test-1', modality: 'image', providerId: 'openrouter',
@@ -142,7 +161,7 @@ test('providers:generate throws on download HTTP error (url-based output)', asyn
 
   // The adapter returns a URL-based output; the finalizer's download gets a 404.
   finalizerUrlError = 'download HTTP 404';
-  globalThis.fetch = async () => jsonResp({ data: [{ url: 'https://93.184.216.34/img.png' }] });
+  httpResponses.push({ json: { data: [{ url: 'https://93.184.216.34/img.png' }] } });
 
   const r = await handler({}, {
     jobId: 'test-2', modality: 'image', providerId: 'openrouter',
@@ -218,12 +237,12 @@ test('providers:generate writes multiple outputs with indexed names', async () =
   const outDir = path.join(tmpDir, 'out-multi');
   const handler = handlers.get('providers:generate');
   // Return 2 b64 images
-  globalThis.fetch = async () => jsonResp({
+  httpResponses.push({ json: {
     data: [
       { b64_json: Buffer.from('IMG1').toString('base64') },
       { b64_json: Buffer.from('IMG2').toString('base64') },
     ],
-  });
+  } });
   const r = await handler({}, {
     jobId: 'test-multi', modality: 'image', providerId: 'openrouter',
     model: 'gpt-image-1', prompt: 'two cats', params: { n: 2 },
@@ -242,7 +261,7 @@ test('providers:generate writes multiple outputs with indexed names', async () =
 test('providers:listModels returns models for openrouter', async () => {
   const handler = handlers.get('providers:listModels');
   assert.ok(handler, 'listModels handler registered');
-  globalThis.fetch = async () => jsonResp({ data: [{ id: 'model-x' }, { id: 'model-y' }] });
+  httpResponses.push({ json: { data: [{ id: 'model-x' }, { id: 'model-y' }] } });
   const r = await handler({}, { providerId: 'openrouter' });
   assert.equal(r.ok, true);
   assert.deepEqual(r.models, ['model-x', 'model-y']);
@@ -259,18 +278,8 @@ test('providers:generate reports canceled flag on abort', async () => {
   const outDir = path.join(tmpDir, 'out-cancel');
   const handler = handlers.get('providers:generate');
   const cancelHandler = handlers.get('providers:cancel');
-  // Make fetch hang until aborted
-  globalThis.fetch = async (url, opts) => {
-    return new Promise((resolve, reject) => {
-      const timer = setTimeout(() => resolve(jsonResp({ data: [{ b64_json: 'x' }] })), 30000);
-      if (opts && opts.signal) {
-        opts.signal.addEventListener('abort', () => {
-          clearTimeout(timer);
-          reject(new Error('The operation was aborted'));
-        });
-      }
-    });
-  };
+  // Make the injected HTTP client hang until aborted
+  httpResponses.push({ hang: true, json: { data: [{ b64_json: 'x' }] } });
   const p = handler({}, {
     jobId: 'cancel-me', modality: 'image', providerId: 'openrouter',
     model: 'm', prompt: 'p', params: {}, outDir, grantId: 'g1',

@@ -73,6 +73,22 @@ function main() {
     ? process.env.GITHUB_REF.startsWith('refs/tags/')
     : allTags.length > 0;
 
+  // M-001 (hhhhu3 audit): a workflow_dispatch run is NOT a tag release. It
+  // must explicitly declare the version it intends to release via the
+  // RELEASE_EXPECTED_VERSION input, and that version must match package.json.
+  // A manual run without a tag must never be treated as publishable.
+  const isManualDispatch = process.env.GITHUB_EVENT_NAME === 'workflow_dispatch';
+  if (isManualDispatch && !process.env.GITHUB_REF?.startsWith('refs/tags/')) {
+    const expected = process.env.RELEASE_EXPECTED_VERSION;
+    if (!expected) {
+      fail('Manual (workflow_dispatch) run without a tag must pass the release version as the "version" input (RELEASE_EXPECTED_VERSION). Untagged manual runs cannot publish release artifacts.');
+    }
+    if (expected !== pkgVersion) {
+      fail(`Manual run requested version "${expected}" but package.json is at "${pkgVersion}". Tag the matching commit instead of publishing a manual build.`);
+    }
+    console.log(`  Manual dispatch build for version ${expected} (NOT a tagged release — no publication).`);
+  }
+
   if (isTagRelease) {
     // Strict mode: exactly one tag, matching v<version>
     const expectedTag = `v${pkgVersion}`;

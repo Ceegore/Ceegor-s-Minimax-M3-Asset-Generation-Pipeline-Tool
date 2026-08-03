@@ -33,6 +33,10 @@ The build writes these files under `dist-out/`:
 
 The build also runs the exact packaged-dependency check and tests the no-admin installer and its shortcuts. The provenance record must show the expected commit and `commitDirty: false`. Test the extracted ZIP on a clean Windows account before publishing it.
 
+### Independent test evidence (M-023)
+
+A commit message claiming "N tests pass" is NOT evidence. A release must only be published from a green **Release Gate** workflow run (`release-gate.yml`) for the exact commit, and the provenance record of a CI-built release carries a `ci` block (`ci.runUrl`) linking that workflow run. Before publishing, open the run URL and confirm every gate (lint, unit + coverage, contract, identity, strict verification) is green for the tagged commit. A locally built release has `ci: null` and must never be presented as CI-verified.
+
 ## 3. Publish on GitHub
 
 1. Create a release tag that matches `package.json`.

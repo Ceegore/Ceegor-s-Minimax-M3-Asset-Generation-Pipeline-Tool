@@ -7,6 +7,16 @@
 // Shape:
 //   { providers: [{id, label, kind, baseUrl, apiKey}],
 //     selections: { image: {providerId, model}, speech: {...}, ... } }
+//
+// L-003 (hhhhu3 audit): ONE canonical credential schema for this store.
+//   • `credential_id`  — the ONLY persisted credential reference field
+//     (points at an encrypted SecretBlobStore blob; owned by
+//     ProviderCredentialRepository).
+//   • `apiKey`         — legacy plaintext; tolerated ONLY when no
+//     credential repository is registered (tests / dev without Main).
+//     Never persisted once the repository is active (see write()).
+//   • `credentialId` / `_sessionKey` — deprecated variants; normalized
+//     or stripped on write. No new code may read them.
 // ============================================================================
 'use strict';
 const fs = require('fs');
@@ -139,8 +149,12 @@ function _migrateKeys(d) {
 function write(d) {
   // SEC-002: merge API keys from existing config when the incoming
   // payload omits them (renderer sends partial updates without raw keys).
+  // B-006 (hhhhu3 audit): when the encrypted credential repository is
+  // registered it OWNS all keys — merging raw apiKey from the old file
+  // would resurrect plaintext the repository already migrated away.
+  const repoActive = !!_getCredentialRepo();
   const existing = read();
-  if (d && Array.isArray(d.providers) && Array.isArray(existing.providers)) {
+  if (!repoActive && d && Array.isArray(d.providers) && Array.isArray(existing.providers)) {
     for (const p of d.providers) {
       if (!p.apiKey && p.id) {
         const prev = existing.providers.find((x) => x.id === p.id);
@@ -159,9 +173,13 @@ function write(d) {
       }
       delete p.credentialId;
       delete p._sessionKey;
-      // Raw apiKey is only tolerated during migration; the encrypted
-      // blob store is the canonical source. Clear it if credential_id exists.
-      if (p.credential_id) p.apiKey = '';
+      // B-006 (hhhhu3 audit): with the repository active, raw key fields
+      // are REJECTED from the metadata store outright — key changes flow
+      // exclusively through the typed repository actions (providers:set
+      // routes them before this write). Without a repository (tests/dev)
+      // the legacy plaintext path stays functional.
+      if (repoActive) delete p.apiKey;
+      else if (p.credential_id) p.apiKey = '';
     }
   }
   // B-004: normalize built-in origins before persisting so the file on

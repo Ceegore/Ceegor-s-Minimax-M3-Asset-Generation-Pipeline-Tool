@@ -97,7 +97,9 @@
           for (const tp of tempPaths) {
             try {
               const dg = (window.GrantHelper) ? await window.GrantHelper.ensureDelete(tp) : undefined;
-              await window.api.fbDelete(tp, dg);
+              // B-007 (hhhhu3 audit): delete needs a one-shot intent token
+              // minted by the native confirmation (window.FbIntent).
+              await window.FbIntent.del(tp, dg);
             } catch (_) { /* best-effort cleanup */ }
           }
         }

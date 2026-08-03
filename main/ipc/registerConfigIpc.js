@@ -210,33 +210,21 @@ function register({ getMainWindow }) {
         }
       }
       const safe = sanitize(Object.assign({}, prev, cfg)); // KGO5-013: merge preserves absent fields
-      // B-002 fix: apply the typed key command through the CredentialRepository
-      // (encrypted blob store) instead of writing plaintext api_key to config.txt.
-      // The repository stores the key as an immutable encrypted blob and persists
-      // only a credential_id reference in config.
+      // H-009 (hhhhu3 audit): apply the typed key command AND the settings
+      // change as ONE transaction via CredentialRepository.commitKeyAction.
+      // Exactly ONE config write fuses the credential reference with the
+      // merged settings — the old two-write flow could commit the credential
+      // and then fail the second generic write, reporting a false failure
+      // (and a failed `clear` was silently swallowed, reporting a false
+      // success). Pre-commit failures throw and surface as ok:false;
+      // post-commit cleanup residue surfaces via cleanupPending, never as a
+      // false failure.
       let credentialResult = null;
-      if (keyAction === 'replace') {
-        try {
-          credentialResult = credentialRepo.replacePersisted(keyValue);
-        } catch (credErr) {
-          return { ok: false, config: _publicConfig(prev), error: 'Credential storage failed: ' + (credErr.message || credErr) };
-        }
-        safe.api_key = ''; // never persist plaintext
-      } else if (keyAction === 'clear') {
-        try { credentialResult = credentialRepo.clearPrimary(); } catch (_) {}
-        safe.api_key = '';
-      } else {
-        safe.api_key = ''; // B-002: never write plaintext key back to config
+      try {
+        credentialResult = credentialRepo.commitKeyAction({ action: keyAction, value: keyValue, config: safe });
+      } catch (credErr) {
+        return { ok: false, config: _publicConfig(prev), error: 'Credential storage failed: ' + (credErr.message || credErr) };
       }
-      // B-002 (hhhhu2 audit): the repository owns the api_credential_id
-      // reference. `safe` was merged from `prev` BEFORE the repository
-      // write, so re-sync the authoritative reference here — otherwise the
-      // write below would clobber a freshly stored id (replace) or revive a
-      // cleared one (clear/keep).
-      safe.api_credential_id = (() => {
-        try { return cfgMod.read().api_credential_id || ''; } catch (_) { return ''; }
-      })();
-      cfgMod.write(safe);
       if (isWrapped && typeof payload.apiKeyNoSave === 'boolean') updateSessionCredential(apiKeyNoSave, payload.sessionApiKey);
       // B-007: an EXPLICIT clear (not the privacy switch) also removes the
       // mmx CLI copy and any session credential — the user asked for the
@@ -270,6 +258,12 @@ function register({ getMainWindow }) {
         }
       }
       if (!privacyWarning && explicitClearWarning) privacyWarning = explicitClearWarning;
+      // H-009 (hhhhu3 audit): a committed transaction with residual legacy
+      // cleanup (old blob / ~/.mmx copy) reports success + a visible warning
+      // — never a false failure that would invite retry-drift.
+      if (!privacyWarning && credentialResult && credentialResult.cleanupPending) {
+        privacyWarning = 'Settings saved, but cleanup of the previous credential is pending (an old key copy could not be removed yet). It will be retried automatically.';
+      }
       return {
         ok: true,
         config: _publicConfig(cfgMod.read()),

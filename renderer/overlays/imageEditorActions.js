@@ -205,7 +205,7 @@
       try {
         saveAsResult = await window.api.fileSaveAs(tmpOut);
       } finally {
-        try { const dg = (window.GrantHelper) ? await window.GrantHelper.ensureDelete(tmpOut) : undefined; await window.api.fbDelete(tmpOut, dg); } catch (_) {}
+        try { const dg = (window.GrantHelper) ? await window.GrantHelper.ensureDelete(tmpOut) : undefined; await window.FbIntent.del(tmpOut, dg); } catch (_) {} // B-007 (hhhhu3 audit): delete via native confirmation
       }
       if (!saveAsResult || saveAsResult.canceled) return { ok: false, error: 'canceled' };
       if (!saveAsResult.ok) return { ok: false, error: saveAsResult.error || 'save-as failed' };
@@ -424,11 +424,11 @@
       r = await window.api.isnetbgRun(tmpSrc, tmpOut, { model, useGpu, ...postOpts }, isnetGrant);
     } finally {
       // BGR-009 fix: mint delete grant (R1.3 gate).
-      try { if (window.api && window.api.fbDelete) { const dg = (window.GrantHelper) ? await window.GrantHelper.ensureDelete(tmpSrc) : undefined; await window.api.fbDelete(tmpSrc, dg); } } catch (_) {}
+      try { if (window.FbIntent) { const dg = (window.GrantHelper) ? await window.GrantHelper.ensureDelete(tmpSrc) : undefined; await window.FbIntent.del(tmpSrc, dg); } } catch (_) {} // B-007 (hhhhu3 audit): delete via native confirmation
     }
     if (!r || !r.ok) {
       // BGR-009 fix: mint delete grant (R1.3 gate).
-      try { if (window.api && window.api.fbDelete) { const dg = (window.GrantHelper) ? await window.GrantHelper.ensureDelete(tmpOut) : undefined; await window.api.fbDelete(tmpOut, dg); } } catch (_) {}
+      try { if (window.FbIntent) { const dg = (window.GrantHelper) ? await window.GrantHelper.ensureDelete(tmpOut) : undefined; await window.FbIntent.del(tmpOut, dg); } } catch (_) {} // B-007 (hhhhu3 audit): delete via native confirmation
       // gewv2 GEW-003 fix: isnetbg reports errors via `stderr`, not `error`.
       throw new Error((r && (r.error || r.stderr)) || 'background removal failed');
     }
@@ -441,7 +441,7 @@
     // handle via ctrl._commitHandle.
     if (ctrl.closed || ((Tools && Tools.slotRevValid) ? !Tools.slotRevValid(ctrl, revCap) : ctrl.queue[ctrl.activeIndex] !== slot)) {
       // BGR-009 fix: mint delete grant (R1.3 gate).
-      try { if (window.api && window.api.fbDelete) { const dg = (window.GrantHelper) ? await window.GrantHelper.ensureDelete(tmpOut) : undefined; await window.api.fbDelete(tmpOut, dg); } } catch (_) {}
+      try { if (window.FbIntent) { const dg = (window.GrantHelper) ? await window.GrantHelper.ensureDelete(tmpOut) : undefined; await window.FbIntent.del(tmpOut, dg); } } catch (_) {} // B-007 (hhhhu3 audit): delete via native confirmation
       return false;
     }
     // R5.2 Remove BG: H8 fix (pushUndo BEFORE base swap) + R5.2
@@ -480,7 +480,7 @@
         if (ctrl.ui && ctrl.ui.formatSel) ctrl.ui.formatSel.value = 'png';
       }
       // BGR-009 fix: mint delete grant (R1.3 gate).
-      try { if (window.api && window.api.fbDelete) { const dg = (window.GrantHelper) ? await window.GrantHelper.ensureDelete(tmpOut) : undefined; await window.api.fbDelete(tmpOut, dg); } } catch (_) {}
+      try { if (window.FbIntent) { const dg = (window.GrantHelper) ? await window.GrantHelper.ensureDelete(tmpOut) : undefined; await window.FbIntent.del(tmpOut, dg); } } catch (_) {} // B-007 (hhhhu3 audit): delete via native confirmation
       return true;
     } catch (e) {
       // R5.2 Remove BG: cancel-cleanup. If we pushed the
@@ -502,7 +502,7 @@
       // earlier success-path delete (line ~486, which is skipped when we
       // land here) — delete it now so a genuine post-removal failure
       // doesn't leave `.ie_bg_out_*.png` litter in the output folder.
-      try { if (window.api && window.api.fbDelete) { const dg = (window.GrantHelper) ? await window.GrantHelper.ensureDelete(tmpOut) : undefined; await window.api.fbDelete(tmpOut, dg); } } catch (_) {}
+      try { if (window.FbIntent) { const dg = (window.GrantHelper) ? await window.GrantHelper.ensureDelete(tmpOut) : undefined; await window.FbIntent.del(tmpOut, dg); } } catch (_) {} // B-007 (hhhhu3 audit): delete via native confirmation
       throw e;  // re-throw so the caller can handle
     }
   }
