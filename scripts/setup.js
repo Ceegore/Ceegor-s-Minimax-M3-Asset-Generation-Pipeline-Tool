@@ -212,6 +212,19 @@ const { verifyRuntimeAssets } = require('./lib/runtimeAssets');
       log('isnetbg binary: optional — not present (not needed, the bundled Node.js wrapper works)');
     }
 
+    // Q-002 (1.0.7 qualification): ffprobe.exe is a manually curated runtime
+    // asset (runtime-assets.json pins it by SHA-256) that no download here
+    // provides — carry the existing one over into the stage, fail closed
+    // when it is absent so the staged runtime never verifies incomplete.
+    const existingFfprobe = path.join(BIN, 'ffprobe.exe');
+    try {
+      await fsp.access(existingFfprobe);
+      log('ffprobe.exe: carrying the curated runtime asset over into the stage');
+      await fsp.copyFile(existingFfprobe, path.join(stagePath, 'ffprobe.exe'));
+    } catch (_) {
+      throw new Error('ffprobe.exe not found in ./bin/ — place the curated ffprobe.exe there before running setup');
+    }
+
     if (dlLite) {
       log('');
       log('BiRefNet Lite model (~224 MB, MIT)');

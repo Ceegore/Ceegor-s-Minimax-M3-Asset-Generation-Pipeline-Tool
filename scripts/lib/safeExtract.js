@@ -223,17 +223,22 @@ async function extractZip(archivePath, destDir, opts = {}) {
   // M-020 (hhhhu3 audit): the archive must be unchanged after extraction, and
   // the extracted tree must correspond EXACTLY to the validated entry list —
   // a local replacement between listing and extraction is rejected here.
+  // Q-001 (1.0.7 qualification): `7z l -ba` reports entry names with the
+  // platform separator (backslash on Windows) while the filesystem walk
+  // builds '/'-joined relative paths — normalize both sides before the set
+  // comparison so nested archives validate correctly.
+  const canon = (n) => n.replace(/[\\/]+/g, '/').toLowerCase();
   if (!archiveUnchanged()) {
     try { fs.rmSync(stagingDir, { recursive: true, force: true }); } catch (_) {}
     return { ok: false, error: 'Archive changed between validation and extraction.' };
   }
-  const expected = new Set((listing.fileEntries || []).map((n) => n.toLowerCase()));
+  const expected = new Set((listing.fileEntries || []).map(canon));
   const actual = new Set();
   (function walk(dir, prefix) {
     for (const ent of fs.readdirSync(dir, { withFileTypes: true })) {
       const rel = prefix ? `${prefix}/${ent.name}` : ent.name;
       if (ent.isDirectory()) { walk(path.join(dir, ent.name), rel); continue; }
-      actual.add(rel.toLowerCase());
+      actual.add(canon(rel));
     }
   })(stagingDir, '');
   if (actual.size !== expected.size || [...actual].some((n) => !expected.has(n))) {
