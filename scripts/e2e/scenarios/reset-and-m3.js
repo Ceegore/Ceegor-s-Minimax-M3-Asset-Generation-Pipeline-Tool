@@ -64,27 +64,24 @@ module.exports = {
     const tmpSibling = path.join(TMP, 'state.json.tmp-e2e-kgo7');
     try { fs.writeFileSync(tmpSibling, '{}', 'utf8'); } catch (_) {}
 
-    // KGO8-001 part 1 — drive the REAL BUTTON through both dialogs.
+    // KGO8-001 part 1 — drive the REAL BUTTON through the agreed flow.
     //
-    // This scenario used to test ONLY window.api.resetAllData(). That made
-    // ipc-coverage count the channel as exercised and the gate pass, while the
-    // only path a user has was completely dead: the handler called
-    // window.prompt(), which Electron does not implement, so it threw before
-    // ever reaching the IPC and the button did nothing at all.
-    //
-    // The walk deliberately STOPS at the last Confirm: clicking it schedules
-    // window.api.resetAndRelaunch(), which kills the process (that is why
-    // ipc-coverage lists the channel as INTENTIONALLY_UNINVOKED). Everything
-    // that was broken — the button, the confirm, and the type-DELETE step
-    // being a real DOM modal whose Confirm enables on the exact word — is
-    // covered here; the destructive part is asserted against the IPC below.
+    // B-009 current flow: danger button -> ONE asyncPrompt DOM modal
+    // ("Type DELETE…", Confirm stays disabled until the exact word) ->
+    // window.api.confirmResetAndRelaunch() (Main-owned native dialog +
+    // delete + verify + relaunch). The walk deliberately STOPS before the
+    // final Confirm: completing it would relaunch the app and abort the
+    // run (app:confirmResetAndRelaunch stays INTENTIONALLY_UNINVOKED in
+    // ipc-coverage). The destructive deletion itself is asserted against
+    // the token-gated app:resetAllData below — production security
+    // (typed pre-gate + native dialog + single-use token) untouched.
     const ui = await exec(`(async () => {
       const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
       const err = [];
       addEventListener('unhandledrejection', (e) => err.push(String((e.reason && e.reason.message) || e.reason)));
-      // The dialogs STACK on top of the still-open Settings modal, so every
-      // lookup must be scoped to the TOPMOST modal — querying #modal-root
-      // globally finds the Settings pane's own API-key field and Save button.
+      // The prompt modal STACKS on top of the still-open Settings modal, so
+      // every lookup must be scoped to the TOPMOST modal — querying
+      // #modal-root globally finds the Settings pane's own API-key field.
       const top = () => [...document.querySelectorAll('#modal-root .modal')].pop() || document;
       try {
         openSettings();
@@ -94,30 +91,37 @@ module.exports = {
         if (!btn) return { noButton: true, unhandled: err };
         btn.click();
         await sleep(400);
-        const confirmBtn = [...top().querySelectorAll('button')]
-          .find((b) => (b.textContent || '').trim() === 'Confirm');
-        if (!confirmBtn) return { noConfirm: true, unhandled: err };
-        confirmBtn.click();
-        await sleep(500);
-        // The type-DELETE step must be a DOM modal with an input — never window.prompt().
+        // B-009: exactly ONE typed-confirmation modal (asyncPrompt) — the
+        // old two-dialog walk (asyncConfirm then prompt) no longer exists.
         const promptModal = top();
         const input = promptModal.querySelector('input[type=text]');
         if (!input) return { noPromptInput: true, unhandled: err };
         const go = [...promptModal.querySelectorAll('button')]
           .find((b) => (b.textContent || '').trim() === 'Confirm');
         const disabledBeforeTyping = !!(go && go.disabled);
-        input.value = 'DELETE';
-        input.dispatchEvent(new Event('input', { bubbles: true }));
+        // asyncPrompt enables Confirm from its own 'input' listener. A bare
+        // value assignment fires nothing, and the app's global keydown/input
+        // handlers can swallow or re-dispatch synthetic events — so drive
+        // the enablement through the SAME path a user click takes (focus +
+        // per-char insertText) and back it up with a direct event on the
+        // input itself. The assertion is about the production enablement
+        // rule (exact word only), which both paths exercise.
+        input.focus();
+        try { document.execCommand('insertText', false, 'DELETE'); } catch (_) {}
+        if (input.value !== 'DELETE') {
+          input.value = 'DELETE';
+          input.dispatchEvent(new Event('input', { bubbles: true }));
+          input.dispatchEvent(new KeyboardEvent('keydown', { key: 'E', bubbles: true }));
+          input.dispatchEvent(new KeyboardEvent('keyup', { key: 'E', bubbles: true }));
+        }
         await sleep(150);
         const enabledAfterTyping = !!(go && !go.disabled);
-        // Do NOT click Confirm: that would relaunch the app and abort the run.
+        // Do NOT click Confirm: that calls confirmResetAndRelaunch, which
+        // deletes and RELAUNCHES the app mid-run.
         //
-        // Clean up DETERMINISTICALLY. This scenario has order:995, so it is the
-        // last thing to touch the DOM before the visual-capture phase — a modal
-        // left open here is photographed into every baseline (measured: 83 %
-        // diff on tab-image with the Settings pane + this prompt still stacked).
-        // Escape alone did not close them, so click each dialog's own Cancel,
-        // topmost first, and verify nothing is left.
+        // Clean up DETERMINISTICALLY. This scenario has order:995, so it is
+        // the last thing to touch the DOM before the visual-capture phase —
+        // a modal left open here is photographed into every baseline.
         for (let i = 0; i < 6; i++) {
           const m = [...document.querySelectorAll('#modal-root .modal')].pop();
           if (!m) break;
@@ -132,7 +136,6 @@ module.exports = {
     })()`);
     check(ui && !ui.threw, `the danger-zone click must not throw: ${ui && ui.threw}`);
     check(!ui.noButton, 'Settings must expose a "Delete all local data…" button');
-    check(!ui.noConfirm, 'the first confirm dialog must appear');
     check(!ui.noPromptInput,
       'the type-DELETE step must be a DOM modal with a text input — window.prompt() THROWS in Electron (KGO8-001)');
     check(ui.disabledBeforeTyping === true, 'the typed-confirmation button must start disabled');
@@ -144,14 +147,37 @@ module.exports = {
     check(ui.modalsLeft === 0,
       `the reset walk must close every dialog it opened (${ui.modalsLeft} left open — the visual phase would photograph them)`);
 
-    // KGO8-001 part 2 — the destructive handler itself, invoked directly
-    // because completing the UI flow would relaunch the app mid-run.
-    const reset = await exec(`(async () => {
+    // KGO8-001 part 2 — the destructive handler itself, through the P1-G
+    // (H-016) confirmation-token gate. Invoked directly because the UI path
+    // (confirmResetAndRelaunch) would relaunch the app mid-run.
+
+    // Fail-closed first: without a token, NOTHING may be deleted.
+    const gateless = await exec(`(async () => {
       try { return await window.api.resetAllData(); }
       catch (e) { return { threw: String(e && e.message || e) }; }
     })()`);
+    check(gateless && !gateless.threw, `token-less app:resetAllData must return an envelope, not throw: ${gateless && gateless.threw}`);
+    check(gateless && gateless.ok === false && gateless.confirmationRequired === true,
+      `app:resetAllData without a token must fail closed with confirmationRequired (got ${JSON.stringify(gateless).slice(0, 200)})`);
+    check(seeded.every((p) => fs.existsSync(p)),
+      'a token-less resetAllData attempt must not delete anything');
+
+    // Mint a single-use token via confirm:request (the harness answers the
+    // Main-owned native dialog with Confirm — production shows the real
+    // immutable warning text from ConfirmationTokenService).
+    const minted = await exec(`(async () => {
+      try { return await window.api.confirmRequest({ action: 'app:resetAllData' }); }
+      catch (e) { return { threw: String(e && e.message || e) }; }
+    })()`);
+    check(minted && minted.ok === true && typeof minted.token === 'string' && minted.token.length > 0,
+      `confirm:request must mint a token for app:resetAllData (got ${JSON.stringify(minted).slice(0, 200)})`);
+
+    const reset = await exec(`(async () => {
+      try { return await window.api.resetAllData({ confirmationToken: ${JSON.stringify((minted && minted.token) || null)} }); }
+      catch (e) { return { threw: String(e && e.message || e) }; }
+    })()`);
     check(reset && !reset.threw, `app:resetAllData must not reject the invoke: ${reset && reset.threw}`);
-    check(typeof reset.ok === 'boolean', 'app:resetAllData must return { ok, results }');
+    check(reset && reset.ok === true, `app:resetAllData with a fresh token must succeed (got ${JSON.stringify(reset).slice(0, 300)})`);
     check(Array.isArray(reset.results) && reset.results.length > 0,
       'app:resetAllData must report a per-file result array so partial failures are honest');
 
@@ -161,6 +187,14 @@ module.exports = {
       `app:resetAllData left files behind: ${JSON.stringify(survivors)}`);
     check(!fs.existsSync(tmpSibling),
       'app:resetAllData must also remove <base>.tmp-* siblings (a stale temp would restore settings)');
+
+    // Single-use: replaying the consumed token must be rejected.
+    const replay = await exec(`(async () => {
+      try { return await window.api.resetAllData({ confirmationToken: ${JSON.stringify((minted && minted.token) || null)} }); }
+      catch (e) { return { threw: String(e && e.message || e) }; }
+    })()`);
+    check(replay && replay.ok === false && replay.confirmationRequired === true,
+      `a consumed confirmation token must be rejected (single-use, got ${JSON.stringify(replay).slice(0, 200)})`);
 
     // ...and it must NOT have touched generated assets.
     check(fs.existsSync(ctx.OUT),

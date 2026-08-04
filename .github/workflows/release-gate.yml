@@ -161,6 +161,17 @@ jobs:
     env:
       FLAKY_REPEATS: '10'
       FLAKY_HIGH_RISK_REPEATS: '50'
+      # Contract-suite policy for the repeated contract entry in
+      # flakiness-run.js — MUST mirror the qualification gate above:
+      # enable the runner explicitly and accept the loud skip banner
+      # when the repo secret is absent. Without these, run-contract.js
+      # fails closed (0.1 s exit-1 on every repetition — measured
+      # 10/10 failed reps on the v1.0.5 run). When the key IS present
+      # the contract tests hit the real API and MMX_CONTRACT_OPTIONAL
+      # is inert.
+      RUN_CONTRACT_TESTS: '1'
+      MINIMAX_API_KEY: ${{ secrets.MINIMAX_API_KEY }}
+      MMX_CONTRACT_OPTIONAL: '1'
     steps:
       - uses: actions/checkout@v7
 

@@ -38,14 +38,29 @@ module.exports = {
       return true;
     })()`);
 
+    // SEC-003 (P0-D / C-006): pipeline:import + pipeline:replace require a
+    // Main-minted READ grant for every source file. The real renderer gets
+    // it from the file-browser selection flow; here we mint the same
+    // directory grant over the workspace (the agreed pathGrant:mint pattern
+    // documented in preload.js).
+    const grantRes = await exec(`(async () => {
+      try {
+        return await window.api.mintGrant(${JSON.stringify(OUT)}, 'read', { kind: 'directory', capabilities: ['read'] });
+      } catch (e) { return { ok: false, error: e.message }; }
+    })()`);
+    check(grantRes && grantRes.ok, `pathGrant:mint (read, workspace dir) failed: ${grantRes && grantRes.error}`);
+    const readGrantId = (grantRes && grantRes.grantId) || null;
+
     // ---- pipeline:import — import the image into the pipeline board ----
     const importRes = await exec(`(async () => {
       try {
-        const r = await window.api.pipelineImport({ paths: [${JSON.stringify(srcFile)}], workspace: ${JSON.stringify(OUT)} });
+        const r = await window.api.pipelineImport({ paths: [${JSON.stringify(srcFile)}], workspace: ${JSON.stringify(OUT)}, readGrantId: ${JSON.stringify(readGrantId)} });
         return r;
       } catch (e) { return { ok: false, error: e.message }; }
     })()`);
     check(importRes && importRes.ok !== false, `pipeline:import failed: ${importRes && importRes.error}`);
+    const importItemFailed = importRes && Array.isArray(importRes.results) && importRes.results.some((r) => r && r.ok === false);
+    check(!importItemFailed, `pipeline:import per-file results rejected: ${JSON.stringify(importRes && importRes.results).slice(0, 300)}`);
 
     // Get the imported item's id from the board state.
     const itemId = await exec(`(() => {
@@ -79,6 +94,7 @@ module.exports = {
           column: 'original',
           imageId: ${JSON.stringify(itemId || 'e2e-test-id')},
           displayName: 'e2e_pipeline_replace.png',
+          readGrantId: ${JSON.stringify(readGrantId)},
         });
       } catch (e) { return { ok: false, error: e.message }; }
     })()`);

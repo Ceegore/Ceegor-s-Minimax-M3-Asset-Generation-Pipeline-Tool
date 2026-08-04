@@ -181,6 +181,16 @@ function createHarness(opts = {}) {
       catch (e) { mainErrors.push(`registrar ${r} failed: ${e && e.stack || e}`); }
     }
 
+    // H-006 boot parity: main/index.js migrates a legacy PLAINTEXT primary
+    // api_key to the encrypted blob store at startup. The harness seeds an
+    // isolated config.txt with a plaintext key, so the SAME migration must
+    // run here — otherwise the first config:set ('keep') re-commits with an
+    // empty credential reference and the key is silently gone (every later
+    // generation guard flips to "No API key configured").
+    try {
+      require(path.join(APP_ROOT, 'main', 'services', 'CredentialRepository')).migrateLegacy();
+    } catch (e) { mainErrors.push('primary credential migration failed: ' + ((e && e.message) || e)); }
+
     // ---- Stub out IPC handlers that open native OS dialogs or shell ops ----
     // The real handlers call dialog.showOpenDialog / showSaveDialog /
     // shell.openPath / shell.showItemInFolder which pop visible native
@@ -194,11 +204,27 @@ function createHarness(opts = {}) {
     // the destructive confirm-then-execute flow runs headlessly. The REAL
     // handler + OperationIntentService still run end-to-end; only the
     // native dialog itself is bypassed.
+    //
+    // P1-G (H-016) parity: the confirmation-token mint (confirm:request)
+    // and app:confirmResetAndRelaunch also gate on a native MessageBox and
+    // must be ANSWERED, not silently canceled, so the destructive flow runs
+    // headlessly. An always-Cancel stub makes every token mint fail with
+    // 'User canceled'. The stub picks the CONFIRM button by position:
+    //   • ['Confirm'|'Delete and relaunch'|'Close', 'Cancel'] → response 0
+    //   • OperationIntentService: ['Cancel', confirmLabel]     → response 1
+    // This stays harness-only: production keeps the real native dialog
+    // (defaultId/cancelId on Cancel), and the E2E reset only ever deletes
+    // the mkdtemp config.
     const electron = require('electron');
     try {
       if (electron.dialog && !electron.dialog.__e2ePatched) {
         electron.dialog.__origShowMessageBox = electron.dialog.showMessageBox;
-        electron.dialog.showMessageBox = async () => ({ response: 1, checkboxChecked: false });
+        electron.dialog.showMessageBox = async (...args) => {
+          const opts = (args.length > 1 && args[1]) ? args[1] : (args[0] || {});
+          const buttons = Array.isArray(opts.buttons) ? opts.buttons : [];
+          const response = String(buttons[0] || '') === 'Cancel' ? 1 : 0;
+          return { response, checkboxChecked: false };
+        };
         electron.dialog.__e2ePatched = true;
       }
     } catch (_) { /* dialog patch is best-effort */ }

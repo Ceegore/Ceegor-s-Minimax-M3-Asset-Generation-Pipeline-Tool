@@ -576,10 +576,10 @@ function buildSettingsPopupsPane() {
     // (app:confirmResetAndRelaunch). Main shows the fixed native warning
     // dialog, deletes, verifies, and relaunches only on full success.
     // The renderer keeps a lightweight typed-DELETE pre-gate so an
-    // accidental click never even reaches the native dialog, but the
-    // authoritative confirmation is Main's.
+    // accidental click never reaches the native dialog (expect MUST stay
+    // 'DELETE' — '' disables Confirm once typed); Main's dialog is authoritative.
     try {
-      const typed = await asyncPrompt('Type DELETE to confirm irreversible data deletion:', '', '⚠ Delete all local data');
+      const typed = await asyncPrompt('Type DELETE to confirm irreversible data deletion:', 'DELETE', '⚠ Delete all local data');
       if (typed !== 'DELETE') { toast('Deletion cancelled.', 'warn'); return; }
       dangerBtn.disabled = true;
       dangerBtn.textContent = 'Deleting…';

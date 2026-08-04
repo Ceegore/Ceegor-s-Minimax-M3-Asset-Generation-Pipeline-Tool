@@ -321,9 +321,11 @@ const MUTANTS = [
     id: 'M28',
     file: 'scripts/lib/RuntimeInstaller.js',
     shape: 'H-013 regression: an interrupted activation without a verifier is NOT rolled back',
-    // NOTE: this file is CRLF — the anchor must stay byte-exact.
-    find: "          if (marker.backupPath && fs.existsSync(marker.backupPath)) {\r\n            this._rollbackToBackup(marker);\r\n            this._removeMarker();\r\n            return { recovered: true, action: 'rolled-back-unverifiable-activation' };",
-    replace: "          if (false) {\r\n            this._rollbackToBackup(marker);\r\n            this._removeMarker();\r\n            return { recovered: true, action: 'rolled-back-unverifiable-activation' };",
+    // NOTE: LF anchors — applyMutant() adapts them to the file's checked-out
+    // line ending (CI runners check out LF, local Windows copies are CRLF),
+    // so the anchor must never depend on EOL bytes.
+    find: "          if (marker.backupPath && fs.existsSync(marker.backupPath)) {\n            this._rollbackToBackup(marker);\n            this._removeMarker();\n            return { recovered: true, action: 'rolled-back-unverifiable-activation' };",
+    replace: "          if (false) {\n            this._rollbackToBackup(marker);\n            this._removeMarker();\n            return { recovered: true, action: 'rolled-back-unverifiable-activation' };",
   },
 ];
 
@@ -341,11 +343,23 @@ function runSuite(testFiles) {
 function applyMutant(mutant) {
   const abs = path.join(ROOT, mutant.file);
   const src = fs.readFileSync(abs, 'utf8');
-  const count = src.split(mutant.find).length - 1;
+  // EOL-agnostic anchoring: a checkout's line endings depend on the
+  // machine's git core.autocrlf (CI runners check out LF, local Windows
+  // copies are CRLF), so anchor matching and replacement must work either
+  // way. Mutant anchors are written with LF; they are adapted to the
+  // target file's EOL, and the replaced source keeps the file's original
+  // line ending so the restore below stays byte-exact.
+  const CR = String.fromCharCode(13);
+  const LF = String.fromCharCode(10);
+  const eolRe = new RegExp(CR + '?' + LF, 'g');
+  const crlf = src.includes(CR + LF);
+  const find = crlf ? mutant.find.replace(eolRe, CR + LF) : mutant.find.replace(eolRe, LF);
+  const replace = crlf ? mutant.replace.replace(eolRe, CR + LF) : mutant.replace.replace(eolRe, LF);
+  const count = src.split(find).length - 1;
   if (count !== 1) {
     fail(`Mutant ${mutant.id}: anchor occurs ${count} time(s) in ${mutant.file} (must be exactly 1). Update the mutant.`);
   }
-  fs.writeFileSync(abs, src.split(mutant.find).join(mutant.replace), 'utf8');
+  fs.writeFileSync(abs, src.split(find).join(replace), 'utf8');
   return src;
 }
 

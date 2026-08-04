@@ -75,6 +75,24 @@ const RESET_JS = `(() => {
       input.value = fixedSettingsPaths[key];
     }
   });
+  // The API-key row is machine-specific twice over: the placeholder embeds
+  // the last four chars of the stored key (sk-cp*** on a dev box, ****0000
+  // in the harness) and B-007's clear button flips its label when armed.
+  // Normalize both so committed baselines stay environment-free. Only runs
+  // while the settings modal is open; RESET_HOLDS treats a closed modal as
+  // vacuously scrubbed, so this block is not in RESET_REQUIRED_KEYS.
+  document.querySelectorAll('.settings-modal .row').forEach((row) => {
+    const label = row.querySelector('label');
+    if (!label || !label.textContent.trim().startsWith('API key')) return;
+    const input = row.querySelector('input[type="text"]');
+    if (input) { input.value = ''; input.placeholder = 'BASELINE_KEY'; }
+    row.querySelectorAll('button').forEach((b) => {
+      if (/^(Clear stored key|Will clear)/.test(b.textContent)) {
+        b.textContent = 'Clear stored key';
+        b.classList.remove('danger');
+      }
+    });
+  });
   // Prompt / params fields: fixed text, scrolled to the top.
   document.querySelectorAll('textarea').forEach((t) => { t.value = 'BASELINE'; t.scrollTop = 0; });
   const q = document.querySelector('#quota-value');
@@ -186,6 +204,12 @@ const RESET_HOLDS = `(() => {
     const labelText = label.textContent.trim();
     const key = Object.keys(expectedSettingsPaths).find((name) => labelText.startsWith(name));
     if (key && input.value !== expectedSettingsPaths[key]) return false;
+    if (labelText.startsWith('API key')) {
+      if (input.value !== '' || input.placeholder !== 'BASELINE_KEY') return false;
+      for (const b of row.querySelectorAll('button')) {
+        if (/^Will clear/.test(b.textContent) || b.classList.contains('danger')) return false;
+      }
+    }
   }
   for (const n of document.querySelectorAll('*')) { if (n.scrollTop || n.scrollLeft) return false; }
   return true;

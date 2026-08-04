@@ -2,6 +2,20 @@
 
 Notable user-facing changes are recorded here.
 
+## 1.0.6 - 2026-08-04
+
+Release-gate repairs for the v1.0.5 tag run (CI red on E2E, flakiness, and mutation). No feature changes; every fix ships in a new immutable tag.
+
+### Fixed
+
+- The E2E harness now runs the same H-006 boot credential migration as the production app: the seeded plaintext API key is moved to the encrypted store at boot, so the first `config:set` can no longer silently drop it and flip every later generation guard to "No API key configured" (this was the order-dependent cascade behind the settings-styles, i18n-input, boundary, and viewers-overlays E2E failures).
+- The E2E pipeline scenario now mints a directory read grant through the agreed `pathGrant:mint` flow and passes it to `pipeline:import` / `pipeline:replace` (SEC-003 / P0-D), matching the production grant model instead of tripping it.
+- The E2E reset scenario now exercises the shipped B-009 + P1-G flow end to end: typed-DELETE pre-gate, fail-closed token-less `app:resetAllData`, Main-minted single-use confirmation token, and replay rejection.
+- Production bug: the danger zone passed `expect=''` to the typed-DELETE pre-gate, which left Confirm permanently disabled once anything was typed, making the reset unreachable; it now expects `DELETE`.
+- The visual-regression reset now also scrubs the API-key row (placeholder and clear-button state), so committed baselines carry no machine-specific key material; baselines were re-recorded against the current secretless B-007 settings UI.
+- The flakiness CI job now mirrors the qualification gate's contract policy (`RUN_CONTRACT_TESTS` + `MMX_CONTRACT_OPTIONAL`), so the repeated contract entry no longer fails closed in 0.1 s on runners without an API key.
+- The M28 mutation anchor is now line-ending agnostic (CI checks out LF).
+
 ## 1.0.5 - 2026-08-03
 
 Release-integrity hardening from the 1.0.4 requalification recheck (16 findings, all closed). No feature changes; this version exists so every fix is part of an immutable tag.
