@@ -61,19 +61,26 @@ function stampInstallerTrustAnchor(paths, pubSrc) {
   }
   const BEGIN = '# RR2-C001-BEGIN-EMBEDDED-MINISIGN-PUBKEY';
   const END = '# RR2-C001-END-EMBEDDED-MINISIGN-PUBKEY';
+  // The PowerShell gate is ONE physical cmd line; a PowerShell # comment
+  // inside it would comment out the entire rest of the gate. The markers
+  // therefore live in rem lines and the PowerShell line carries an inert
+  // string-literal stamp point that is replaced with the key appends.
+  const STAMP_POINT = "'RR2-C001-EMBEDDED-MINISIGN-PUBKEY-STAMP-POINT'";
   let content = fs.readFileSync(installer, 'utf8');
-  if (content.includes("$embeddedKeyLines+='")) {
-    log('Installer trust anchor already embedded (RR2-C001) — leaving it untouched.');
-    return;
+  if (!content.includes(STAMP_POINT)) {
+    if (content.includes("$embeddedKeyLines+='")) {
+      log('Installer trust anchor already embedded (RR2-C001) — leaving it untouched.');
+      return;
+    }
+    fail('Published installer has no RR2-C001 stamp point in the PowerShell gate — refusing to publish an installer without a trust anchor.');
   }
-  const marker = BEGIN + '; ' + END;
-  if (!content.includes(marker)) {
+  if (!content.includes(BEGIN) || !content.includes(END)) {
     fail('Published installer is missing the RR2-C001 embedded-key markers — refusing to publish an installer without a trust anchor.');
   }
   const keyLines = fs.readFileSync(pubSrc, 'utf8').split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
   if (keyLines.length === 0) fail(`Pinned public key ${pubSrc} is empty — cannot embed the RR2-C001 trust anchor.`);
   const embed = keyLines.map((l) => `$embeddedKeyLines+='${l.replace(/'/g, "''")}';`).join(' ');
-  content = content.replace(marker, BEGIN + '; ' + embed + ' ' + END);
+  content = content.replace(STAMP_POINT, () => embed);
   // Pin the shipped verifier binary when it is part of this release.
   const toolDest = path.join(paths.output, 'minisign.exe');
   if (fs.existsSync(toolDest)) {

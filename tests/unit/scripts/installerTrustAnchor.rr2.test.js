@@ -92,6 +92,37 @@ test('RR2-C001: the repository installer template still carries the markers', ()
   assert.ok(template.includes('# RR2-C001-BEGIN-EMBEDDED-MINISIGN-PUBKEY'));
   assert.ok(template.includes('# RR2-C001-END-EMBEDDED-MINISIGN-PUBKEY'));
   assert.ok(template.includes('RR2-C001-VERIFIER-SHA256'));
+  assert.ok(template.includes("'RR2-C001-EMBEDDED-MINISIGN-PUBKEY-STAMP-POINT'"), 'stamp point present');
   // The template must NOT ship a pre-embedded key.
   assert.ok(!template.includes("$embeddedKeyLines+='"), 'template must stay unstamped in the repo');
+});
+
+// Regression: the bootstrap gate is a single physical cmd line. A
+// PowerShell # comment ANYWHERE inside that line comments out the entire
+// rest of the gate — the installer then extracts nothing and silently
+// fails with the generic error block (both the multipart install and the
+// unsigned-rejection test break). Neither the template nor the stamped
+// installer may carry a # inside the PowerShell line.
+function psGateLine(content) {
+  const line = content.split(/\r?\n/).find((l) => l.startsWith('powershell.exe -NoProfile -NonInteractive -Command "$ErrorActionPreference=\'Stop\'; $embeddedKeyLines'));
+  assert.ok(line, 'bootstrap PowerShell gate line not found');
+  return line;
+}
+
+test('RR2-C001: the template PowerShell gate line contains no # comment', () => {
+  const template = fs.readFileSync(INSTALLER_SRC, 'utf8');
+  assert.ok(!psGateLine(template).includes('#'), 'a # inside the one-line gate would comment out the whole signature check');
+});
+
+test('RR2-C001: the stamped PowerShell gate line still contains no # comment', () => {
+  const { tmp, paths, pubSrc } = fixture();
+  try {
+    stampInstallerTrustAnchor(paths, pubSrc);
+    const stamped = fs.readFileSync(path.join(paths.output, 'Install-MiniMax-Asset-Tool.cmd'), 'utf8');
+    const line = psGateLine(stamped);
+    assert.ok(!line.includes('#'), 'stamping must not introduce a # comment into the one-line gate');
+    assert.ok(!line.includes('RR2-C001-EMBEDDED-MINISIGN-PUBKEY-STAMP-POINT'), 'stamp point replaced');
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
 });
