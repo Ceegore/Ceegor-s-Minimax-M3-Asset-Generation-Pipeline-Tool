@@ -28,3 +28,28 @@ Abweichung von der Vorgabe festgehalten.
   „Signing Migration: v1.0.7 Legacy Final + v1.1.0 SignPath Readiness“).
   Mit dem ersten SignPath-Release (1.1.0) erhält der Installer eine
   modusabhängige Authenticode-Prüfung zurück.
+
+## A-002 — Seed-Erfassung über bereinigte Staging-Kopie statt Originalverzeichnis
+
+- **Ursprüngliche Vorgabe:** `capture-legacy-shell-lock.js` wird direkt gegen
+  `C:\Tools\MinimaxAssetTool1.0.0` ausgeführt (Plan Phase 0, Schritt 7).
+- **Technische Ursache:** Das installierte Arbeitsverzeichnis enthält lokale
+  Nutzerzustände: `config.txt` (inkl. eines echten API-Schlüssels),
+  `state.json` und `batches.json`. Der Guard `FORBIDDEN_USER_PATHS` verweigert
+  `config.txt` zu Recht; zusätzlich dürfen Nutzerzustände weder eingefroren
+  noch exportiert werden (Plan: Seed-Export ohne Secrets/Nutzerdaten).
+- **Gewählte Alternative:** Eine Staging-Kopie
+  (`C:\Projects\MiniMaxAssetTool-seed-staging-clean`) ohne die drei
+  Nutzerzustandsdateien diente als Seed-Quelle. Alle übrigen Dateien sind
+  byteidentisch zum Original; der Lock (76 frozen files, 22 PE-Dateien,
+  EXE-SHA-256 `f812621e…baba8c`) wurde am 2026-08-04 daraus erfasst. Der
+  Export (`C:\Projects\MiniMaxAssetTool-legacy-seed-export-2026-08-04`,
+  87 Dateien) wurde auf Secrets/Nutzerdaten geprüft: keine Treffer
+  (Einzeltreffer in `MiniMaxAssetTool.exe` ist eine Byte-Koinzidenz in der
+  stock Electron-43.1.0-Launcher-PE, die laut früherer Verifikation
+  hashgleich zu `node_modules/electron/dist` ist).
+- **Risiko:** Keines gegenüber der Vorgabe — die Bereinigung entfernt nur
+  Dateien, die ohnehin nie Teil des Locks oder Exports sein durften.
+- **Konsequenz für compose:** `state.json`/`batches.json` sind weder im Lock
+  noch mutable Präfixe; der Compose-Schritt kopiert sie nicht, der
+  Erststart legt sie neu an (entspricht dem Verhalten einer Neuinstallation).

@@ -1,0 +1,420 @@
+{
+  "schemaVersion": 1,
+  "createdAt": "2026-08-04T18:04:07.976Z",
+  "sourceTag": "local-working-runtime-2026-08-04",
+  "architecture": "x64",
+  "productName": "MiniMaxAssetTool",
+  "executableSha256": "f812621edf562de107add58a7b14340ab61c6311942bc00cdf5c1e13ebbaba8c",
+  "electronVersion": "43.1.0",
+  "sourceVersion": "1.0.0",
+  "mutablePrefixes": [
+    "resources/app.asar",
+    "resources/app.asar.unpacked/",
+    "resources/bin/models/",
+    "README.md",
+    "LICENSE",
+    "THIRD_PARTY_NOTICES.md",
+    "START HERE.txt",
+    "Install MiniMax Asset Tool.cmd",
+    "OFFLINE_RUNTIME_MANIFEST.json",
+    "FILES.sha256",
+    "LEGACY_RUNTIME_NOTICE.json"
+  ],
+  "frozenFiles": {
+    "LICENSE.electron.txt": {
+      "sha256": "5154e165bd6c2cc0cfbcd8916498c7abab0497923bafcd5cb07673fe8480087d",
+      "size": 1096
+    },
+    "LICENSES.chromium.html": {
+      "sha256": "b911161e6594ec76b872498b423c54406168f2974e0d407a847f7de1e5ff94dd",
+      "size": 20313957
+    },
+    "MiniMaxAssetTool.exe": {
+      "sha256": "f812621edf562de107add58a7b14340ab61c6311942bc00cdf5c1e13ebbaba8c",
+      "size": 225519616
+    },
+    "chrome_100_percent.pak": {
+      "sha256": "d76fe8fa3a14cd73e4c858746e2ab2d2fa6f2df38a906fa5814b50a8a895fc96",
+      "size": 119905
+    },
+    "chrome_200_percent.pak": {
+      "sha256": "b74ad439f3d3762657f3ba533a6af3ac63315c838ed46519891366f43d834a0e",
+      "size": 197089
+    },
+    "d3dcompiler_47.dll": {
+      "sha256": "a05f99734f7c4822fefc12b367af21fd0976ed6608752fb1e1e80b6ece7ecbbb",
+      "size": 4741488
+    },
+    "dxcompiler.dll": {
+      "sha256": "1085707889573af5b32e7644d47a7c5f0809ed0818217d75f6eaedee37a2a767",
+      "size": 25616896
+    },
+    "dxil.dll": {
+      "sha256": "77e039c905030a641e53658a008b74e90635a5ea9b6b79eabd0f2003bdfca59a",
+      "size": 1509760
+    },
+    "ffmpeg.dll": {
+      "sha256": "8b7cbc841fd42443cfa4011badb5cf6b9fb41a7a2c277ccbf8e0c321ae44af37",
+      "size": 3067904
+    },
+    "icudtl.dat": {
+      "sha256": "bd8c145abdf3f8383276ce01dfa4ae48709bef9fef1c0711eb7c3fab4f6eb7c2",
+      "size": 10876560
+    },
+    "libEGL.dll": {
+      "sha256": "c459e2cf46578da98ba8955e94f29fde8001ba3f44197a3ec521a9c91b538e7c",
+      "size": 474624
+    },
+    "libGLESv2.dll": {
+      "sha256": "39955886b88e2c2978c8472225430c497abf90b1fad906d7b3b6fdf581ce9ddf",
+      "size": 8023552
+    },
+    "locales/af.pak": {
+      "sha256": "e16a85aae42dd387971140f0bcea4ad9c25c5f1d06407e7e46cc549241db0d58",
+      "size": 613722
+    },
+    "locales/am.pak": {
+      "sha256": "03fa71456bbb5e88694a519adc8f8ec9ebfdaaf4ecd8f381343f15a1805e3afb",
+      "size": 994404
+    },
+    "locales/ar.pak": {
+      "sha256": "e952c3a544f0b91cf26e91c8c7a763755cca9591aa915a9d3e63a6cf6daacf6a",
+      "size": 1095898
+    },
+    "locales/bg.pak": {
+      "sha256": "889c68ea8206027dcebd1835884eff52f53c59dfb00fa112c43a2fbb87083ce7",
+      "size": 1137844
+    },
+    "locales/bn.pak": {
+      "sha256": "1b3cb0d1ac1627b51b3a208f3f29864bf415bff3d1d0d5a8b84e7ae4ab2455b4",
+      "size": 1460793
+    },
+    "locales/ca.pak": {
+      "sha256": "5da35ba1fb3132d4725bb32d1b1c2a5703ac86effb7ef294470b73887e27b663",
+      "size": 691926
+    },
+    "locales/cs.pak": {
+      "sha256": "0d6a7d8bb08c1c6b8a4735fb364bf7b81b66797e48ea34ef06f78c9d87d15f26",
+      "size": 718396
+    },
+    "locales/da.pak": {
+      "sha256": "73e7ff20f472675b6fe5be87535563ea19fda72dddc64d5e0f068211dfee3703",
+      "size": 644425
+    },
+    "locales/de.pak": {
+      "sha256": "99c50acbe4dca9edde03189ed793f8d6f000793f0938320a39370a11855544f4",
+      "size": 693010
+    },
+    "locales/el.pak": {
+      "sha256": "e580ee2585ae5f5e9d3cc874c2f1b3773861db3493ae7c08d5c1a3bd4bacbc66",
+      "size": 1250786
+    },
+    "locales/en-GB.pak": {
+      "sha256": "bc3c6c433ad7fa76df796fd37d413889be6d2e2759d54680dc3549a0b1bd99f9",
+      "size": 559609
+    },
+    "locales/en-US.pak": {
+      "sha256": "39d605d22eb267d68ea4268d5e2a38a88ec0e2ed6dec23395a7da47f99c58184",
+      "size": 565800
+    },
+    "locales/es-419.pak": {
+      "sha256": "7a30d5e3ae178d15384cd7fff6aea467fa938c6261cab11fa870a3dff84e4df8",
+      "size": 682813
+    },
+    "locales/es.pak": {
+      "sha256": "7d92ead9e4168f52274e3729457adf50d896d0fde01aecd873d6e0122744f954",
+      "size": 679423
+    },
+    "locales/et.pak": {
+      "sha256": "dad68aad8c36da532a58f018124d4182173b2589f6f8c44cdd3f7dbb5304ee68",
+      "size": 620125
+    },
+    "locales/fa.pak": {
+      "sha256": "b88eb1d00a6bd70c969a44c57f2fce5760001d16713a43288595c2efd43c3247",
+      "size": 1026720
+    },
+    "locales/fi.pak": {
+      "sha256": "cd1a5e8b30a1a0e8a35830174e66c89d21dde97614a93749eedabd3731516f0d",
+      "size": 632141
+    },
+    "locales/fil.pak": {
+      "sha256": "6c86424d7415a92456ebf6d7a17b1e4cfcfb25da833a4c5377c502c24e335ff8",
+      "size": 715474
+    },
+    "locales/fr.pak": {
+      "sha256": "92fdf24ee5cd7977dae8940c092f743683278432a7dd68a52a5c069f32f60d7a",
+      "size": 738084
+    },
+    "locales/gu.pak": {
+      "sha256": "dae744e959d1a536cd51e925f2aa80b7ba23f981a989368b9b6f87df03194627",
+      "size": 1443467
+    },
+    "locales/he.pak": {
+      "sha256": "fc4011bf24266691363cfecd0a0c233f3197c9706bb0c5ede73cbc25a8f71e97",
+      "size": 898516
+    },
+    "locales/hi.pak": {
+      "sha256": "0f78af66fa88302da0e1241175abe0291512c32521792adab5efd67c6196fca5",
+      "size": 1529365
+    },
+    "locales/hr.pak": {
+      "sha256": "24c82c47f0bd227e91a83a5d3f929ba5f557a0a262b3b7293f7941faa3b45941",
+      "size": 690892
+    },
+    "locales/hu.pak": {
+      "sha256": "0bed3bc4d3258dbbcdfd4a2479c666d35aa2eb2794127c7135067f650bb50455",
+      "size": 738244
+    },
+    "locales/id.pak": {
+      "sha256": "bb63434850472affa79247d4b79465b89fc4ebd290478015e88d04be55d4c276",
+      "size": 612159
+    },
+    "locales/it.pak": {
+      "sha256": "a4990034b1e74404b83e9578016ff7fd81468f62ecfde48bec4e3a05df782b40",
+      "size": 668936
+    },
+    "locales/ja.pak": {
+      "sha256": "61000f96276079f74db0fde6b8294324811f271fee2835917c42312ac9b7b0b5",
+      "size": 815268
+    },
+    "locales/kn.pak": {
+      "sha256": "41a2028199741a4827bc470772aead42276cf630aad61e344191d4708cff6bb0",
+      "size": 1661406
+    },
+    "locales/ko.pak": {
+      "sha256": "2d77980cb8d944305ed6b2dd4413862e205bce2de4b3a1eedacfc91e1836999f",
+      "size": 693731
+    },
+    "locales/lt.pak": {
+      "sha256": "541b0f03ed863ac8bfdb2fba2c0ae03bc27802ba99b9863eb0a950b705bc4f61",
+      "size": 751706
+    },
+    "locales/lv.pak": {
+      "sha256": "2743e698bd3c862750967709049af14152babd32052fb0ee7e9901fa5acc6d48",
+      "size": 748765
+    },
+    "locales/ml.pak": {
+      "sha256": "364e991b719876b6491bd678fa2b1303e69fca5014ea83e885ca6a5775cf1c42",
+      "size": 1705247
+    },
+    "locales/mr.pak": {
+      "sha256": "a68fb1c2ee67eaf807186571278da7c78bc782ed06607e0c6822ac3c71cef9cd",
+      "size": 1414904
+    },
+    "locales/ms.pak": {
+      "sha256": "0e73c1e883e1ed27b0f110d087480880f4f4369c01736ec616174dde24553b1b",
+      "size": 644374
+    },
+    "locales/nb.pak": {
+      "sha256": "b0597a6739575752dd29727c94c22449551f50f5bcaf7f83b49a536ebf1a28ad",
+      "size": 616030
+    },
+    "locales/nl.pak": {
+      "sha256": "6c05ab0a374d00b5c66788458ff7def7871fbf66cc1f629868529bfebb2911c1",
+      "size": 641855
+    },
+    "locales/pl.pak": {
+      "sha256": "b593df8af8325210acab036337f261e59c43140a8bb982587e7a73d65ac59c81",
+      "size": 717434
+    },
+    "locales/pt-BR.pak": {
+      "sha256": "a7401824b914d20565e6698d98851405820dcf2d639aec762b65bdae383cd94e",
+      "size": 672814
+    },
+    "locales/pt-PT.pak": {
+      "sha256": "3ed3bfbb85bd4aab260dd18e63b591dc777a5768110d96662e60559eac77bb4b",
+      "size": 676692
+    },
+    "locales/ro.pak": {
+      "sha256": "e835583f8d95853fabebfea1c9ddd6a5569826d99ae2234a4e1dabc1fe483057",
+      "size": 702275
+    },
+    "locales/ru.pak": {
+      "sha256": "6a098a4df1813c73c9f72da68bb7a956e889132d2ebdb536c2555dfa62d2c21d",
+      "size": 1163087
+    },
+    "locales/sk.pak": {
+      "sha256": "86b15f91b88269066a8b9974472cd0e10bbba6985a37230ef98f2a4ca75111f3",
+      "size": 729969
+    },
+    "locales/sl.pak": {
+      "sha256": "6ad9e4479833aae833be42fd27c355d5f5106e35ec46d7358c8913ec86265ab0",
+      "size": 698884
+    },
+    "locales/sr.pak": {
+      "sha256": "e8e42e99d233acf6906b52f5d1241ab13775d81b715fd2359558efb1fe3cbb5f",
+      "size": 1075610
+    },
+    "locales/sv.pak": {
+      "sha256": "6370cc715d38e8cb519ae7891b779aca1470d9e3f893893f9badcf8052ea6def",
+      "size": 623816
+    },
+    "locales/sw.pak": {
+      "sha256": "4364411b30c18975b70182a61b6d4f2866913633acaabc849b67807553cab0ca",
+      "size": 660329
+    },
+    "locales/ta.pak": {
+      "sha256": "3e32e86952c9bbf35625f8842970cab653613894b8f6ae7a9130eb34334bdf32",
+      "size": 1696416
+    },
+    "locales/te.pak": {
+      "sha256": "cc83c58f09a7830829a8c4ad3deee97f87003ebe553844945b7800c9ea6f6666",
+      "size": 1571646
+    },
+    "locales/th.pak": {
+      "sha256": "a413ab6322a4d65e013c167426ed26ab0eeffce5dbcc349e3338bff061f369dc",
+      "size": 1320614
+    },
+    "locales/tr.pak": {
+      "sha256": "530a771c8d66c89aea81f094fc4cecf16ddc5e9eb617afa2edbc5250210ad20d",
+      "size": 672382
+    },
+    "locales/uk.pak": {
+      "sha256": "fcf34b72b374f8f41cf630ee6e9a690d15673b0867e90f93268eede8364d4a88",
+      "size": 1172427
+    },
+    "locales/ur.pak": {
+      "sha256": "043af5d35bbfc218c295d97367e2d433faf2a141a98792e2cafaba16b4bc171c",
+      "size": 1009975
+    },
+    "locales/vi.pak": {
+      "sha256": "e00e36e809b15f7251895efc63f05da6246326984d261963eea87e5dbce15239",
+      "size": 799477
+    },
+    "locales/zh-CN.pak": {
+      "sha256": "27d412caf44e0d206eb8afa5e3f846988fab8f8358f0f84f5260e2c671c3b619",
+      "size": 571468
+    },
+    "locales/zh-TW.pak": {
+      "sha256": "852c7930e92eeb8bcec75a92ebae9253eeed0662e7e7508aaf4b7315a268cc17",
+      "size": 564070
+    },
+    "resources.pak": {
+      "sha256": "c4a2da02b8c54c3604c2b753fe6953d6f789c5460d0b9a7e41661a4c59628238",
+      "size": 7146735
+    },
+    "resources/bin/realesrgan-ncnn-vulkan.exe": {
+      "sha256": "07e49f7cbb4ede01ae4dd4c399d3a7e5846e3d2085c3128eff881e55cb7b1a0c",
+      "size": 6161408
+    },
+    "resources/bin/vcomp140.dll": {
+      "sha256": "8f72ef2e483465444b2059fc6744d6cb22cd8d8a27f6fa56befd2a42dcd0f78b",
+      "size": 182704
+    },
+    "resources/bin/vcomp140d.dll": {
+      "sha256": "34980f5a28002967d4f2659b10a417b1b9a242e240195947c89195083d146c53",
+      "size": 207736
+    },
+    "snapshot_blob.bin": {
+      "sha256": "67b1473834c011a3b4e7b3c395694de4d417415b432141278d5dd6a9726905dc",
+      "size": 365488
+    },
+    "v8_context_snapshot.bin": {
+      "sha256": "e2ecf544ace3397c1d167e71dc83a099e4d990af1d56b6844f260876027136c2",
+      "size": 740048
+    },
+    "vk_swiftshader.dll": {
+      "sha256": "dc150d40c7ca24dc1d132990bdefa1168e3af5244e8c6e5e84a7d3f2ae20ead4",
+      "size": 5502464
+    },
+    "vk_swiftshader_icd.json": {
+      "sha256": "32d83ff113fef532a9f97e0d2831f8656628ab1c99e9060f0332b1532839afd9",
+      "size": 106
+    },
+    "vulkan-1.dll": {
+      "sha256": "db1ca92ddd19d5e02cf336a781c3770a9cead750c4cab780898f174f41d598d1",
+      "size": 930304
+    }
+  },
+  "peFiles": {
+    "MiniMaxAssetTool.exe": {
+      "sha256": "f812621edf562de107add58a7b14340ab61c6311942bc00cdf5c1e13ebbaba8c",
+      "size": 225519616
+    },
+    "d3dcompiler_47.dll": {
+      "sha256": "a05f99734f7c4822fefc12b367af21fd0976ed6608752fb1e1e80b6ece7ecbbb",
+      "size": 4741488
+    },
+    "dxcompiler.dll": {
+      "sha256": "1085707889573af5b32e7644d47a7c5f0809ed0818217d75f6eaedee37a2a767",
+      "size": 25616896
+    },
+    "dxil.dll": {
+      "sha256": "77e039c905030a641e53658a008b74e90635a5ea9b6b79eabd0f2003bdfca59a",
+      "size": 1509760
+    },
+    "ffmpeg.dll": {
+      "sha256": "8b7cbc841fd42443cfa4011badb5cf6b9fb41a7a2c277ccbf8e0c321ae44af37",
+      "size": 3067904
+    },
+    "libEGL.dll": {
+      "sha256": "c459e2cf46578da98ba8955e94f29fde8001ba3f44197a3ec521a9c91b538e7c",
+      "size": 474624
+    },
+    "libGLESv2.dll": {
+      "sha256": "39955886b88e2c2978c8472225430c497abf90b1fad906d7b3b6fdf581ce9ddf",
+      "size": 8023552
+    },
+    "resources/app.asar.unpacked/node_modules/@img/sharp-win32-x64/lib/libvips-42.dll": {
+      "sha256": "6d8ec83a826a1b46ef25a670501fd186475568dd3e48893cb4f756d0f2f428d8",
+      "size": 18406400
+    },
+    "resources/app.asar.unpacked/node_modules/@img/sharp-win32-x64/lib/libvips-cpp-8.18.3.dll": {
+      "sha256": "d6eb3395e6f7799c9e2c997aba38068f1ab0684dc08a853013dbe528649306b9",
+      "size": 333312
+    },
+    "resources/app.asar.unpacked/node_modules/@img/sharp-win32-x64/lib/sharp-win32-x64-0.35.3.node": {
+      "sha256": "45dbb968dff27a1e8d8870d2a34e6f5418fa2a1a4fe27a7ed13ab2fb3f895468",
+      "size": 442368
+    },
+    "resources/app.asar.unpacked/node_modules/@typescript/typescript-win32-x64/lib/tsc.exe": {
+      "sha256": "f9ecfbdc93753d2c972d66a8d0d75f5bd737fd4a5f88b422d9091ea282bcb2c7",
+      "size": 24520544
+    },
+    "resources/app.asar.unpacked/node_modules/ffmpeg-static/ffmpeg.exe": {
+      "sha256": "04e1307997530f9cf2fe35cba2ca7e8875ca91da02f89d6c7243df819c94ad00",
+      "size": 82797568
+    },
+    "resources/app.asar.unpacked/node_modules/onnxruntime-node/bin/napi-v6/win32/x64/DirectML.dll": {
+      "sha256": "86d9b418e982fa1effb6ea39cb916b04fe3896ccedc6982d73a5477459b56d81",
+      "size": 18527544
+    },
+    "resources/app.asar.unpacked/node_modules/onnxruntime-node/bin/napi-v6/win32/x64/dxcompiler.dll": {
+      "sha256": "b2d807864ae4a7cdd4a8f09cc947206f60170c90f41fc248a9cdd800f4c6fbcd",
+      "size": 17986360
+    },
+    "resources/app.asar.unpacked/node_modules/onnxruntime-node/bin/napi-v6/win32/x64/dxil.dll": {
+      "sha256": "5f307a712416ae5213f2b4469e25c4258191c8284513fa5d2bd828a14c5052ef",
+      "size": 1508664
+    },
+    "resources/app.asar.unpacked/node_modules/onnxruntime-node/bin/napi-v6/win32/x64/onnxruntime.dll": {
+      "sha256": "273f9ef9cf755c6a0f342226a80448156c10ceb74db2ae8c8370dc98e75af0eb",
+      "size": 26011960
+    },
+    "resources/app.asar.unpacked/node_modules/onnxruntime-node/bin/napi-v6/win32/x64/onnxruntime_binding.node": {
+      "sha256": "dd50eb632300170576fda3648f4fcf00fbd44afca6a70efa53c57f85b272faf2",
+      "size": 298296
+    },
+    "resources/bin/realesrgan-ncnn-vulkan.exe": {
+      "sha256": "07e49f7cbb4ede01ae4dd4c399d3a7e5846e3d2085c3128eff881e55cb7b1a0c",
+      "size": 6161408
+    },
+    "resources/bin/vcomp140.dll": {
+      "sha256": "8f72ef2e483465444b2059fc6744d6cb22cd8d8a27f6fa56befd2a42dcd0f78b",
+      "size": 182704
+    },
+    "resources/bin/vcomp140d.dll": {
+      "sha256": "34980f5a28002967d4f2659b10a417b1b9a242e240195947c89195083d146c53",
+      "size": 207736
+    },
+    "vk_swiftshader.dll": {
+      "sha256": "dc150d40c7ca24dc1d132990bdefa1168e3af5244e8c6e5e84a7d3f2ae20ead4",
+      "size": 5502464
+    },
+    "vulkan-1.dll": {
+      "sha256": "db1ca92ddd19d5e02cf336a781c3770a9cead750c4cab780898f174f41d598d1",
+      "size": 930304
+    }
+  },
+  "ignoredMutableFileCount": 3168
+}
