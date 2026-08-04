@@ -52,14 +52,26 @@ module.exports = {
       if (typeof saveAllStates === 'function') saveAllStates();
       return true;
     })()`);
-    // saveAllStates debounces; wait a beat for the write to land.
-    await sleep(800);
 
+    // Read the REAL state.json back. saveAllStates debounces and follow-on
+    // autosaves (job-status updates) may still be in flight, so poll until a
+    // complete, parseable document carrying the value we just set lands on
+    // disk. The write itself is atomic (tmp + rename in src/state.js), so a
+    // parseable snapshot is guaranteed once the debounced save has swapped in.
     let persisted = null;
-    try {
-      persisted = JSON.parse(fs.readFileSync(path.join(TMP, 'state.json'), 'utf8'));
-    } catch (e) {
-      check(false, `could not read state.json from disk: ${e && e.message}`);
+    let lastErr = null;
+    for (let attempt = 0; attempt < 10 && !persisted; attempt++) {
+      await sleep(300);
+      try {
+        const raw = JSON.parse(fs.readFileSync(path.join(TMP, 'state.json'), 'utf8'));
+        if (raw && raw.jobsArchiveCap === 150) persisted = raw;
+        else lastErr = new Error('saved value not persisted yet');
+      } catch (e) {
+        lastErr = e;
+      }
+    }
+    if (!persisted) {
+      check(false, `could not read state.json from disk: ${lastErr && lastErr.message}`);
     }
     if (persisted) {
       check(Array.isArray(persisted.jobsSnapshot),

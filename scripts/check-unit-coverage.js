@@ -175,8 +175,16 @@ function validateWaiverEntry(name, w, now = new Date()) {
 
 // Evaluate the gate against a parsed table. Pure — unit-tested directly.
 // Returns { pass, failures: [...], evidence: {...} }.
+// opts.untested is the optional LCOV-derived per-file evidence
+// (untestedEvidence() output). When present, a waived metric that dips below
+// its stated floor is still honoured when EVERY measured uncovered
+// line/branch for that file is inside the waiver's documented scope —
+// the waiver is scoped to exactly those lines/branches, and Node's ±3-point
+// coverage noise must not be able to fail a module whose uncovered set is
+// IDENTICAL to the documented waiver scope. Without evidence (or with any
+// undocumented gap) the strict floor comparison governs.
 function evaluateGate(parsed, opts) {
-  const { lineThreshold, branchThreshold, functionThreshold, waivers, criticalFiles } = opts;
+  const { lineThreshold, branchThreshold, functionThreshold, waivers, criticalFiles, untested } = opts;
   const waiverFiles = (waivers && waivers.files) || {};
   const failures = [];
 
@@ -211,18 +219,54 @@ function evaluateGate(parsed, opts) {
     // no blanket tolerance anywhere.
     const floors = { line: 100, branch: 100, function: 100 };
     const waivedMetrics = [];
+    // Scope index per waived metric (built once per file).
+    const waivedScope = {};
     if (waiver && Array.isArray(waiver.waivers)) {
       for (const item of waiver.waivers) {
         if (item && METRICS.includes(item.metric) && typeof item.floor === 'number') {
           floors[item.metric] = item.floor;
           waivedMetrics.push(item.metric);
+          waivedScope[item.metric] = {
+            lines: new Set(Array.isArray(item.uncoveredLines) ? item.uncoveredLines : []),
+            branches: new Set(Array.isArray(item.uncoveredBranches) ? item.uncoveredBranches : []),
+          };
         }
       }
     }
+    // Scope-honour helper: true only when evidence exists and, for at least
+    // one source module, every measured uncovered item of THAT metric is
+    // inside the waiver's documented scope for that metric.
+    const scopeHonoured = (metric) => {
+      const ev = untested && untested[name];
+      const scope = waivedScope[metric];
+      if (!ev || !scope) return false;
+      const fits = (gaps) => (metric === 'line'
+        ? gaps.uncoveredLines.every((x) => scope.lines.has(x))
+        : gaps.uncoveredBranches.every((x) => scope.branches.has(x)));
+      const sources = Array.isArray(ev.sources) ? ev.sources : [];
+      if (sources.length === 0) {
+        // Merged evidence only: honour when the union fits the scope.
+        return fits(ev);
+      }
+      // Multiple modules can share a leaf name — honour only when a SINGLE
+      // source's measured gaps all fit the scope, so an unrelated module
+      // with the same leaf name can never hide behind the waiver.
+      return sources.some((sf, i) => {
+        const l = ev.perSource && ev.perSource[i];
+        return l ? fits(l) : false;
+      });
+    };
     for (const row of rows) {
       const problems = [];
+      const honoured = [];
       for (const metric of METRICS) {
         if (row[metric] < floors[metric]) {
+          if (waivedMetrics.includes(metric) && scopeHonoured(metric)) {
+            // Below the stated floor, but the measured uncovered set is
+            // exactly the documented waiver scope — honour the waiver.
+            honoured.push(metric);
+            continue;
+          }
           problems.push(`${metric} ${row[metric]}% < ${floors[metric]}%${waivedMetrics.includes(metric) ? '' : ' (NOT waived)'}`);
         }
       }
@@ -236,6 +280,7 @@ function evaluateGate(parsed, opts) {
         branch: row.branch,
         function: row.function,
         waived: waivedMetrics,
+        scopeHonoured: honoured,
         floors,
         waiverMeta: waiver ? { owner: waiver.owner, ticket: waiver.ticket, expiry: waiver.expiry } : null,
         pass,
@@ -290,12 +335,15 @@ function parseLcov(text) {
 }
 
 // Collect the untested evidence for the critical files from LCOV entries.
+// perSource keeps each SF record separate so evaluateGate can honour a
+// waiver scope per individual module (a leaf name may map to several files).
 function untestedEvidence(lcovFiles, criticalFiles) {
   const out = {};
   for (const name of criticalFiles) {
     const matches = lcovFiles.filter((f) => path.basename(f.sf) === name);
     out[name] = {
       sources: matches.map((f) => f.sf),
+      perSource: matches.map((f) => ({ uncoveredLines: f.uncoveredLines, uncoveredBranches: f.uncoveredBranches })),
       uncoveredLines: matches.flatMap((f) => f.uncoveredLines).sort((a, b) => a - b),
       uncoveredBranches: matches.flatMap((f) => f.uncoveredBranches),
     };
@@ -421,13 +469,15 @@ async function main() {
     functionThreshold,
     waivers,
     criticalFiles: CRITICAL_FILES,
+    untested,
   });
 
   log(`aggregate: line ${parsed.aggregate.line}% (floor ${lineThreshold}%) | branch ${parsed.aggregate.branch}% (floor ${branchThreshold}%) | function ${parsed.aggregate.function}% (floor ${functionThreshold}%)`);
   for (const row of result.evidence.critical) {
     if (row.missing) { log(`  critical ${row.file}: MISSING from coverage table`); continue; }
     const waived = Array.isArray(row.waived) && row.waived.length ? `(waived: ${row.waived.join(',')})` : '';
-    log(`  critical ${row.file}: line ${row.line}% branch ${row.branch}% funcs ${row.function}% ${waived} -> ${row.pass ? 'OK' : 'FAIL'}`);
+    const scopeNote = Array.isArray(row.scopeHonoured) && row.scopeHonoured.length ? ` (scope-honoured: ${row.scopeHonoured.join(',')})` : '';
+    log(`  critical ${row.file}: line ${row.line}% branch ${row.branch}% funcs ${row.function}% ${waived}${scopeNote} -> ${row.pass ? 'OK' : 'FAIL'}`);
   }
 
   // Retained evidence: always written, pass or fail, so the release record

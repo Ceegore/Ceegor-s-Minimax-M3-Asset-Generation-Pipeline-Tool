@@ -206,3 +206,80 @@ test('evidence payload carries thresholds, aggregate and per-file decisions', ()
   const row = r.evidence.critical.find((c) => c.file === 'providersStore.js');
   assert.equal(row.waiverMeta.ticket, 'RR2-B003');
 });
+
+// ---------------------------------------------------------------------------
+// Signing-migration Phase 0: waiver-scope honouring. A waived metric that
+// dips below its stated floor under Node's ±3-point coverage noise must not
+// fail the release when the MEASURED uncovered set is exactly the waiver's
+// documented scope. Any undocumented gap keeps the strict floor.
+// ---------------------------------------------------------------------------
+test('waiver scope: a floor dip is honoured when every uncovered line/branch is documented', () => {
+  // providersStore measures 79/79 but the floors are pushed to 85 so BOTH
+  // waived metrics dip — exactly the noise window that flaked the old gate.
+  const parsed = parseCoverageTable(TABLE);
+  const tight = opts({ waivers: { files: { 'providersStore.js': narrowWaiver({ waivers: [
+    { metric: 'line', floor: 85, uncoveredLines: [42, 43] },
+    { metric: 'branch', floor: 85, uncoveredBranches: ['55:0.1'] },
+  ] }) } } });
+  // Without evidence the strict floors govern (no silent tolerance).
+  assert.ok(!evaluateGate(parsed, tight).pass);
+  // With evidence that matches the documented scope exactly: honoured.
+  // Aggregate floors are lowered so ONLY the waiver-scope decision is tested.
+  const untested = {
+    'providersStore.js': {
+      sources: ['src/providersStore.js'],
+      perSource: [{ uncoveredLines: [42, 43], uncoveredBranches: ['55:0.1'] }],
+      uncoveredLines: [42, 43],
+      uncoveredBranches: ['55:0.1'],
+    },
+  };
+  const r = evaluateGate(parsed, { ...tight, lineThreshold: 50, branchThreshold: 60, functionThreshold: 30, untested });
+  assert.ok(r.pass, 'scope-identical dip must be honoured: ' + r.failures.join('; '));
+  const row = r.evidence.critical.find((c) => c.file === 'providersStore.js');
+  assert.deepEqual(row.scopeHonoured.sort(), ['branch', 'line']);
+});
+
+test('waiver scope: an UNDOCUMENTED uncovered line/branch keeps the strict floor', () => {
+  const parsed = parseCoverageTable(TABLE);
+  const tight = opts({ waivers: { files: { 'providersStore.js': narrowWaiver({ waivers: [
+    { metric: 'line', floor: 85, uncoveredLines: [42, 43] },
+    { metric: 'branch', floor: 85, uncoveredBranches: ['55:0.1'] },
+  ] }) } } });
+  const untested = {
+    'providersStore.js': {
+      sources: ['src/providersStore.js'],
+      perSource: [{ uncoveredLines: [42, 43, 999], uncoveredBranches: ['55:0.1'] }],
+      uncoveredLines: [42, 43, 999],
+      uncoveredBranches: ['55:0.1'],
+    },
+  };
+  const r = evaluateGate(parsed, { ...tight, untested });
+  assert.ok(!r.pass, 'a new uncovered line outside the waiver scope must fail');
+  assert.ok(r.failures.some((f) => /line 79% < 85%/.test(f)));
+});
+
+test('waiver scope: a same-leaf module cannot hide behind another module’s waiver', () => {
+  const parsed = parseCoverageTable(TABLE);
+  const tight = opts({ waivers: { files: { 'providersStore.js': narrowWaiver({ waivers: [
+    { metric: 'line', floor: 85, uncoveredLines: [42, 43] },
+    { metric: 'branch', floor: 85, uncoveredBranches: ['55:0.1'] },
+  ] }) } } });
+  // Two modules share the leaf name; for BOTH metrics EVERY single source
+  // carries at least one gap outside the documented scope, so no source may
+  // be scope-honoured and the strict floor must govern.
+  const untested = {
+    'providersStore.js': {
+      sources: ['src/a/providersStore.js', 'src/b/providersStore.js'],
+      perSource: [
+        { uncoveredLines: [42, 888], uncoveredBranches: ['55:0.1', '77:9.9'] },
+        { uncoveredLines: [43, 999], uncoveredBranches: ['12:3.4'] },
+      ],
+      uncoveredLines: [42, 43, 888, 999],
+      uncoveredBranches: ['55:0.1', '77:9.9', '12:3.4'],
+    },
+  };
+  const r = evaluateGate(parsed, { ...tight, untested });
+  assert.ok(!r.pass, 'leaf-name collisions must not dilute the waiver scope');
+  assert.ok(r.failures.some((f) => /line 79% < 85%/.test(f)));
+  assert.ok(r.failures.some((f) => /branch 79% < 85%/.test(f)));
+});
