@@ -125,8 +125,9 @@ function buildReleaseFixture() {
   const { releasePaths } = require('../../../scripts/releaseArtifacts');
   const paths = releasePaths(root);
   fs.mkdirSync(path.join(paths.output, 'win-unpacked'), { recursive: true });
+  // Publication scope (signing-migration §10): the internal unpacked EXE is
+  // protected by FILES.sha256 inside the archive and is NOT a published asset.
   const files = {
-    'win-unpacked/FixtureTool.exe': Buffer.from('MZPE'),
     [`${paths.baseName}.zip`]: Buffer.from('ZIPDATA'),
     'Install-MiniMax-Asset-Tool.cmd': Buffer.from('@echo off'),
     [`${paths.baseName}.provenance.json`]: Buffer.from('{}'),
@@ -168,8 +169,6 @@ test('RR2-B002/M003/C002: main() stages the exact signed inventory with nested d
   try {
     sp.main({ root, env: { MINISIGN_PUB_PATH: pubKey, MINISIGN_TOOL_PATH: 'minisign' }, spawn: OK_SPAWN });
     const stage = path.join(paths.output, 'publication');
-    // The nested exe must be present (RR2-B002 regression).
-    assert.equal(fs.existsSync(path.join(stage, 'win-unpacked', 'FixtureTool.exe')), true);
     const rels = sp.stagedFileRels(stage);
     assert.deepEqual(rels.sort(), [
       'Install-MiniMax-Asset-Tool.cmd',
@@ -179,7 +178,6 @@ test('RR2-B002/M003/C002: main() stages the exact signed inventory with nested d
       'FixtureTool-9.8.7-x64.sha256.minisig',
       'FixtureTool-9.8.7-x64.zip',
       'minisign.pub',
-      'win-unpacked/FixtureTool.exe',
     ].sort());
   } finally {
     fs.rmSync(root, { recursive: true, force: true });

@@ -46,6 +46,10 @@ const STAGE = path.join(DIST, BASE_NAME);
 const ZIP_PATH = path.join(DIST, `${BASE_NAME}.zip`);
 const MANIFEST_PATH = path.join(DIST, `${BASE_NAME}.sha256`);
 const REQUIRE_CODE_SIGNING = process.env.REQUIRE_CODE_SIGNING === '1';
+// --package-existing: skip the electron-builder step and package the tree that
+// already lives in dist-out/win-unpacked (produced by the hash-locked legacy
+// composition or by a SignPath merge). Never removes or rebuilds that tree.
+const PACKAGE_EXISTING = process.argv.includes('--package-existing');
 
 function log(m) { process.stdout.write(m + '\n'); }
 function fail(m) { process.stderr.write('✖  ' + m + '\n'); process.exit(1); }
@@ -190,8 +194,9 @@ function printPrivilegeFix() {
   }
   log(`  ${sourceRuntime.count} files verified (${(sourceRuntime.totalBytes / 1073741824).toFixed(2)} GiB)`);
 
-  // Clean dist/ so a previous failure state doesn't leak in.
-  await fsp.rm(UNPACKED, { recursive: true, force: true });
+  // Clean dist/ so a previous failure state doesn't leak in. The prebuilt
+  // unpacked tree is the input of --package-existing and must survive.
+  if (!PACKAGE_EXISTING) await fsp.rm(UNPACKED, { recursive: true, force: true });
   await fsp.rm(STAGE, { recursive: true, force: true });
   await fsp.rm(ZIP_PATH, { force: true });
   const staleBase = path.basename(ZIP_PATH).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -215,6 +220,12 @@ function printPrivilegeFix() {
   }
 
   // ---- Step 1: build the unpacked directory ----
+  if (PACKAGE_EXISTING) {
+    log('Step 1/2: using the prebuilt dist-out/win-unpacked tree...');
+    for (const required of [path.join(UNPACKED, 'MiniMaxAssetTool.exe'), path.join(UNPACKED, 'resources', 'app.asar')]) {
+      if (!fs.existsSync(required)) fail(`--package-existing is missing ${required}`);
+    }
+  } else {
   log('Step 1/2: building dist/win-unpacked/ via electron-builder --win dir...');
   const isWin = process.platform === 'win32';
   const electronBuilder = path.join(ROOT, 'node_modules', '.bin', isWin ? 'electron-builder.cmd' : 'electron-builder');
@@ -231,6 +242,7 @@ function printPrivilegeFix() {
       process.exit(1);
     }
     fail('electron-builder --win dir failed: ' + (e && e.message || e));
+  }
   }
 
   if (!fs.existsSync(UNPACKED)) {
@@ -284,7 +296,13 @@ function printPrivilegeFix() {
     'vcomp140.dll',
     'vcomp140d.dll',
   ];
-  if (fs.existsSync(sourceBin)) {
+  if (PACKAGE_EXISTING) {
+    log('');
+    log('Step 1.5: verifying the prebuilt packaged runtime (no re-copy — byte-locked trees must not change)...');
+    const packagedRuntime = verifyRuntimeAssets(destBin);
+    if (!packagedRuntime.ok) fail('prebuilt packaged runtime is incomplete or changed:\n  ' + packagedRuntime.issues.join('\n  '));
+    log(`  verified ${packagedRuntime.count} prebuilt runtime files by SHA-256`);
+  } else if (fs.existsSync(sourceBin)) {
     log('');
     log('Step 1.5: copying runtime assets into dist/win-unpacked/resources/bin/...');
     // Wipe dest first so files from a previous build (e.g. a
