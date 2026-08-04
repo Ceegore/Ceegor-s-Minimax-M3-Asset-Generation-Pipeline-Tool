@@ -124,6 +124,49 @@ function resolveDepPackageJson(root, name) {
   return null;
 }
 
+// RR2-M002 (recheck-2): resolve the EXACT installed copy of name@version.
+// The old name-only scan returned the FIRST package.json it found — with a
+// duplicated dependency (two versions installed, one nested) the SBOM
+// recorded the WRONG copy's hash and license for the locked version.
+// package-lock.json's `packages` map is the ground truth: every entry key
+// is the on-disk install path (node_modules/... or nested) and carries the
+// resolved version. The hoisted (shortest-path) copy wins. Returns null
+// when the lockfile is unreadable or has no matching entry.
+function lockfileInstallPaths(root, name, version) {
+  let lock;
+  try {
+    lock = JSON.parse(fs.readFileSync(path.join(root, 'package-lock.json'), 'utf8'));
+  } catch (_) {
+    return null;
+  }
+  const packages = lock.packages || {};
+  const matches = [];
+  for (const [key, entry] of Object.entries(packages)) {
+    if (!key || !entry || entry.version !== version) continue;
+    const idx = key.lastIndexOf('node_modules/');
+    if (idx === -1) continue;
+    if (key.slice(idx + 'node_modules/'.length) !== name) continue;
+    matches.push(key);
+  }
+  if (matches.length === 0) return null;
+  // Hoisted copy first (fewest path segments), deterministic tiebreak.
+  matches.sort((a, b) => (a.split('/').length - b.split('/').length) || a.localeCompare(b));
+  return matches.map((key) => path.join(root, key, 'package.json'));
+}
+
+function resolveDepPackageJsonExact(root, name, version) {
+  const exact = lockfileInstallPaths(root, name, version);
+  if (exact) {
+    for (const candidate of exact) {
+      if (fs.existsSync(candidate)) return candidate;
+    }
+    // Lockfile says it should be here but it is not on disk (stale
+    // install) — fall through to the name-only scan and let the caller
+    // warn; verify-release's completeness gate stays the hard stop.
+  }
+  return resolveDepPackageJson(root, name);
+}
+
 function libraryComponent(root, name, version) {
   const component = {
     type: 'library',
@@ -132,7 +175,9 @@ function libraryComponent(root, name, version) {
     purl: purl(name, version),
     'bom-ref': purl(name, version),
   };
-  const depPkgPath = resolveDepPackageJson(root, name);
+  // RR2-M002: hash/license must come from the copy matching the LOCKED
+  // version, not the first package.json with the right name.
+  const depPkgPath = resolveDepPackageJsonExact(root, name, version);
   if (!depPkgPath) {
     // A locally drifted install can list a package that is not on disk.
     // Warn loudly but still emit the component — verify-release's
@@ -254,4 +299,4 @@ function main() {
 
 if (require.main === module) main();
 
-module.exports = { buildBom, collectDeps, flattenDepTree, runtimeAssetComponents, purl };
+module.exports = { buildBom, collectDeps, flattenDepTree, runtimeAssetComponents, purl, resolveDepPackageJson, resolveDepPackageJsonExact, lockfileInstallPaths };

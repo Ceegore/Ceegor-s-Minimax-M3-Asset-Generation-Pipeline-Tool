@@ -79,10 +79,15 @@ test('RQ-004: gate jobs carry their mandatory commands', () => {
   assert.match(jobBlock('mutation'), /npm run test:mutation/, 'mutation gate');
   assert.match(jobBlock('build-sign-verify'), /npm run assert:identity/, 'identity assertion');
   assert.match(jobBlock('build-sign-verify'), /npm run verify:release/, 'strict verification');
-  // V104-B001/V104-B002/V104-M001: clean-VM acceptance must exercise the
-  // REAL downloaded release, not a rebuilt ASAR or synthetic fixtures.
-  assert.match(jobBlock('clean-vm-acceptance'), /npm run test:packaged:release/, 'real packaged release boot on clean VM');
-  assert.match(jobBlock('clean-vm-acceptance'), /npm run test:acceptance/, 'real-release installer acceptance on clean VM');
+  // RR2-H001 (recheck-2): clean-VM acceptance is NODE-FREE. A pure
+  // PowerShell harness drives the shipped CMD installer, boots the packaged
+  // app over CDP, proves a real offline function with the bundled ffprobe,
+  // and runs a real old->new upgrade plus interrupt/tamper phases. A Node
+  // runtime or dev dependencies on the acceptance VM would invalidate the
+  // "standard machine" proof.
+  assert.match(jobBlock('clean-vm-acceptance'), /clean-vm-acceptance\.ps1/, 'node-free PowerShell acceptance harness');
+  assert.match(jobBlock('clean-vm-acceptance'), /MINIMAX_PREV_RELEASE_DIR/, 'real previous-release upgrade must be wired into the harness');
+  assert.doesNotMatch(jobBlock('clean-vm-acceptance'), /uses:\s*actions\/setup-node/, 'clean-VM acceptance must not install Node');
   assert.doesNotMatch(jobBlock('clean-vm-acceptance'), /npm ci/, 'clean-VM acceptance must not install dev dependencies');
 });
 

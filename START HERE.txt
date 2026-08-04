@@ -6,8 +6,10 @@ Easiest installation (recommended)
 
 1. Double-click "Install MiniMax Asset Tool.cmd".
    - If you downloaded ZIP parts (.part1.zip, .part2.zip, ...), keep the CMD, every
-     part, and the matching .sha256 file together. The installer verifies and
-     extracts them.
+     part, and ALL signature files together in one folder: the .sha256 manifest,
+     the .sha256.minisig signature, minisign.pub, and minisign.exe. The installer
+     verifies the signature and every file, and refuses to start if any file is
+     missing.
    - If this folder is already extracted, just run the CMD here.
 2. Let the installer finish.
 3. Wait for the app to open, enter your MiniMax API key, and choose an output folder.
@@ -32,9 +34,11 @@ If you do not want to install it, keep the extracted folder together and double-
 Windows security message
 ------------------------
 
-This release is not yet code-signed. Windows may therefore say that the publisher is
-unknown or that the app is unrecognized. Download releases only from the official
-Ceegore GitHub repository and compare the download with the published SHA-256 file.
+This release is code-signed: every shipped executable carries an Authenticode
+signature, and the inventory manifest carries a detached Minisign signature that
+the installer verifies before extracting anything. Download releases only from the
+official Ceegore GitHub repository and compare the download with the published
+SHA-256 manifest.
 
 If the checksum matches and Windows shows "Windows protected your PC", choose
 "More info" and then "Run anyway". Never disable Microsoft Defender and never add a

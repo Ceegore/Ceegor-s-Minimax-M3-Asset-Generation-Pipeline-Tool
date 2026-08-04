@@ -10,7 +10,7 @@ Windows batch asset production for MiniMax: turn a GDD or story into image, spee
 
 ## Release title
 
-MiniMax Asset Tool v1.0.4 — Release integrity requalification
+MiniMax Asset Tool v1.0.5 — Release integrity hardening
 
 ## Release body
 
@@ -35,8 +35,8 @@ The app is MIT licensed and designed for commercial workflows without an extra s
 
 #### Easy installation (recommended)
 
-1. Download `Install-MiniMax-Asset-Tool.cmd`, `MiniMaxAssetTool-1.0.4-x64.sha256`, and every `MiniMaxAssetTool-1.0.4-x64.part1.zip`, `.part2.zip`, and later part. Keep them in the same folder.
-2. Double-click `Install-MiniMax-Asset-Tool.cmd`. It verifies every part, extracts the release with built-in Windows tools, installs the app for your account, and creates Desktop and Start menu shortcuts.
+1. Download **every** release file and keep them all in the same folder. The mandatory set is: `Install-MiniMax-Asset-Tool.cmd`, `MiniMaxAssetTool-1.0.5-x64.sha256` (inventory manifest), `MiniMaxAssetTool-1.0.5-x64.sha256.minisig` (detached signature), `minisign.pub` (pinned public key), `minisign.exe` (pinned verifier), and every `MiniMaxAssetTool-1.0.5-x64.part1.zip`, `.part2.zip`, and later part. The installer checks fail-closed and refuse to start if any of these files is missing.
+2. Double-click `Install-MiniMax-Asset-Tool.cmd`. It verifies the manifest signature and every part, extracts the release with built-in Windows tools, installs the app for your account, and creates Desktop and Start menu shortcuts.
 3. When the app opens, add your API key and choose an output folder.
 
 No archive program, administrator access, or separate dependency download is needed. Allow roughly 9 GB of free space during installation. The complete app runtime, FFmpeg, local processing tools, and supported local models are included. An internet connection is only needed for cloud generation requests.
@@ -45,7 +45,7 @@ The installer makes no network requests and does not weaken Windows security set
 
 #### Portable use
 
-Experienced users can extract every part into the same folder with any archiver (the parts merge into one `MiniMaxAssetTool-1.0.4-x64` folder), keep that folder together, and run `MiniMaxAssetTool.exe` directly.
+Experienced users can extract every part into the same folder with any archiver (the parts merge into one `MiniMaxAssetTool-1.0.5-x64` folder), keep that folder together, and run `MiniMaxAssetTool.exe` directly.
 
 ### Requirements
 

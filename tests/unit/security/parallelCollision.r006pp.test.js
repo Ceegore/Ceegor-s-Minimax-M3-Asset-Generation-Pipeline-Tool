@@ -209,19 +209,34 @@ test('R0.1-006.G: concurrent calls to DIFFERENT outputPaths do NOT block each ot
   }
 
   // Three calls to THREE different outputPaths — all should run
-  // in parallel (no serialization).
+  // in parallel (no serialization). RR2-H004: assert parallelism by
+  // counting in-flight overlap, which is deterministic — wall-clock
+  // timing false-failed on loaded runners (measured 151ms for a fully
+  // parallel run against a 120ms bound).
+  let inFlight = 0;
+  let maxInFlight = 0;
+  const overlap = async (label) => {
+    inFlight += 1;
+    maxInFlight = Math.max(maxInFlight, inFlight);
+    await new Promise((r) => setTimeout(r, 50));
+    inFlight -= 1;
+    return label;
+  };
   const start = Date.now();
   const results = await Promise.all([
-    withLock(outA, async () => { await new Promise((r) => setTimeout(r, 50)); return 'A'; }),
-    withLock(outB, async () => { await new Promise((r) => setTimeout(r, 50)); return 'B'; }),
-    withLock(outC, async () => { await new Promise((r) => setTimeout(r, 50)); return 'C'; }),
+    withLock(outA, () => overlap('A')),
+    withLock(outB, () => overlap('B')),
+    withLock(outC, () => overlap('C')),
   ]);
   const elapsed = Date.now() - start;
   assert.deepEqual(results, ['A', 'B', 'C'], 'G: all three calls must complete with their labels');
-  // If they ran in parallel, total time should be ~50ms, not 150ms.
-  // Use a generous 120ms upper bound to avoid flakiness on slow CI.
-  assert.ok(elapsed < 120,
-    'G: three parallel calls to different outputPaths must run in parallel (elapsed < 120ms). Got: ' + elapsed + 'ms');
+  // Serialized execution can never overlap: max in-flight stays 1.
+  assert.ok(maxInFlight >= 2,
+    'G: calls to different outputPaths must run concurrently (max in-flight was ' + maxInFlight + ')');
+  // Generous wall-clock backstop only: a fully serialized chain of three
+  // 50ms sleeps takes >=150ms before any scheduler overhead.
+  assert.ok(elapsed < 4000,
+    'G: three parallel calls to different outputPaths must not serialize catastrophically (elapsed < 4000ms). Got: ' + elapsed + 'ms');
   assert.equal(lockMap.size, 0, 'G: lock map must be empty after all calls');
 });
 
@@ -258,15 +273,23 @@ test('R0.1-006.I: the internal _outputLocks Map is module-private (not exported)
   const mod = require(RESIZE_JS);
   // The module should expose `resize` (the function) + `SUPPORTED_INPUT`
   // + `SUPPORTED_OUTPUT`. Anything else — including `_outputLocks` —
-  // must NOT be exported.
+  // must NOT be exported. The SINGLE underscore-prefixed exception is the
+  // `_outputLockCount` test hook: it exposes only the lock-map SIZE so the
+  // leak test (Int.4) can observe strandage deterministically instead of
+  // inferring it from wall-clock timing (which flakes under coverage
+  // instrumentation). It reveals no mutable internals.
   assert.equal(typeof mod.resize, 'function', 'I: resize must be a function');
   assert.ok(mod.SUPPORTED_INPUT, 'I: SUPPORTED_INPUT must be exported');
   assert.ok(mod.SUPPORTED_OUTPUT, 'I: SUPPORTED_OUTPUT must be exported');
   assert.equal(mod._outputLocks, undefined,
     'I: _outputLocks must NOT be exported (module-private; consumers must not reach into it)');
+  assert.equal(typeof mod._outputLockCount, 'function',
+    'I: the documented _outputLockCount test hook must exist');
+  assert.equal(mod._outputLockCount(), 0,
+    'I: the lock map must be empty in a quiescent module');
   // The function's own enumerable keys (excluding prototype) must be
-  // exactly the documented exports.
+  // exactly the documented exports + the one documented test hook.
   const own = Object.keys(mod).sort();
-  assert.deepEqual(own, ['SUPPORTED_INPUT', 'SUPPORTED_OUTPUT', 'resize'],
-    'I: the documented export surface must be exactly { resize, SUPPORTED_INPUT, SUPPORTED_OUTPUT }');
+  assert.deepEqual(own, ['SUPPORTED_INPUT', 'SUPPORTED_OUTPUT', '_outputLockCount', 'resize'],
+    'I: the documented export surface must be exactly { resize, SUPPORTED_INPUT, SUPPORTED_OUTPUT, _outputLockCount }');
 });

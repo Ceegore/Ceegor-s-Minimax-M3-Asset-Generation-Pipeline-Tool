@@ -324,4 +324,10 @@ async function resize(srcPath, opts) {
   };
 }
 
-module.exports = { resize, SUPPORTED_INPUT, SUPPORTED_OUTPUT };
+// R0.1-006.Int.4 test hook (underscore-prefixed, NOT consumer API): lets the
+// lock-leak test observe the module-private lock map deterministically.
+// Wall-clock timing proxies false-fail under coverage instrumentation and
+// cannot detect the actual defect (a leftover, already-resolved map entry).
+function _outputLockCount() { return _outputLocks.size; }
+
+module.exports = { resize, SUPPORTED_INPUT, SUPPORTED_OUTPUT, _outputLockCount };

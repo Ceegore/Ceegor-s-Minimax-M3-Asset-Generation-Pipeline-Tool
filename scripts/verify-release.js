@@ -300,6 +300,30 @@ function evaluate(root, opts = {}) {
         }
       }
     }
+    // RR2-H007 (recheck-2): the gate must cover EVERY PE that ships —
+    // including output-ROOT binaries like the bundled minisign.exe, which
+    // the old check missed (only the app exe + win-unpacked were scanned).
+    try {
+      for (const entry of fs.readdirSync(paths.output, { withFileTypes: true })) {
+        if (!entry.isFile() || !/\.(exe|dll|node)$/i.test(entry.name)) continue;
+        const bin = path.join(paths.output, entry.name);
+        const sig = signatureFor(bin);
+        if (sig.status !== 'Valid') {
+          errors.push(`Authenticode check failed for output-root binary ${entry.name}: ${sig.status}`);
+        }
+      }
+    } catch (_) { /* output dir missing: already reported via exe checks */ }
+    // RR2-H007: when a staged publication exists, every PE inside it must
+    // be signed too — that tree is exactly what gets uploaded.
+    const publicationDir = path.join(paths.output, 'publication');
+    if (fs.existsSync(publicationDir)) {
+      for (const bin of findBinariesRecursive(publicationDir)) {
+        const sig = signatureFor(bin);
+        if (sig.status !== 'Valid') {
+          errors.push(`Authenticode check failed for publication binary ${path.relative(publicationDir, bin)}: ${sig.status}`);
+        }
+      }
+    }
   }
   // AUD-015 fix: Minisign manifest signature verification.
   if (opts.requireManifestSignature) {
@@ -480,10 +504,10 @@ function verifySbomCompleteness(root, sbom) {
   if (!lockPackages) {
     errors.push('package-lock.json has no "packages" map (lockfileVersion < 3) — cannot verify SBOM completeness.');
   } else {
-    const byNameVersion = new Set(
+    const byNameVersion = new Map(
       (sbom.components || [])
         .filter((c) => c && c.type === 'library')
-        .map((c) => `${c.name}@${c.version}`)
+        .map((c) => [`${c.name}@${c.version}`, c])
     );
     const missing = [];
     for (const [key, entry] of Object.entries(lockPackages)) {
@@ -499,7 +523,20 @@ function verifySbomCompleteness(root, sbom) {
       const name = key.slice(key.lastIndexOf('node_modules/') + 'node_modules/'.length);
       const version = entry && entry.version;
       if (!version) continue;
-      if (!byNameVersion.has(`${name}@${version}`)) missing.push(`${name}@${version}`);
+      const comp = byNameVersion.get(`${name}@${version}`);
+      if (!comp) { missing.push(`${name}@${version}`); continue; }
+      // RR2-M002 (recheck-2): the component's package.json hash must match
+      // the copy the lockfile actually installs at name@version — a SBOM
+      // that hashed a DIFFERENT duplicate-version copy is rejected.
+      const compHash = Array.isArray(comp.hashes) && comp.hashes.find((h) => h && h.alg === 'SHA-256');
+      if (compHash) {
+        const installed = path.join(root, key, 'package.json');
+        const installedInfo = infoFor(installed);
+        if (installedInfo.exists
+          && installedInfo.sha256.toLowerCase() !== String(compHash.content).toLowerCase()) {
+          errors.push(`SBOM hash for ${name}@${version} does not match the lockfile-resolved install at ${key} (sbom ${compHash.content}, disk ${installedInfo.sha256}).`);
+        }
+      }
     }
     if (missing.length > 0) {
       const sample = missing.slice(0, 10).join(', ');

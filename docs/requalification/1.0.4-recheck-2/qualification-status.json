@@ -1,0 +1,23 @@
+{
+  "decision": "FAIL",
+  "repository": "Ceegore/Ceegor-s-Minimax-M3-Asset-Generation-Pipeline-Tool",
+  "head": "d2aba2812b4e2e8d69013d72de8af3f0db70c254",
+  "packageVersion": "1.0.4",
+  "tag": "v1.0.4",
+  "tagTarget": "9606c767bc2cb927f0adce139eb094571eee09a2",
+  "headTagged": false,
+  "counts": {
+    "blocker": 3,
+    "critical": 3,
+    "high": 7,
+    "medium": 3,
+    "low": 0
+  },
+  "localExecution": {
+    "checkout": "failed",
+    "reason": "Could not resolve host github.com",
+    "npmTests": "not run",
+    "windowsAcceptance": "not run"
+  },
+  "releaseReady": false
+}

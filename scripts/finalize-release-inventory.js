@@ -44,6 +44,47 @@ function sha256File(fp) {
   return h.digest('hex');
 }
 
+// RR2-C001 (recheck-2): break the installer's CIRCULAR trust anchor. The
+// shipped installer used to verify the release signature with the
+// minisign.pub sitting in the SAME untrusted download folder as the
+// archive it vouches for — an attacker swapping the archive swaps the key
+// too. finalize stamps the PINNED public key (the same independent anchor
+// CI signs with) and the shipped verifier's SHA-256 INTO the published
+// installer CMD between the RR2-C001 markers. The installer verifies
+// against the embedded key and treats the neighbouring minisign.pub as a
+// consistency-checked payload only. Runs BEFORE the manifest rewrite so
+// the signed inventory hashes cover the stamped bytes.
+function stampInstallerTrustAnchor(paths, pubSrc) {
+  const installer = path.join(paths.output, 'Install-MiniMax-Asset-Tool.cmd');
+  if (!fs.existsSync(installer)) {
+    fail(`Published installer not found: ${installer} — cannot embed the RR2-C001 trust anchor.`);
+  }
+  const BEGIN = '# RR2-C001-BEGIN-EMBEDDED-MINISIGN-PUBKEY';
+  const END = '# RR2-C001-END-EMBEDDED-MINISIGN-PUBKEY';
+  let content = fs.readFileSync(installer, 'utf8');
+  if (content.includes("$embeddedKeyLines+='")) {
+    log('Installer trust anchor already embedded (RR2-C001) — leaving it untouched.');
+    return;
+  }
+  const marker = BEGIN + '; ' + END;
+  if (!content.includes(marker)) {
+    fail('Published installer is missing the RR2-C001 embedded-key markers — refusing to publish an installer without a trust anchor.');
+  }
+  const keyLines = fs.readFileSync(pubSrc, 'utf8').split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
+  if (keyLines.length === 0) fail(`Pinned public key ${pubSrc} is empty — cannot embed the RR2-C001 trust anchor.`);
+  const embed = keyLines.map((l) => `$embeddedKeyLines+='${l.replace(/'/g, "''")}';`).join(' ');
+  content = content.replace(marker, BEGIN + '; ' + embed + ' ' + END);
+  // Pin the shipped verifier binary when it is part of this release.
+  const toolDest = path.join(paths.output, 'minisign.exe');
+  if (fs.existsSync(toolDest)) {
+    content = content.replace('RR2-C001-VERIFIER-SHA256', sha256File(toolDest));
+  } else {
+    log('WARNING: no bundled minisign.exe — the installer verifier SHA-256 pin stays inactive (RR2-C001).');
+  }
+  fs.writeFileSync(installer, content, 'utf8');
+  log('Embedded RR2-C001 trust anchor into the published installer (' + keyLines.length + ' key line(s)).');
+}
+
 function main() {
   const paths = releasePaths(ROOT);
 
@@ -78,6 +119,9 @@ function main() {
     log('MINISIGN_TOOL_PATH not set — the pinned verifier is NOT bundled (end users need minisign on PATH).');
   }
 
+  // ---- RR2-C001: embed the trust anchor into the published installer. ----
+  stampInstallerTrustAnchor(paths, pubSrc);
+
   // ---- Rewrite the outer manifest over the COMPLETE inventory. ----
   const entries = outerManifestEntries(paths);
   if (entries.length < 4) {
@@ -93,4 +137,6 @@ function main() {
   for (const rel of entries) log('  ' + rel);
 }
 
-main();
+if (require.main === module) main();
+
+module.exports = { main, stampInstallerTrustAnchor };

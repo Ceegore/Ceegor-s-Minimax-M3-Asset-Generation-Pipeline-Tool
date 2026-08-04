@@ -1,85 +1,234 @@
 {
-  "noiseTolerancePoints": 5,
+  "$schema-note": "RR2-B003 narrow waiver matrix. Every entry is per-metric (an unlisted metric still must be 100%), time-boxed, owned, ticket-tracked and backed by substituteEvidence. Floors are the EXACT enforced floors, already adjusted for the documented child-process noise band of that module (Node built-in coverage varies ~+/-3 points between identical runs). The 6 files de-waived by RR2-B003 (cpuGuard.js, mmxCredentialBridge.js, deepRedactor.js, mmxResultRedactor.js, stateCorruptBackup.js, windowsNamePolicy.js) are deliberately ABSENT: the 100/100/100 rule governs them with no tolerance.",
+  "version": 2,
+  "updated": "2026-08-03",
+  "policy": "No blanket tolerance. A waiver only lowers one metric of one file to one exact floor, scoped to the listed uncovered lines/branches. Expired or malformed waivers fail the gate.",
   "files": {
-    "providersStore.js": {
-      "line": 78, "branch": 78, "function": 81,
-      "reason": "Encrypted credential repository: OS keychain fallback paths and legacy-migration branches are not unit-reachable.",
-      "remediation": "Extract the fallback/migration branches behind an injectable keychain and cover them."
-    },
-    "providersPayloadSchema.js": {
-      "line": 96, "branch": 95, "function": 100,
-      "reason": "Defensive type-coercion branches for hostile payloads are partially unreached.",
-      "remediation": "Add hostile-payload cases for the remaining coercion branches."
-    },
-    "mmxApiKeySync.js": {
-      "line": 90, "branch": 58, "function": 100,
-      "reason": "Sync edge cases (concurrent config rewrites, absent key file) branch widely; several OS-level branches are not unit-reachable.",
-      "remediation": "Inject the config IO to reach the remaining branches."
-    },
-    "mmxCredentialBridge.js": {
-      "line": 100, "branch": 60, "function": 100,
-      "reason": "Bridge guards for malformed credential payloads are only partially exercised.",
-      "remediation": "Cover the remaining malformed-payload guard branches."
-    },
-    "deepRedactor.js": {
-      "line": 100, "branch": 96, "function": 100,
-      "reason": "One redaction pattern branch remains unreached.",
-      "remediation": "Add the missing pattern fixture."
-    },
-    "mmxResultRedactor.js": {
-      "line": 100, "branch": 71, "function": 100,
-      "reason": "Redactor handles many output shapes; some non-redaction branches unreached.",
-      "remediation": "Add shape fixtures for the unreached branches."
-    },
-    "stateCorruptBackup.js": {
-      "line": 100, "branch": 66, "function": 100,
-      "reason": "Backup rotation edge branches (disk-full, locked file) are not unit-reachable.",
-      "remediation": "Inject fs to simulate rotation failures."
-    },
-    "stateSanitizers.js": {
-      "line": 99, "branch": 92, "function": 100,
-      "reason": "Sanitizer edge branches for exotic state shapes remain.",
-      "remediation": "Add fixtures for the remaining exotic shapes."
-    },
-    "state.js": {
-      "line": 98, "branch": 96, "function": 100,
-      "reason": "State-store recovery branches for corrupt-then-recover sequences partially unreached.",
-      "remediation": "Extend the corruption-recovery suite."
-    },
-    "windowsNamePolicy.js": {
-      "line": 85, "branch": 70, "function": 100,
-      "reason": "Reserved-device-name and long-path normalization branches partially unreached (two modules share this filename; waiver applies to both).",
-      "remediation": "Add reserved-name and long-path fixtures."
-    },
-    "pathUtils.js": {
-      "line": 98, "branch": 80, "function": 100,
-      "reason": "Cross-drive and UNC-path branches partially unreached.",
-      "remediation": "Add UNC/drive-relative fixtures."
-    },
     "assetPaths.js": {
-      "line": 96, "branch": 80, "function": 100,
-      "reason": "Packaged-vs-dev resolution branches partially unreached in unit scope.",
-      "remediation": "Cover the remaining resolution branches with injected app paths."
-    },
-    "config.js": {
-      "line": 94, "branch": 87, "function": 100,
-      "reason": "Config discovery fallback chain partially unreached.",
-      "remediation": "Cover the remaining discovery fallbacks."
+      "owner": "Ceegor",
+      "ticket": "RR2-B003",
+      "expiry": "2026-11-30",
+      "reason": "Line and function coverage are 100%. The three uncovered branches are lazy-cache guard arms in the assets-root resolution that only fire on first-call races; exercising them unit-wise would assert Node fs timing, not product logic.",
+      "substituteEvidence": "Covered end-to-end by scripts/e2e real-release boot (every run resolves the assets root through these guards) and the installer acceptance suite.",
+      "remediation": "Extract the cache-guard decision into a pure function and cover both arms in a dedicated unit test before expiry.",
+      "waivers": [
+        {
+          "metric": "branch",
+          "floor": 85,
+          "uncoveredLines": [],
+          "uncoveredBranches": ["23:4.0", "24:5.0", "26:6.0"]
+        }
+      ]
     },
     "batches.js": {
-      "line": 94, "branch": 79, "function": 100,
-      "reason": "Batch partition edge branches partially unreached.",
-      "remediation": "Add partition edge fixtures."
+      "owner": "Ceegor",
+      "ticket": "RR2-B003",
+      "expiry": "2026-11-30",
+      "reason": "Uncovered lines are child-process spawn failure and cancellation-race arms (47, 55, 82-85, 144-146) that require killing live ffmpeg/mm processes mid-batch; unit-forcing them would assert scheduler timing instead of logic.",
+      "substituteEvidence": "Covered by the e2e batch pipeline runs with the fake MMX and by the flakiness gate, which repeatedly exercises cancellation under concurrency.",
+      "remediation": "Introduce an injectable process-factory so spawn-failure and cancel-race arms become deterministic unit tests before expiry.",
+      "waivers": [
+        {
+          "metric": "line",
+          "floor": 90,
+          "uncoveredLines": [47, 55, 82, 83, 84, 85, 144, 145, 146],
+          "uncoveredBranches": []
+        },
+        {
+          "metric": "branch",
+          "floor": 75,
+          "uncoveredLines": [],
+          "uncoveredBranches": ["45:9.0", "46:10.0", "46:11.0", "46:12.0", "54:14.0", "81:18.0", "86:20.0", "86:21.0", "143:42.0"]
+        }
+      ]
+    },
+    "config.js": {
+      "owner": "Ceegor",
+      "ticket": "RR2-B003",
+      "expiry": "2026-11-30",
+      "reason": "Uncovered lines 180-190/202-205 are legacy config-migration arms that only trigger on pre-1.0 config files shipped with old installs; the pure parse/save paths are fully covered.",
+      "substituteEvidence": "Migration arms are exercised by the real old->new upgrade acceptance scenario (RR2-H003) which installs a previous release into the same target directory.",
+      "remediation": "Add fixture-driven unit tests with captured pre-1.0 config snapshots before expiry.",
+      "waivers": [
+        {
+          "metric": "line",
+          "floor": 90,
+          "uncoveredLines": [180, 181, 182, 183, 184, 185, 186, 187, 188, 189, 190, 202, 203, 204, 205],
+          "uncoveredBranches": []
+        },
+        {
+          "metric": "branch",
+          "floor": 85,
+          "uncoveredLines": [],
+          "uncoveredBranches": ["13:2.0", "14:3.0", "18:4.0", "19:5.0", "45:48.0", "46:49.0", "55:50.0", "179:76.0", "201:78.0", "228:84.0"]
+        }
+      ]
     },
     "jobRegistry.js": {
-      "line": 98, "branch": 92, "function": 83,
-      "reason": "Job lifecycle teardown functions not all invoked by unit tests.",
-      "remediation": "Invoke the remaining lifecycle functions in the registry suite."
+      "owner": "Ceegor",
+      "ticket": "RR2-B003",
+      "expiry": "2026-11-30",
+      "reason": "Uncovered lines 209-211 are the registry shutdown arm that fires only when the main process is killed mid-job; the one uncovered function is its private cleanup hook. All other metrics are 100%.",
+      "substituteEvidence": "Covered by the deterministic interrupt/rollback acceptance scenario (RR2-H003 MINIMAX_INSTALL_FAULT_BEFORE_SWAP) and the endurance/resource suites which kill jobs mid-flight.",
+      "remediation": "Expose the shutdown hook through a test seam and cover it deterministically before expiry.",
+      "waivers": [
+        {
+          "metric": "line",
+          "floor": 95,
+          "uncoveredLines": [209, 210, 211],
+          "uncoveredBranches": []
+        },
+        {
+          "metric": "branch",
+          "floor": 90,
+          "uncoveredLines": [],
+          "uncoveredBranches": ["67:9.0", "68:10.0", "207:37.0"]
+        },
+        {
+          "metric": "function",
+          "floor": 80,
+          "uncoveredLines": [209, 210, 211],
+          "uncoveredBranches": []
+        }
+      ]
     },
-    "cpuGuard.js": {
-      "line": 100, "branch": 75, "function": 100,
-      "reason": "Throttle branches for high-core hosts unreached on small runners.",
-      "remediation": "Inject core counts to reach the remaining branches."
+    "mmxApiKeySync.js": {
+      "owner": "Ceegor",
+      "ticket": "RR2-B003",
+      "expiry": "2026-11-30",
+      "reason": "Uncovered lines are live-MMX credential round-trip and process-kill arms (32-40, 69-70, 137-141) that require a real mmx binary and API credential; the redaction and validation logic is fully covered.",
+      "substituteEvidence": "Covered by the contract test suite with MMX_CONTRACT_OPTIONAL and the e2e-real pipeline run that performs a real credential sync against the mmx CLI.",
+      "remediation": "Fake the mmx child process with a scripted responder so the sync round-trip becomes a deterministic unit test before expiry.",
+      "waivers": [
+        {
+          "metric": "line",
+          "floor": 85,
+          "uncoveredLines": [32, 33, 34, 35, 36, 37, 38, 39, 40, 69, 70, 137, 138, 139, 140, 141],
+          "uncoveredBranches": []
+        },
+        {
+          "metric": "branch",
+          "floor": 55,
+          "uncoveredLines": [],
+          "uncoveredBranches": ["19:2.0", "20:3.0", "24:10.0", "27:11.0", "31:12.0", "41:13.0", "43:14.0", "45:15.0", "52:16.0", "55:17.0", "59:18.0", "66:19.0", "68:20.0", "96:35.0", "134:37.0", "136:38.0", "151:39.0"]
+        }
+      ]
+    },
+    "pathUtils.js": {
+      "owner": "Ceegor",
+      "ticket": "RR2-B003",
+      "expiry": "2026-11-30",
+      "reason": "Uncovered lines 32-33 are the Windows reserved-device rejection arm for inputs that Node's own fs layer refuses to create; every other path-traversal and normalization arm is fully covered.",
+      "substituteEvidence": "Covered by the security test suite (tests/security) and the path-grant contract tests which exercise hostile paths end-to-end.",
+      "remediation": "Add the remaining reserved-device fixtures (NUL variants, trailing-space forms) as pure unit inputs before expiry.",
+      "waivers": [
+        {
+          "metric": "line",
+          "floor": 95,
+          "uncoveredLines": [32, 33],
+          "uncoveredBranches": []
+        },
+        {
+          "metric": "branch",
+          "floor": 75,
+          "uncoveredLines": [],
+          "uncoveredBranches": ["31:7.0", "42:9.0", "65:12.0", "74:19.0", "86:21.0", "105:30.0"]
+        }
+      ]
+    },
+    "providersPayloadSchema.js": {
+      "owner": "Ceegor",
+      "ticket": "RR2-B003",
+      "expiry": "2026-11-30",
+      "reason": "Uncovered lines 101-102/129-130 are defensive schema-violation arms that can only be reached by bypassing the IPC binding layer the RR2-C003 fix now enforces server-side.",
+      "substituteEvidence": "Covered by providersKindBinding.rr2 tests plus the provider IPC contract suite which attacks every kind/id/origin combination through the real registrar.",
+      "remediation": "Reach the defensive arms through a direct schema call in a unit test before expiry.",
+      "waivers": [
+        {
+          "metric": "line",
+          "floor": 95,
+          "uncoveredLines": [101, 102, 129, 130],
+          "uncoveredBranches": []
+        },
+        {
+          "metric": "branch",
+          "floor": 93,
+          "uncoveredLines": [],
+          "uncoveredBranches": ["100:54.0", "128:74.0", "150:80.0"]
+        }
+      ]
+    },
+    "providersStore.js": {
+      "owner": "Ceegor",
+      "ticket": "RR2-B003",
+      "expiry": "2026-11-30",
+      "reason": "Uncovered regions are atomic-replace crash arms (135-161), concurrent-writer recovery (211-212, 247-252) and legacy-store migration from corrupt v0 formats (33, 44, 259-279) that require racing live file handles; the RR2-C003 kind-binding logic itself is 100% covered.",
+      "substituteEvidence": "Covered by providersKindBinding.rr2, the state-corruption recovery suite (stateCorruptBackup is 100/100/100) and the e2e provider round-trip runs.",
+      "remediation": "Introduce an injectable fs layer to deterministically simulate mid-write crashes and concurrent writers before expiry.",
+      "waivers": [
+        {
+          "metric": "line",
+          "floor": 75,
+          "uncoveredLines": [33, 44, 135, 136, 137, 138, 139, 140, 141, 142, 143, 144, 145, 146, 147, 148, 149, 150, 151, 152, 153, 154, 155, 156, 157, 158, 159, 160, 161, 211, 212, 247, 248, 249, 250, 251, 252, 259, 260, 261, 262, 263, 264, 265, 266, 267, 268, 269, 270, 271, 272, 273, 274, 275, 276, 277, 278, 279],
+          "uncoveredBranches": []
+        },
+        {
+          "metric": "branch",
+          "floor": 72,
+          "uncoveredLines": [],
+          "uncoveredBranches": ["70:9.0", "72:10.0", "133:19.0", "134:20.0", "178:36.0", "200:38.0", "210:40.0", "210:41.0", "221:42.0", "235:51.0", "243:52.0", "246:53.0", "246:54.0"]
+        },
+        {
+          "metric": "function",
+          "floor": 78,
+          "uncoveredLines": [259, 260, 261, 262, 263, 264, 265, 266, 267, 268, 269, 270, 271, 272, 273, 274, 275, 276, 277, 278, 279],
+          "uncoveredBranches": []
+        }
+      ]
+    },
+    "state.js": {
+      "owner": "Ceegor",
+      "ticket": "RR2-B003",
+      "expiry": "2026-11-30",
+      "reason": "Uncovered lines 23-24/453-455 are process-termination flush arms that only fire when the app is killed during a state write; the corruption-backup path (stateCorruptBackup.js) it delegates to is 100/100/100.",
+      "substituteEvidence": "Covered by the state-corruption recovery suite and the deterministic interrupt acceptance scenario (RR2-H003) which kills processes during writes.",
+      "remediation": "Expose the flush hook through a test seam and cover the kill-during-write arms before expiry.",
+      "waivers": [
+        {
+          "metric": "line",
+          "floor": 95,
+          "uncoveredLines": [23, 24, 453, 454, 455],
+          "uncoveredBranches": []
+        },
+        {
+          "metric": "branch",
+          "floor": 93,
+          "uncoveredLines": [],
+          "uncoveredBranches": ["22:6.0", "62:38.0", "373:96.0", "452:99.0", "154:105.0"]
+        }
+      ]
+    },
+    "stateSanitizers.js": {
+      "owner": "Ceegor",
+      "ticket": "RR2-B003",
+      "expiry": "2026-11-30",
+      "reason": "All logic paths are covered except a single defensive default arm at line 211 that is unreachable through every sanctioned caller; the remaining uncovered branches are equivalent defensive defaults.",
+      "substituteEvidence": "Covered by the deep-redaction suite (deepRedactor.js is 100/100/100) and the state round-trip contract tests which pass hostile payloads through the sanitizers.",
+      "remediation": "Reach the defensive default via a direct type-violating call in a unit test before expiry.",
+      "waivers": [
+        {
+          "metric": "line",
+          "floor": 97,
+          "uncoveredLines": [211],
+          "uncoveredBranches": []
+        },
+        {
+          "metric": "branch",
+          "floor": 90,
+          "uncoveredLines": [],
+          "uncoveredBranches": ["40:40.0", "162:125.0", "164:126.0", "210:127.0", "233:157.0", "235:161.0", "289:187.0", "290:189.0", "357:202.0", "363:203.0", "366:204.0", "373:205.0", "380:206.0", "381:207.0", "387:208.0", "391:209.0", "392:210.0"]
+        }
+      ]
     }
   }
 }

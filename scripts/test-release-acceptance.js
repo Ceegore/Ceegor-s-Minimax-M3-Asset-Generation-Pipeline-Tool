@@ -12,13 +12,18 @@
 //   1. Fresh bootstrap install (verify signature + checksums, extract,
 //      stage, swap, shortcuts) — must succeed on the signed release.
 //   2. Boot the INSTALLED executable and run the functional smoke.
-//   3. Upgrade over the existing installation — clean swap, no stale files.
-//   4. Interrupt mid-install — the install target must never end up
-//      partial (staged swap is atomic).
+//   3. Upgrade: a REAL old->new upgrade when MINIMAX_PREV_RELEASE_DIR
+//      points at a complete previous signed release (stale-file removal
+//      included); otherwise a same-version reinstall (RR2-H003).
+//   4. Deterministic interrupt: the installer's MINIMAX_INSTALL_FAULT_
+//      BEFORE_SWAP hook aborts exactly between staging-verify and swap;
+//      the existing installation must stay byte-identical (RR2-H003).
 //   5. Tamper rejection — a modified inventoried file must fail closed.
 //   6. Unsigned rejection — removing the .minisig must fail closed when
 //      the dev-harness escape hatch is absent.
 //
+// RR2-H002: archive discovery reuses releaseArtifacts.archiveFiles(), so
+// BOTH the unsplit <base>.zip and the .partN.zip forms are accepted.
 // Node built-ins only (no npm ci needed on the clean-VM runner).
 // ============================================================================
 
@@ -28,8 +33,9 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const crypto = require('crypto');
-const { spawn, spawnSync } = require('child_process');
+const { spawnSync } = require('child_process');
 const { bootAndProbe } = require('./e2e/real-release-boot');
+const { archiveFiles, releasePaths, validateArchiveSequence } = require('./releaseArtifacts');
 
 const ROOT = path.resolve(__dirname, '..');
 const DIST = path.resolve(process.argv[2] || path.join(ROOT, 'dist-out'));
@@ -65,10 +71,64 @@ function runInstaller(cwd, extraEnv, timeoutMs = 45 * 60 * 1000) {
   });
 }
 
-function killTree(child) {
-  try {
-    spawnSync('taskkill', ['/pid', String(child.pid), '/T', '/F'], { windowsHide: true, stdio: 'ignore' });
-  } catch (_) {}
+// RR2-H002: shared discovery for BOTH release forms (unsplit .zip wins,
+// otherwise the .partN.zip sequence), in any directory.
+function discoverRelease(dir, baseNameHint) {
+  if (!fs.existsSync(dir)) return { ok: false, error: `directory not found: ${dir}` };
+  let baseName = baseNameHint;
+  if (!baseName) {
+    // Unknown version (e.g. a previous release dir): derive from the files.
+    const unsplit = fs.readdirSync(dir).filter((f) => /^MiniMaxAssetTool-.+-x64\.zip$/.test(f)).sort();
+    const part1 = fs.readdirSync(dir).filter((f) => /^MiniMaxAssetTool-.+-x64\.part1\.zip$/.test(f)).sort();
+    if (unsplit.length) baseName = unsplit[0].replace(/\.zip$/, '');
+    else if (part1.length) baseName = part1[0].replace(/\.part1\.zip$/, '');
+    else return { ok: false, error: `no release archive found in ${dir}` };
+  }
+  const paths = { output: dir, baseName, archive: path.join(dir, `${baseName}.zip`) };
+  const archives = archiveFiles(paths);
+  if (archives.length === 0) return { ok: false, error: `no release archive found in ${dir}` };
+  const seq = validateArchiveSequence(paths);
+  if (!seq.ok) return { ok: false, error: `archive sequence invalid in ${dir}: ${seq.error}` };
+  const required = [
+    path.join(dir, `${baseName}.sha256`),
+    path.join(dir, `${baseName}.sha256.minisig`),
+    path.join(dir, 'minisign.pub'),
+    path.join(dir, 'minisign.exe'),
+    path.join(dir, 'Install-MiniMax-Asset-Tool.cmd'),
+  ];
+  const missing = required.filter((f) => !fs.existsSync(f)).map((f) => path.basename(f));
+  if (missing.length) return { ok: false, error: `release in ${dir} is incomplete: ${missing.join(', ')}` };
+  return { ok: true, dir, baseName, archives, paths };
+}
+
+// RR2-H003: full-tree fingerprint (relative path -> sha256) for the
+// byte-identical rollback assertion.
+function snapshotTree(dir) {
+  const out = {};
+  const walk = (d, rel) => {
+    for (const e of fs.readdirSync(d, { withFileTypes: true })) {
+      const r = rel ? `${rel}/${e.name}` : e.name;
+      const abs = path.join(d, e.name);
+      if (e.isDirectory()) walk(abs, r);
+      else if (e.isFile()) out[r] = sha256File(abs);
+    }
+  };
+  walk(dir, '');
+  return out;
+}
+
+// Copy a complete release (archives + manifest + sig + key + verifier +
+// installer) into a download directory exactly as an end user has it.
+function materializeDownload(rel, downloadDir) {
+  fs.mkdirSync(downloadDir, { recursive: true });
+  for (const a of rel.archives) linkOrCopy(a, path.join(downloadDir, path.basename(a)));
+  for (const f of [
+    path.join(rel.dir, `${rel.baseName}.sha256`),
+    path.join(rel.dir, `${rel.baseName}.sha256.minisig`),
+    path.join(rel.dir, 'minisign.pub'),
+    path.join(rel.dir, 'minisign.exe'),
+  ]) linkOrCopy(f, path.join(downloadDir, path.basename(f)));
+  fs.copyFileSync(path.join(rel.dir, 'Install-MiniMax-Asset-Tool.cmd'), path.join(downloadDir, 'Install-MiniMax-Asset-Tool.cmd'));
 }
 
 async function main() {
@@ -78,22 +138,19 @@ async function main() {
   }
 
   // ---- Locate the real release artifacts (fail closed when absent). ----
-  const partNames = fs.existsSync(DIST)
-    ? fs.readdirSync(DIST).filter((f) => /^MiniMaxAssetTool-.+\.part\d+\.zip$/.test(f)).sort()
-    : [];
-  if (partNames.length === 0) {
-    fail(`no real release archives found in ${DIST} — acceptance must install the exact downloaded release, not a fixture`);
+  // RR2-H002: shared releaseArtifacts discovery — unsplit .zip AND parts.
+  const rp = releasePaths(ROOT);
+  const rel = discoverRelease(DIST, rp.baseName);
+  if (!rel.ok) {
+    fail(`${rel.error} — acceptance must install the exact downloaded release, not a fixture`);
   }
-  const baseName = partNames[0].replace(/\.part\d+\.zip$/, '');
+  const baseName = rel.baseName;
+  const partNames = rel.archives.map((f) => path.basename(f));
   const manifest = path.join(DIST, `${baseName}.sha256`);
   const minisig = path.join(DIST, `${baseName}.sha256.minisig`);
   const pubKey = path.join(DIST, 'minisign.pub');
   const verifier = path.join(DIST, 'minisign.exe');
   const installerCmd = path.join(DIST, 'Install-MiniMax-Asset-Tool.cmd');
-  const missing = [manifest, minisig, pubKey, verifier, installerCmd].filter((f) => !fs.existsSync(f));
-  if (missing.length) {
-    fail(`real release is incomplete for signed acceptance: ${missing.map((f) => path.basename(f)).join(', ')}`);
-  }
 
   const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'minimax-acceptance-'));
   const downloadDir = path.join(temp, 'download');
@@ -110,13 +167,7 @@ async function main() {
   };
 
   try {
-    fs.mkdirSync(downloadDir, { recursive: true });
-    for (const name of partNames) linkOrCopy(path.join(DIST, name), path.join(downloadDir, name));
-    linkOrCopy(manifest, path.join(downloadDir, path.basename(manifest)));
-    linkOrCopy(minisig, path.join(downloadDir, path.basename(minisig)));
-    linkOrCopy(pubKey, path.join(downloadDir, 'minisign.pub'));
-    linkOrCopy(verifier, path.join(downloadDir, 'minisign.exe'));
-    fs.copyFileSync(installerCmd, path.join(downloadDir, 'Install-MiniMax-Asset-Tool.cmd'));
+    materializeDownload(rel, downloadDir);
 
     // ---- 1. Fresh signed bootstrap install of the real release. ----
     log(`Installing the real release (${partNames.length} parts) via signed bootstrap...`);
@@ -141,62 +192,104 @@ async function main() {
     await bootAndProbe(installedExe);
     log('PASS: installed release boots and passes the functional smoke');
 
-    // ---- 3. Upgrade over the existing installation. ----
-    const exeBefore = sha256File(installedExe);
-    const upgrade = runInstaller(downloadDir, installEnv);
-    if (upgrade.status !== 0) {
-      fail(`upgrade over the existing installation failed: ${((upgrade.stderr || upgrade.stdout) || '').toString().slice(-2000)}`);
-    }
-    if (!fs.existsSync(installedExe) || sha256File(installedExe) !== exeBefore) {
-      fail('upgrade did not leave the identical release executable in place');
-    }
-    if (!fs.existsSync(installedManifest)) fail('upgrade dropped the inner manifest');
-    log('PASS: upgrade over an existing installation swaps cleanly');
-
-    // ---- 4. Interrupted install must never leave a partial install. ----
-    const interruptTarget = path.join(temp, 'interrupted app');
-    const child = spawn('cmd.exe', ['/d', '/c', 'Install-MiniMax-Asset-Tool.cmd'], {
-      cwd: downloadDir,
-      stdio: 'ignore',
-      windowsHide: true,
-      env: {
-        ...process.env,
-        ...installEnv,
-        MINIMAX_INSTALL_DIR: interruptTarget,
-      },
-    });
-    await new Promise((r) => setTimeout(r, 10000));
-    killTree(child);
-    await new Promise((r) => setTimeout(r, 2000));
-    if (fs.existsSync(interruptTarget)) {
-      // If the swap already finished, the tree must be COMPLETE — a
-      // partially populated install directory is the failure shape.
-      const hasExe = fs.existsSync(path.join(interruptTarget, 'MiniMaxAssetTool.exe'));
-      const hasManifest = fs.existsSync(path.join(interruptTarget, 'FILES.sha256'));
-      if (!hasExe || !hasManifest) {
-        fail('interrupted install left a PARTIAL installation behind (atomic swap violated)');
+    // ---- 3. Upgrade: real old->new when a previous release is given. ----
+    // RR2-H003: MINIMAX_PREV_RELEASE_DIR points at a COMPLETE previous
+    // signed release. The scenario then is: install OLD -> plant a stale
+    // file -> upgrade to NEW -> the whole tree is replaced (stale file
+    // gone, new exe + new inner manifest in place). Without a previous
+    // release the same-version reinstall still proves the swap mechanics.
+    const prevDirEnv = process.env.MINIMAX_PREV_RELEASE_DIR;
+    const upgradeTarget = path.join(temp, 'upgrade app');
+    if (prevDirEnv) {
+      const prevRel = discoverRelease(path.resolve(prevDirEnv));
+      if (!prevRel.ok) fail(`MINIMAX_PREV_RELEASE_DIR is set but unusable: ${prevRel.error}`);
+      if (prevRel.baseName === baseName) {
+        fail('MINIMAX_PREV_RELEASE_DIR points at the SAME version — a real upgrade test needs an older release');
       }
-      log('PASS: interrupt landed after completion; install tree is complete');
+      const prevDownload = path.join(temp, 'prev download');
+      materializeDownload(prevRel, prevDownload);
+      const upgradeEnv = { ...installEnv, MINIMAX_INSTALL_DIR: upgradeTarget };
+      log(`Installing the previous release ${prevRel.baseName}...`);
+      const prevInstall = runInstaller(prevDownload, upgradeEnv);
+      if (prevInstall.status !== 0) {
+        fail(`install of the previous release failed: ${((prevInstall.stderr || prevInstall.stdout) || '').toString().slice(-2000)}`);
+      }
+      // Plant a stale file that only the old installation has.
+      const stale = path.join(upgradeTarget, 'stale-old-release-file.txt');
+      fs.writeFileSync(stale, 'leftover from the old release');
+      log(`Upgrading ${prevRel.baseName} -> ${baseName}...`);
+      const upgrade = runInstaller(downloadDir, upgradeEnv);
+      if (upgrade.status !== 0) {
+        fail(`real old->new upgrade failed: ${((upgrade.stderr || upgrade.stdout) || '').toString().slice(-2000)}`);
+      }
+      const upgradedExe = path.join(upgradeTarget, 'MiniMaxAssetTool.exe');
+      if (!fs.existsSync(upgradedExe)) fail('upgrade lost the executable');
+      if (sha256File(upgradedExe) !== sha256File(installedExe)) {
+        fail('upgrade did not land the NEW release executable (still the old bytes)');
+      }
+      if (fs.existsSync(stale)) fail('upgrade kept a stale file from the old release (the swap must replace the whole tree)');
+      if (!fs.existsSync(path.join(upgradeTarget, 'FILES.sha256'))) fail('upgrade dropped the inner manifest');
+      log(`PASS: real old->new upgrade ${prevRel.baseName} -> ${baseName} replaces the tree and removes stale files`);
     } else {
-      log('PASS: interrupted install left no partial installation');
+      const exeBefore = sha256File(installedExe);
+      const upgrade = runInstaller(downloadDir, installEnv);
+      if (upgrade.status !== 0) {
+        fail(`reinstall over the existing installation failed: ${((upgrade.stderr || upgrade.stdout) || '').toString().slice(-2000)}`);
+      }
+      if (!fs.existsSync(installedExe) || sha256File(installedExe) !== exeBefore) {
+        fail('reinstall did not leave the identical release executable in place');
+      }
+      if (!fs.existsSync(installedManifest)) fail('reinstall dropped the inner manifest');
+      log('PASS: same-version reinstall swaps cleanly (set MINIMAX_PREV_RELEASE_DIR for a real old->new upgrade)');
     }
 
-    // ---- 5. Tamper rejection (modified inventoried file). ----
+    // ---- 4. Deterministic interrupt exactly before the swap. ----
+    // RR2-H003: the installer honours MINIMAX_INSTALL_FAULT_BEFORE_SWAP=1
+    // by aborting AFTER staging verification and BEFORE the swap. With an
+    // existing installation in place this is the critical moment: the old
+    // tree must remain BYTE-IDENTICAL and no staging/old dirs may linger.
+    const beforeFault = snapshotTree(installTarget);
+    const fault = runInstaller(downloadDir, { ...installEnv, MINIMAX_INSTALL_FAULT_BEFORE_SWAP: '1' });
+    if (fault.status === 0) fail('fault-injected install must abort before the swap');
+    const afterFault = snapshotTree(installTarget);
+    const drifted = Object.keys(beforeFault).filter((k) => afterFault[k] !== beforeFault[k])
+      .concat(Object.keys(afterFault).filter((k) => !(k in beforeFault)));
+    if (drifted.length) {
+      fail(`pre-swap fault changed the existing installation: ${drifted.slice(0, 8).join(', ')}${drifted.length > 8 ? '...' : ''}`);
+    }
+    const targetName = path.basename(installTarget);
+    const leftovers = fs.readdirSync(path.dirname(installTarget))
+      .filter((f) => f.startsWith(`${targetName}.staging-`) || f.startsWith(`${targetName}.old-`));
+    if (leftovers.length) fail(`pre-swap fault left staging debris behind: ${leftovers.join(', ')}`);
+    log('PASS: deterministic pre-swap fault leaves the existing installation byte-identical');
+
+    // ---- 5. Tamper rejection (modified archive byte). ----
+    // RR2 note: the tamper flips a real byte in the archive itself, so the
+    // published checksums no longer match — the bootstrap must refuse it.
     const tamperedDir = path.join(temp, 'tampered download');
-    fs.mkdirSync(tamperedDir, { recursive: true });
-    for (const name of partNames) linkOrCopy(path.join(downloadDir, name), path.join(tamperedDir, name));
-    linkOrCopy(manifest, path.join(tamperedDir, path.basename(manifest)));
-    linkOrCopy(minisig, path.join(tamperedDir, path.basename(minisig)));
-    linkOrCopy(pubKey, path.join(tamperedDir, 'minisign.pub'));
-    linkOrCopy(verifier, path.join(tamperedDir, 'minisign.exe'));
-    const tamperedCmd = path.join(tamperedDir, 'Install-MiniMax-Asset-Tool.cmd');
-    fs.copyFileSync(installerCmd, tamperedCmd);
-    fs.appendFileSync(tamperedCmd, '\r\nrem TAMPERED\r\n');
+    materializeDownload(rel, tamperedDir);
+    const victimName = path.basename(rel.archives[0]);
+    const victim = path.join(tamperedDir, victimName);
+    // materializeDownload may hardlink; never mutate a link to the source.
+    fs.rmSync(victim, { force: true });
+    fs.copyFileSync(rel.archives[0], victim);
+    // Flip ONE byte in the middle of the archive via positional I/O (parts
+    // can be multi-GB — never buffer them whole).
+    const fd = fs.openSync(victim, 'r+');
+    try {
+      const pos = Math.floor(fs.fstatSync(fd).size / 2);
+      const one = Buffer.alloc(1);
+      fs.readSync(fd, one, 0, 1, pos);
+      one[0] ^= 0xff;
+      fs.writeSync(fd, one, 0, 1, pos);
+    } finally {
+      fs.closeSync(fd);
+    }
     const tamper = runInstaller(tamperedDir, { ...installEnv, MINIMAX_INSTALL_DIR: path.join(temp, 'tamper app') });
     if (tamper.status === 0 || fs.existsSync(path.join(temp, 'tamper app', 'MiniMaxAssetTool.exe'))) {
-      fail('installer accepted a tampered release artifact (integrity did not fail closed)');
+      fail('installer accepted a tampered release archive (integrity did not fail closed)');
     }
-    log('PASS: a tampered release artifact is rejected');
+    log('PASS: a tampered release archive is rejected');
 
     // ---- 6. Unsigned rejection (missing .minisig, no escape hatch). ----
     const unsignedDir = path.join(temp, 'unsigned download');

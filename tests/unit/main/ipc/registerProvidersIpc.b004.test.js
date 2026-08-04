@@ -143,12 +143,24 @@ test('B-004: providers:getPublic reports the pinned origin after disk tamper', (
 test('B-004: providersStore.write() normalizes built-in origins before persisting', () => {
   const d = providersStore._default();
   d.providers.find((p) => p.id === 'openrouter').baseUrl = EVIL;
-  d.providers.find((p) => p.id === 'replicate').kind = 'openrouter';
   providersStore.write(d);
   const raw = JSON.parse(fs.readFileSync(providersStore.file(), 'utf8'));
   assert.equal(raw.providers.find((p) => p.id === 'openrouter').baseUrl, PINNED_OPENROUTER);
   assert.equal(raw.providers.find((p) => p.id === 'replicate').kind, 'replicate');
   assert.equal(raw.providers.find((p) => p.id === 'replicate').baseUrl, '');
+});
+
+// RR2-C003 (recheck-2): a re-kind of a built-in is now REJECTED by the
+// write() schema guard outright (it used to be silently normalized). The
+// read-time kind pin (_pinBuiltins) still protects against on-disk edits.
+test('RR2-C003: providersStore.write() rejects a re-kinded built-in', () => {
+  const d = providersStore._default();
+  d.providers.find((p) => p.id === 'replicate').kind = 'openrouter';
+  assert.throws(() => providersStore.write(d), /permanently bound to kind/);
+  const tampered = providersStore.read();
+  tampered.providers.find((p) => p.id === 'replicate').kind = 'custom-openai';
+  fs.writeFileSync(providersStore.file(), JSON.stringify(tampered, null, 2));
+  assert.equal(providersStore.read().providers.find((p) => p.id === 'replicate').kind, 'replicate');
 });
 
 test('B-004: BUILTIN_ORIGINS is frozen and exported', () => {

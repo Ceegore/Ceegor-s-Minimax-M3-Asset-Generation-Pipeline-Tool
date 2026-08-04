@@ -27,6 +27,19 @@
 // default. Declared here (not imported) to keep this module dependency-free.
 const BUILTIN_PROVIDER_IDS = Object.freeze(['openrouter', 'replicate', 'custom-openai']);
 
+// RR2-C003 (recheck-2): `kind` is the ADAPTER SELECTOR. The old schema
+// accepted any string, so a payload could smuggle an arbitrary kind on a
+// built-in id (e.g. id="attacker" + kind="openrouter" + attacker baseUrl)
+// and slip past the custom-URL production block, which keyed on
+// kind === 'custom-openai'. Only the three implemented adapter kinds are
+// accepted, and every built-in ID is PERMANENTLY BOUND to its kind.
+const ALLOWED_KINDS = Object.freeze(['openrouter', 'replicate', 'custom-openai']);
+const PROVIDER_KIND_BINDING = Object.freeze({
+  openrouter: 'openrouter',
+  replicate: 'replicate',
+  'custom-openai': 'custom-openai',
+});
+
 const MAX_PROVIDERS = 64;
 const MAX_ID_LEN = 64;
 const MAX_LABEL_LEN = 128;
@@ -59,6 +72,17 @@ function checkEntry(p, idx, seenIds) {
   if (p.kind !== undefined && typeof p.kind !== 'string') {
     return fail('Provider "' + p.id + '": "kind" must be a string.');
   }
+  // RR2-C003: kind whitelist — an unknown kind can never select a real
+  // adapter and is the documented bypass vector for the origin blocks.
+  if (p.kind !== undefined && !ALLOWED_KINDS.includes(p.kind)) {
+    return fail('Provider "' + p.id + '": kind "' + p.kind + '" is not allowed (expected one of ' + ALLOWED_KINDS.join(', ') + ').');
+  }
+  // RR2-C003: built-in IDs are permanently bound to their kind — a
+  // re-kind of openrouter/replicate/custom-openai is rejected outright.
+  const boundKind = PROVIDER_KIND_BINDING[p.id];
+  if (boundKind && p.kind !== undefined && p.kind !== boundKind) {
+    return fail('Provider "' + p.id + '" is built-in and permanently bound to kind "' + boundKind + '".');
+  }
   if (p.baseUrl !== undefined && (typeof p.baseUrl !== 'string' || p.baseUrl.length > MAX_URL_LEN)) {
     return fail('Provider "' + p.id + '": "baseUrl" must be a string of at most ' + MAX_URL_LEN + ' characters.');
   }
@@ -90,9 +114,12 @@ function checkSelection(name, sel, providerIds) {
 /**
  * Strict validation of a full `providers:set` replacement payload.
  * @param {*} data - raw IPC payload
+ * @param {{ production?: boolean }} [opts] - RR2-C003: in production only
+ *   the KNOWN built-in ID/kind combinations are accepted; unknown ids are
+ *   rejected (a dev build may still register extra providers).
  * @returns {{ ok: boolean, error?: string }}
  */
-function validateProvidersSetPayload(data) {
+function validateProvidersSetPayload(data, opts = {}) {
   if (!isPlainObject(data)) return fail('providers:set payload must be an object.');
   if (!Array.isArray(data.providers)) return fail('providers:set payload must include a "providers" array.');
   if (data.providers.length === 0) {
@@ -111,6 +138,14 @@ function validateProvidersSetPayload(data) {
       return fail('providers:set full replacement must include the built-in provider "' + id + '".');
     }
   }
+  // RR2-C003: production accepts ONLY the known built-in combinations.
+  if (opts.production) {
+    for (const id of seenIds) {
+      if (!BUILTIN_PROVIDER_IDS.includes(id)) {
+        return fail('providers:set in production accepts only the built-in providers (' + BUILTIN_PROVIDER_IDS.join(', ') + '); unknown id "' + id + '" rejected.');
+      }
+    }
+  }
   if (data.selections !== undefined) {
     if (!isPlainObject(data.selections)) return fail('"selections" must be an object.');
     for (const [name, sel] of Object.entries(data.selections)) {
@@ -121,4 +156,4 @@ function validateProvidersSetPayload(data) {
   return { ok: true };
 }
 
-module.exports = { validateProvidersSetPayload, BUILTIN_PROVIDER_IDS };
+module.exports = { validateProvidersSetPayload, BUILTIN_PROVIDER_IDS, ALLOWED_KINDS, PROVIDER_KIND_BINDING };

@@ -64,8 +64,8 @@ Project files, settings, and post-processing stay on your computer. Prompts and 
 
 The full release is made for nontechnical users. It includes Electron, Node.js, the MiniMax command-line client, FFmpeg, Sharp, ONNX Runtime, Real-ESRGAN, and every supported local model. You do not need to install Python, .NET, Node.js, or any image tool, and the app does not download local components while you use it.
 
-1. Open [Releases](../../releases). Download **Install-MiniMax-Asset-Tool.cmd**, the `.sha256` file, and every `.part1.zip`, `.part2.zip`, and later part listed under **Full offline Windows release**. Keep them together in one folder.
-2. Double-click **Install-MiniMax-Asset-Tool.cmd**. It checks every download, extracts the parts, installs the app for your Windows account, and creates Desktop and Start menu shortcuts.
+1. Open [Releases](../../releases). Download **every** file listed under **Full offline Windows release** and keep them together in one folder. The mandatory set is: **Install-MiniMax-Asset-Tool.cmd**, the `.sha256` inventory manifest, the `.sha256.minisig` detached signature, **minisign.pub** (the pinned public key), **minisign.exe** (the pinned verifier), and every `.part1.zip`, `.part2.zip`, and later archive part. The installer checks fail-closed and refuse to start if any of these files is missing.
+2. Double-click **Install-MiniMax-Asset-Tool.cmd**. It verifies the manifest signature and every download, extracts the parts, installs the app for your Windows account, and creates Desktop and Start menu shortcuts.
 3. When the app opens, enter your MiniMax API key and choose an output folder.
 
 No archive program or administrator access is needed. Allow roughly 9 GB of free space during installation; the temporary extraction files are removed after a successful install. The installer makes no network requests.
@@ -80,14 +80,14 @@ Experienced users can instead extract every archive part into the same folder wi
 
 ### Verifying release authenticity
 
-Releases are **code-signed**: every executable shipped in the release carries an Authenticode signature, and the `.sha256` manifest has a detached **Minisign** signature (`.sha256.minisig`) attached to it. The installer verifies the `.sha256` manifest of every download before it extracts anything.
+Releases are **code-signed**: every executable shipped in the release carries an Authenticode signature, and the `.sha256` manifest has a detached **Minisign** signature (`.sha256.minisig`) attached to it. The installer verifies the manifest signature **and** the `.sha256` manifest of every download before it extracts anything — this verification is mandatory, not optional, and the installer aborts if the signature, the pinned public key (`minisign.pub`), or the pinned verifier (`minisign.exe`) is missing.
 
 To verify a release yourself:
 
 1. Download the release only from this repository's [Releases](../../releases) page — never from mirrors or third-party sites.
 2. Check the Authenticode signature: right-click `MiniMaxAssetTool.exe` → **Properties → Digital Signatures**; a valid signature from the publisher must be listed.
 3. Compare every downloaded file against the published `.sha256` manifest (for example `Get-FileHash -Algorithm SHA256 <file>` in PowerShell).
-4. Optionally verify the manifest signature with [Minisign](https://jedisct1.github.io/minisign/): `minisign -Vm MiniMaxAssetTool-<version>-x64.sha256 -P <published public key>`.
+4. Verify the manifest signature with the pinned verifier shipped in the release (this is the same mandatory check the installer performs): `minisign.exe -Vm MiniMaxAssetTool-<version>-x64.sha256 -P minisign.pub`. The signature must verify against the published `minisign.pub` — never against a key from any other source.
 
 Windows SmartScreen may still show **Windows protected your PC** for a newly signed release until enough installations build reputation. If it appears, confirm the digital signature and checksums as above first, then choose **More info → Run anyway**. Never disable Microsoft Defender or add an antivirus exclusion, and never run a release whose signature or checksums do not match. A managed work or school computer may require approval from its administrator.
 

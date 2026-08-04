@@ -2,6 +2,28 @@
 
 Notable user-facing changes are recorded here.
 
+## 1.0.5 - 2026-08-03
+
+Release-integrity hardening from the 1.0.4 requalification recheck (16 findings, all closed). No feature changes; this version exists so every fix is part of an immutable tag.
+
+### Fixed
+
+- Publication staging now creates nested parent directories, requires EXACT set equality between the signed manifest and the staged inventory, rejects unsafe relative paths, and cryptographically verifies the Minisign manifest signature against the pinned key before staging anything (RR2-B002/M003/C002).
+- The installer's trust anchor is no longer circular: it embeds the pinned Minisign public key between marked lines and carries the SHA-256 of the pinned verifier, both stamped by the release pipeline (RR2-C001).
+- Custom-URL providers are now bound server-side: provider ID, kind, and origin are validated against an allowlist, so no attacker-controlled provider can receive stored API keys (RR2-C003).
+- The SBOM resolves every package hash from its exact `name@version` lockfile path, and the verifier cross-checks that resolution (RR2-M002).
+- The Authenticode gate now covers every PE in the final publication inventory, including the root-level pinned `minisign.exe` verifier (RR2-H007).
+- The documented unsigned manual dry run can now actually finish: it generates an ephemeral throwaway Minisign keypair to exercise the full sign/verify pipeline, while publication stays fail-closed on the real secrets (RR2-M001).
+- The README, release notes, and START HERE guide now list every mandatory download file (archives, manifest, signature, key, verifier, installer) and no longer call the mandatory Minisign check "optional" (RR2-H006).
+
+### Added / Changed
+
+- Coverage gate: narrow per-metric waiver matrix (10 files with owners, tickets, expiries, and uncovered line/branch evidence) plus LCOV, HTML report, and untested-file evidence; six previously waived credential/security modules are de-waived at 100/100/100 (RR2-B003).
+- Mutation testing extended to 28 directed mutants across the release pipeline (publication, verification, SBOM, finalize, installer trust anchor, provider URL policy, path grants, atomic finalization, installer rollback) (RR2-H005).
+- Flakiness qualification now repeats the FULL release-suite inventory (unit, smoke, E2E, contract, coverage gate, lint, renderer isolation) in seeded random order plus a heavy installer phase; the seed is recorded for reproduction (RR2-H004).
+- Clean-VM acceptance is a node-free PowerShell harness that boots the packaged app over CDP, proves a real offline function with the bundled ffprobe, performs a real previous-release-to-current upgrade, a deterministic interrupted-install rollback check, and a tampered-archive rejection (RR2-H001/H003).
+- Installer acceptance accepts both split (`.partN.zip`) and unsplit archives through the same discovery logic as the release pipeline (RR2-H002).
+
 ## 1.0.4 - 2026-08-03
 
 ### Fixed

@@ -62,9 +62,8 @@ function writeProbe(dir) {
 }
 
 // hhhhu2 audit H-001/H-002: the legacy downloadToFile + validateMagicBytes
-// helpers were replaced by ArtifactFinalizer + SafeHttpClient (see the
-// providers:generate handler below); they were removed to keep this module
-// within the 500-line hard limit.
+// helpers were replaced by ArtifactFinalizer + SafeHttpClient (see
+// providers:generate below).
 
 // RQ-006 fix: a provider whose persisted credential blob is missing or
 // unreadable must fail FAST with an actionable repair message instead of
@@ -132,7 +131,10 @@ function register({ getMainWindow }) {
       // write and no key operation happens, so an empty/duplicate-id/
       // builtin-dropping payload can neither wipe providers.json nor
       // orphan encrypted credential blobs.
-      const schema = validateProvidersSetPayload(data);
+      // RR2-C003 (recheck-2): the schema additionally enforces the kind
+      // whitelist, the built-in ID->kind binding, and (in packaged
+      // production builds) accepts ONLY the known built-in combinations.
+      const schema = validateProvidersSetPayload(data, { production: app.isPackaged });
       if (!schema.ok) return { ok: false, error: schema.error };
       // B-004: built-in provider origins are immutable — reject any attempt
       // to change the baseUrl or kind of openrouter/replicate outright (the
@@ -149,10 +151,16 @@ function register({ getMainWindow }) {
         }
       }
       // P0-A (C-008): block custom baseUrl changes in production.
+      // RR2-C003 (recheck-2): this gate keys on the PROVIDER ID, not on
+      // `kind` — the old kind-keyed check was bypassable by registering
+      // an arbitrary id with kind='openrouter' (or any non-custom kind)
+      // plus an attacker baseUrl. The schema above has already rejected
+      // unknown kinds and re-kinds of built-ins; this block locks the
+      // custom-openai URL to its shipped default.
       if (!customProviderUrlsEnabled() && data && Array.isArray(data.providers)) {
         const defaults = providersStore._default();
         for (const p of data.providers) {
-          if (p.kind === 'custom-openai' && p.baseUrl) {
+          if (p.id === 'custom-openai' && p.baseUrl) {
             const existing = (defaults.providers || []).find((d) => d.id === p.id);
             if (!existing || p.baseUrl !== existing.baseUrl) {
               return { ok: false, error: 'Custom provider base-URL changes are disabled in production builds for security (audit C-008). Use a development build to enable.' };
@@ -387,8 +395,6 @@ function register({ getMainWindow }) {
       // and OutputTransactionService (journaled crash-consistent promotion).
       // SafeHttpClient provides DNS-pinned downloads for URL-based outputs.
       const finalizerModality = (req.modality === 'speech' || req.modality === 'music') ? 'audio' : req.modality;
-      // H-002 (hhhhu3 audit): resolvedOut + grant authorization already
-      // happened above, BEFORE the probe and the paid call.
 
       // Begin a journaled transaction.
       const journalDir = path.join(app.getPath('userData'), 'output-transactions');

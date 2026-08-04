@@ -136,6 +136,9 @@ test('R0.1-006.Int.3: 3 parallel resize() calls to DIFFERENT outputPaths run in 
 
 // ---------------------------------------------------------------------------
 // Int.4: after a parallel burst, the lock map is empty (no stranded entries).
+// Deterministic: inspects the module-private lock map via the _outputLockCount
+// test hook instead of inferring strandage from wall-clock timing (which
+// false-fails under coverage instrumentation / loaded CI runners).
 // ---------------------------------------------------------------------------
 test('R0.1-006.Int.4: after a parallel burst, the module-private _outputLocks Map is empty (no stranded entries)', async () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'r006-int-4-'));
@@ -147,23 +150,20 @@ test('R0.1-006.Int.4: after a parallel burst, the module-private _outputLocks Ma
       RESIZE.resize(src, { width: 10, height: 10, outputPath: out }),
       RESIZE.resize(src, { width: 10, height: 10, outputPath: out }),
     ]);
-    // The _outputLocks Map is module-private (not exported). To verify
-    // it's empty, we do a fresh parallel burst and check that the two
-    // bursts are NOT serialized (i.e. the second burst doesn't wait for
-    // any leftover lock). If the lock map had a stranded entry, the
-    // second burst's first call would `await prevLock` and stall briefly.
-    const start = Date.now();
-    await Promise.all([
+    // Every burst call resolved, so every lock was released in `finally`.
+    // A stranded entry would show up as a non-zero lock count here.
+    assert.equal(RESIZE._outputLockCount(), 0,
+      'Int.4: after the first burst the lock map must be empty (no stranded entries)');
+    // A second burst on the SAME outputPath must still complete cleanly —
+    // proof that no leftover lock serializes or blocks new callers.
+    const [s1, s2] = await Promise.all([
       RESIZE.resize(src, { width: 10, height: 10, outputPath: out }),
       RESIZE.resize(src, { width: 10, height: 10, outputPath: out }),
     ]);
-    const elapsed = Date.now() - start;
-    // A second burst of 2 calls with NO contention overhead. With sharp
-    // overhead at ~30ms per call, sequential would be ~60ms. Parallel
-    // should be ~30-50ms. Upper bound: 2000ms (sanity for slow CI).
-    assert.ok(elapsed < 2000,
-      'Int.4: second burst must not be blocked by stranded lock. ' +
-      'Elapsed: ' + elapsed + 'ms (expected < 2000ms if lock is clean)');
+    assert.equal(s1.ok, true, 'Int.4: second burst call 1 must succeed. Error: ' + s1.error);
+    assert.equal(s2.ok, true, 'Int.4: second burst call 2 must succeed. Error: ' + s2.error);
+    assert.equal(RESIZE._outputLockCount(), 0,
+      'Int.4: after the second burst the lock map must be empty again');
   } finally {
     try { fs.rmSync(dir, { recursive: true, force: true }); } catch (_) {}
   }

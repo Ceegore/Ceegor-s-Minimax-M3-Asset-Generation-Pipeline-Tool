@@ -300,6 +300,29 @@ jobs:
             Set-Content -Path $pubPath -Value $env:MINISIGN_PUB_KEY -Encoding ascii
             Add-Content -Path $env:GITHUB_ENV -Value "MINISIGN_PUB_PATH=$pubPath"
           }
+          # RR2-M001 (recheck-2): an unsigned manual dry run must be able to
+          # finish the WHOLE pipeline, not die at finalize:release. When the
+          # pinned public key secret is absent we generate an EPHEMERAL
+          # throwaway keypair with the pinned minisign tool and use it as the
+          # dry-run trust anchor (also replacing any partial secret key so the
+          # pair is always consistent). It never leaves the runner, is clearly
+          # marked via MINIMAX_EPHEMERAL_DRYRUN_KEY=1, and can never be
+          # published: publication staging demands the REAL MINISIGN_PUB_KEY
+          # secret, and only tag runs upload artifacts.
+          if (-not $tag -and -not $env:MINISIGN_PUB_KEY) {
+            $exe = Get-ChildItem -Path (Join-Path $env:RUNNER_TEMP 'minisign') -Recurse -Filter minisign.exe -ErrorAction SilentlyContinue | Select-Object -First 1
+            if (-not $exe) { throw 'Cannot generate the ephemeral dry-run keypair: the pinned minisign tool was not installed.' }
+            $ephKey = Join-Path $env:RUNNER_TEMP 'minisign.key'
+            $ephPub = Join-Path $env:RUNNER_TEMP 'minisign.pub'
+            & $exe.FullName -G -W -f -p $ephPub -s $ephKey
+            if ($LASTEXITCODE -ne 0 -or -not (Test-Path $ephKey) -or -not (Test-Path $ephPub)) {
+              throw 'Ephemeral dry-run keypair generation failed.'
+            }
+            Add-Content -Path $env:GITHUB_ENV -Value "MINISIGN_KEY_PATH=$ephKey"
+            Add-Content -Path $env:GITHUB_ENV -Value "MINISIGN_PUB_PATH=$ephPub"
+            Add-Content -Path $env:GITHUB_ENV -Value 'MINIMAX_EPHEMERAL_DRYRUN_KEY=1'
+            Write-Warning 'RR2-M001: this unsigned manual dry run uses an EPHEMERAL throwaway Minisign keypair. It exercises the full sign/verify pipeline but can never be published.'
+          }
           if ($tag) {
             Add-Content -Path $env:GITHUB_ENV -Value 'REQUIRE_CODE_SIGNING=1'
           }
@@ -356,6 +379,38 @@ jobs:
       - name: Finalize release inventory
         run: npm run finalize:release
 
+      # RR2-H007 (recheck-2): electron-builder signs only the PEs IT emits.
+      # The pinned minisign.exe verifier copied to the output ROOT by
+      # finalize would ship unsigned and fail the expanded Authenticode
+      # gate — sign every output-root PE here. Signing changes bytes, so
+      # the outer manifest hashes are rewritten afterwards and only THEN
+      # signed with Minisign (the signed manifest always covers the final
+      # bytes).
+      - name: Import Authenticode certificate for output-root signing
+        if: env.REQUIRE_CODE_SIGNING == '1' || env.WIN_CSC_LINK != ''
+        shell: pwsh
+        run: |
+          if (-not $env:WIN_CSC_LINK -or -not $env:WIN_CSC_KEY_PASSWORD) {
+            throw 'Output-root Authenticode signing requires WIN_CSC_LINK and WIN_CSC_KEY_PASSWORD.'
+          }
+          if (Test-Path -LiteralPath $env:WIN_CSC_LINK) {
+            $pfx = $env:WIN_CSC_LINK
+          } else {
+            $pfx = Join-Path $env:RUNNER_TEMP 'release-auth.pfx'
+            [IO.File]::WriteAllBytes($pfx, [Convert]::FromBase64String($env:WIN_CSC_LINK))
+          }
+          $sec = ConvertTo-SecureString -String $env:WIN_CSC_KEY_PASSWORD -AsPlainText -Force
+          $cert = Import-PfxCertificate -FilePath $pfx -CertStoreLocation Cert:\CurrentUser\My -Password $sec
+          Add-Content -Path $env:GITHUB_ENV -Value "MINIMAX_AUTH_THUMBPRINT=$($cert.Thumbprint)"
+
+      - name: Authenticode-sign output-root binaries (RR2-H007)
+        if: env.MINIMAX_AUTH_THUMBPRINT != ''
+        run: node scripts/sign-output-binaries.js
+
+      - name: Rewrite outer manifest after output-root signing (RR2-H007)
+        if: env.MINIMAX_AUTH_THUMBPRINT != ''
+        run: node scripts/verify-release.js --write-manifest
+
       # B-003 (hhhhu3 audit): sign the outer manifest BEFORE strict
       # verification — the verifier requires the .minisig to exist.
       - name: Sign release manifest (Minisign)
@@ -389,32 +444,68 @@ jobs:
   # needs no dev dependencies (Node built-ins only), so no `npm ci` runs.
   # ------------------------------------------------------------------
   clean-vm-acceptance:
-    name: Clean-VM acceptance (real release boot + installer acceptance)
+    name: Clean-VM acceptance (node-free PowerShell harness)
     runs-on: windows-latest
-    timeout-minutes: 45
+    timeout-minutes: 60
     needs: [build-sign-verify]
     steps:
       - uses: actions/checkout@v7
 
-      - uses: actions/setup-node@v6
-        with:
-          node-version: '22'
-
+      # RR2-H001: NO actions/setup-node here. The acceptance harness is
+      # pure PowerShell + the shipped CMD installer; installing a global
+      # Node.js would invalidate the "standard machine" proof.
       - name: Download exact build output
         uses: actions/download-artifact@v7
         with:
           name: release-build
           path: dist-out/
 
-      # V104-B001/V104-M001: boot the REAL packaged executable from the
-      # downloaded release (not a rebuilt ASAR, no --no-sandbox dev shim).
-      - name: Real packaged release boot
-        run: npm run test:packaged:release
+      # RR2-H003: fetch the PREVIOUS published GitHub release (all seven
+      # mandatory files) so the harness performs a REAL old->new upgrade.
+      - name: Download previous release for real upgrade test
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $repo = '${{ github.repository }}'
+          $api = "https://api.github.com/repos/$repo/releases?per_page=10"
+          $rels = Invoke-RestMethod $api -Headers @{ 'User-Agent' = 'release-gate' }
+          $tag = '${{ github.ref_name }}'
+          $prev = $rels | Where-Object { $_.tag_name -ne $tag -and $_.assets } | Select-Object -First 1
+          if (-not $prev) { Write-Host 'No previous release published yet - upgrade phase will be skipped.'; exit 0 }
+          $dir = 'prev-release'
+          New-Item -ItemType Directory -Force -Path $dir | Out-Null
+          foreach ($a in $prev.assets) {
+            Write-Host "Downloading $($a.name)..."
+            Invoke-WebRequest $a.browser_download_url -OutFile (Join-Path $dir $a.name) -Headers @{ 'User-Agent' = 'release-gate' }
+          }
+          # Only wire the upgrade phase when the previous release is a
+          # COMPLETE set (archives + manifest + minisig + key + verifier +
+          # installer); otherwise the harness must skip, not fail.
+          $files = Get-ChildItem $dir -File | ForEach-Object Name
+          $need = @('minisign.pub', 'minisign.exe', 'Install-MiniMax-Asset-Tool.cmd')
+          $ok = ($files | Where-Object { $_ -match '\.sha256$' }) -and ($files | Where-Object { $_ -match '\.minisig$' })
+          foreach ($n in $need) { if ($files -notcontains $n) { $ok = $false } }
+          if ($ok) { "PREV_RELEASE_DIR=$dir" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8 }
+          else { Write-Host 'Previous release incomplete - upgrade phase will be skipped.' }
 
-      # V104-B002: install/launch/upgrade/interrupt/rollback the exact
-      # downloaded release through the signed installer bootstrap.
-      - name: Installer acceptance (real release artifacts)
-        run: npm run test:acceptance
+      # RR2-H001: node-free acceptance - fresh signed install, packaged
+      # boot with a CDP:9222 probe, REAL offline function via the bundled
+      # ffprobe, real old->new upgrade, deterministic interrupt and
+      # tamper rejection.
+      - name: Node-free clean-VM acceptance
+        shell: pwsh
+        env:
+          MINIMAX_PREV_RELEASE_DIR: ${{ env.PREV_RELEASE_DIR }}
+        run: |
+          powershell -ExecutionPolicy Bypass -File scripts\acceptance\clean-vm-acceptance.ps1 -DistDir dist-out
+
+      - name: Upload clean-VM evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: clean-vm-evidence
+          path: coverage/clean-vm-acceptance.json
+          retention-days: 30
 
   # ------------------------------------------------------------------
   # Publication — ONLY after every mandatory gate is green for the
@@ -438,12 +529,65 @@ jobs:
           name: release-build
           path: dist-out/
 
-      # V104-C002: publication must contain EXACTLY the signed inventory —
-      # never the whole dist-out tree. stage-publication.js re-verifies the
-      # manifest signature and every entry hash, then stages only the
-      # inventoried files (fail-closed on any mismatch).
+      # RR2-C002 (recheck-2): environment variables do NOT cross job
+      # boundaries — this job must provision its OWN pinned Minisign
+      # verifier and pinned public key. The pinned key is the trust
+      # anchor the staged inventory signature is verified against;
+      # the minisign.pub shipped inside the release is payload, never
+      # anchor.
+      - name: Install pinned Minisign (publication verifier)
+        shell: pwsh
+        run: |
+          $url = 'https://github.com/jedisct1/minisign/releases/download/0.11/minisign-0.11-win64.zip'
+          $expected = 'B9C31C2C3034F81F0E5F5D92CBCC20E67A9671B6E5455661588638848DC58031'
+          $zip = Join-Path $env:RUNNER_TEMP 'minisign-0.11-win64.zip'
+          Invoke-WebRequest -Uri $url -OutFile $zip
+          $actual = (Get-FileHash -Algorithm SHA256 $zip).Hash
+          if ($actual -ne $expected) {
+            throw "Pinned Minisign download failed the SHA-256 check: expected $expected, got $actual"
+          }
+          Expand-Archive -LiteralPath $zip -DestinationPath (Join-Path $env:RUNNER_TEMP 'minisign')
+          $exe = Get-ChildItem -Path (Join-Path $env:RUNNER_TEMP 'minisign') -Recurse -Filter minisign.exe | Select-Object -First 1
+          if (-not $exe) { throw 'Minisign archive did not contain minisign.exe' }
+          Add-Content -Path $env:GITHUB_ENV -Value "MINISIGN_TOOL_PATH=$($exe.FullName)"
+
+      - name: Prepare pinned public key (publication trust anchor)
+        shell: pwsh
+        env:
+          MINISIGN_PUB_KEY: ${{ secrets.MINISIGN_PUB_KEY }}
+        run: |
+          if (-not $env:MINISIGN_PUB_KEY) {
+            if ($env:IS_TAG_RELEASE -eq 'true') {
+              throw 'Tag release requires the MINISIGN_PUB_KEY secret to verify the signed inventory before publication (RR2-C002).'
+            }
+            Write-Warning 'RR2-M001: no MINISIGN_PUB_KEY secret - unsigned manual dry run, publication staging is skipped.'
+            Add-Content -Path $env:GITHUB_ENV -Value 'PUBLICATION_STAGING_ENABLED=0'
+            exit 0
+          }
+          # RQ-002: signing material stays OUTSIDE the worktree.
+          $pubPath = Join-Path $env:RUNNER_TEMP 'minisign.pub'
+          Set-Content -Path $pubPath -Value $env:MINISIGN_PUB_KEY -Encoding ascii
+          Add-Content -Path $env:GITHUB_ENV -Value "MINISIGN_PUB_PATH=$pubPath"
+          Add-Content -Path $env:GITHUB_ENV -Value 'PUBLICATION_STAGING_ENABLED=1'
+
+      # V104-C002 + RR2-B002/M003/C002 (recheck-2): publication must
+      # contain EXACTLY the signed inventory — never the whole dist-out
+      # tree. stage-publication.js CRYPTOGRAPHICALLY verifies the manifest
+      # signature against the pinned key, rejects extra/unsafe manifest
+      # entries, and stages only the inventoried files (creating nested
+      # parent dirs, fail-closed on any mismatch).
+      # RR2-M001: an unsigned manual dry run has no .minisig and must not
+      # fail here — it skips staging with a loud banner instead.
       - name: Stage publication from signed inventory
+        if: env.PUBLICATION_STAGING_ENABLED == '1'
         run: npm run stage:publication
+
+      - name: Unsigned dry run banner (RR2-M001)
+        if: env.PUBLICATION_STAGING_ENABLED != '1'
+        shell: pwsh
+        run: >
+          Write-Host '::warning::Unsigned manual dry run - publication staging
+          skipped, no release artifacts are produced or uploaded.'
 
       # M-001 (hhhhu3 audit): only a tag-triggered run uploads publication
       # output. A manual dispatch run must never produce "release artifacts".

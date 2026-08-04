@@ -54,10 +54,25 @@ const BUILTIN_ORIGINS = Object.freeze({
   replicate:  { kind: 'replicate',  baseUrl: '' },
 });
 
+// RR2-C003 (recheck-2): KIND binding for ALL built-ins. `kind` is the
+// adapter selector — a hand-edited providers.json must never be able to
+// re-kind a built-in entry (e.g. turning custom-openai into a smuggled
+// 'openrouter'-kind provider that bypasses the origin blocks). Unlike
+// BUILTIN_ORIGINS this pins ONLY the kind: custom-openai's baseUrl stays
+// user-settable (gated by the customProviderUrlsEnabled feature flag).
+const BUILTIN_KINDS = Object.freeze({
+  openrouter: 'openrouter',
+  replicate: 'replicate',
+  'custom-openai': 'custom-openai',
+});
+
 function _pinBuiltins(d) {
   if (!d || !Array.isArray(d.providers)) return d;
   for (const p of d.providers) {
-    const pin = p && BUILTIN_ORIGINS[p.id];
+    if (!p) continue;
+    // RR2-C003: re-kind every built-in id back to its bound kind.
+    if (BUILTIN_KINDS[p.id]) p.kind = BUILTIN_KINDS[p.id];
+    const pin = BUILTIN_ORIGINS[p.id];
     if (!pin) continue;
     p.kind = pin.kind;
     p.baseUrl = pin.baseUrl;
@@ -263,4 +278,4 @@ function clearApiKey(id) {
   return { ok: true, providerId: id };
 }
 
-module.exports = { read, write, provider, clearApiKey, file, _default, BUILTIN_ORIGINS, registerSecretStore, _getSecretStore, _credId, _migrateKeys, registerCredentialRepository, _getCredentialRepo };
+module.exports = { read, write, provider, clearApiKey, file, _default, BUILTIN_ORIGINS, BUILTIN_KINDS, _pinBuiltins, registerSecretStore, _getSecretStore, _credId, _migrateKeys, registerCredentialRepository, _getCredentialRepo };

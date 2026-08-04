@@ -20,6 +20,15 @@
 // pinning) plus the classic security regressions (prefix-path escape,
 // redaction leak, fail-open schema gates).
 //
+// RR2-H005: the recheck-2 requalification rejected a battery that stopped
+// at the src/ credential layer. The campaign now ALSO mutates the release
+// pipeline itself: publication stager (signature gate, exact-set inventory,
+// path traversal), release verifier (output-root PE Authenticode scan),
+// archive sequence validation, SBOM exact version@name resolution, the
+// installer trust-anchor stamping AND the shipped installer template,
+// SSRF URL policy, path-grant containment, artifact no-clobber finalize
+// and the runtime installer's unverified-activation rollback.
+//
 // Usage:  node scripts/mutation-test.js [--min-score=100]
 // Output: console verdict per mutant + coverage/mutation-report.json.
 // Exit 0 only when the kill rate meets --min-score (default 100%).
@@ -78,6 +87,39 @@ const SUITES = {
   ],
   'src/assetPaths.js': [
     'tests/unit/src/assetPaths.h065.test.js',
+  ],
+  // RR2-H005: release-pipeline and service-layer mutation targets.
+  'scripts/stage-publication.js': [
+    'tests/unit/scripts/stagePublication.rr2.test.js',
+  ],
+  'scripts/verify-release.js': [
+    'tests/unit/scripts/verifyRelease.test.js',
+    'tests/unit/scripts/authenticodeGate.rr2.test.js',
+  ],
+  'scripts/releaseArtifacts.js': [
+    'tests/unit/scripts/releaseArtifacts.test.js',
+  ],
+  'scripts/generate-sbom.js': [
+    'tests/unit/scripts/sbomExactResolve.rr2.test.js',
+    'tests/unit/scripts/sbomGate.rq104.test.js',
+  ],
+  'scripts/finalize-release-inventory.js': [
+    'tests/unit/scripts/installerTrustAnchor.rr2.test.js',
+  ],
+  'Install MiniMax Asset Tool.cmd': [
+    'tests/unit/scripts/installerTrustAnchor.rr2.test.js',
+  ],
+  'src/providers/urlPolicy.js': [
+    'tests/security/compromised-renderer.test.js',
+  ],
+  'main/services/PathGrantService.js': [
+    'tests/unit/main/services/PathGrantService.test.js',
+  ],
+  'main/services/ArtifactFinalizer.js': [
+    'tests/unit/main/services/ArtifactFinalizer.h064.test.js',
+  ],
+  'scripts/lib/RuntimeInstaller.js': [
+    'tests/unit/scripts/RuntimeInstaller.test.js',
   ],
 };
 
@@ -196,6 +238,92 @@ const MUTANTS = [
     shape: 'H-065 regression: writable resolution without a userData guard',
     find: "if (!userDataPath) {\n    throw new Error('userDataPath is required for resolveWritableOverride');\n  }",
     replace: '/* mutant M16: writable override without userData guard */',
+  },
+  // RR2-H005: release-pipeline + service-layer battery.
+  {
+    id: 'M17',
+    file: 'scripts/stage-publication.js',
+    shape: 'RR2-C002 regression: a REJECTED Minisign signature is accepted',
+    find: 'if (r.status !== 0) {',
+    replace: 'if (false) { /* mutant M17: bad signature accepted */',
+  },
+  {
+    id: 'M18',
+    file: 'scripts/stage-publication.js',
+    shape: 'RR2-M003 regression: extra manifest entries are published',
+    find: 'if (missing.length || extra.length) return { ok: false, missing, extra };',
+    replace: 'if (missing.length) return { ok: false, missing, extra }; /* mutant M18: extra entries accepted */',
+  },
+  {
+    id: 'M19',
+    file: 'scripts/stage-publication.js',
+    shape: 'RR2-C002 regression: ".." traversal segments pass manifest validation',
+    find: "if (segments.some((s) => s === '..' || s === '.' || s === '')) {",
+    replace: 'if (false) { /* mutant M19: traversal segments accepted */',
+  },
+  {
+    id: 'M20',
+    file: 'scripts/verify-release.js',
+    shape: 'RR2-H007 regression: output-root PEs (bundled minisign.exe) skip the Authenticode gate',
+    find: 'if (!entry.isFile() || !/\\.(exe|dll|node)$/i.test(entry.name)) continue;',
+    replace: 'continue; /* mutant M20: output-root PEs never checked */',
+  },
+  {
+    id: 'M21',
+    file: 'scripts/releaseArtifacts.js',
+    shape: 'H002-era regression: a gapped split-archive sequence is accepted',
+    find: 'if (!fs.existsSync(wantPath)) {\n      return { ok: false, error: `Archive part sequence is incomplete: missing ${want}`',
+    replace: 'if (false) {\n      return { ok: false, error: `Archive part sequence is incomplete: missing ${want}`',
+  },
+  {
+    id: 'M22',
+    file: 'scripts/generate-sbom.js',
+    shape: 'RR2-M002 regression: lockfile entries match by NAME only, not version',
+    find: 'if (!key || !entry || entry.version !== version) continue;',
+    replace: 'if (!key || !entry) continue; /* mutant M22: version filter removed */',
+  },
+  {
+    id: 'M23',
+    file: 'scripts/finalize-release-inventory.js',
+    shape: 'RR2-C001 regression: the verifier SHA-256 pin is never stamped into the installer',
+    find: "content = content.replace('RR2-C001-VERIFIER-SHA256', sha256File(toolDest));",
+    replace: '/* mutant M23: verifier SHA-256 pin not stamped */',
+  },
+  {
+    id: 'M24',
+    file: 'Install MiniMax Asset Tool.cmd',
+    shape: 'RR2-C001 regression: the installer trust-anchor marker is removed',
+    find: '# RR2-C001-BEGIN-EMBEDDED-MINISIGN-PUBKEY',
+    replace: 'rem mutant M24: trust anchor marker removed',
+  },
+  {
+    id: 'M25',
+    file: 'src/providers/urlPolicy.js',
+    shape: 'SSRF regression: 192.168.x private provider URLs are allowed',
+    find: 'if (a === 192 && b === 168) return true;',
+    replace: 'if (false) return true; /* mutant M25: 192.168 SSRF bypass */',
+  },
+  {
+    id: 'M26',
+    file: 'main/services/PathGrantService.js',
+    shape: 'AUD-017 regression: a directory grant authorizes ANY path',
+    find: "if (!isStrictDescendant(grant.canonicalPath, candidateCanonical)) {\n        return { ok: false, error: 'directory grant covers only strict descendants, not the root itself' };",
+    replace: "if (false) {\n        return { ok: false, error: 'directory grant covers only strict descendants, not the root itself' };",
+  },
+  {
+    id: 'M27',
+    file: 'main/services/ArtifactFinalizer.js',
+    shape: 'H-064 regression: finalize overwrites an existing final path',
+    find: 'if (fs.existsSync(opts.finalPath)) {',
+    replace: 'if (false) { /* mutant M27: overwrite allowed */',
+  },
+  {
+    id: 'M28',
+    file: 'scripts/lib/RuntimeInstaller.js',
+    shape: 'H-013 regression: an interrupted activation without a verifier is NOT rolled back',
+    // NOTE: this file is CRLF — the anchor must stay byte-exact.
+    find: "          if (marker.backupPath && fs.existsSync(marker.backupPath)) {\r\n            this._rollbackToBackup(marker);\r\n            this._removeMarker();\r\n            return { recovered: true, action: 'rolled-back-unverifiable-activation' };",
+    replace: "          if (false) {\r\n            this._rollbackToBackup(marker);\r\n            this._removeMarker();\r\n            return { recovered: true, action: 'rolled-back-unverifiable-activation' };",
   },
 ];
 
