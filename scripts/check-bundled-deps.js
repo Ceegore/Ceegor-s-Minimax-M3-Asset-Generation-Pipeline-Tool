@@ -197,7 +197,12 @@ function checkReleaseDirectory(releaseDir) {
   const issues = required.filter((item) => !fs.existsSync(path.join(releaseDir, item)))
     .map((item) => `${item}: missing`);
 
-  const runtime = verifyRuntimeAssets(path.join(releaseDir, 'resources', 'bin'));
+  // A-004/§15.1: the composed legacy candidate reuses the 1.0.0 shell, which
+  // predates ffprobe.exe; compose enforces exact lock equality, so the
+  // exemption is only honored in explicit legacy release mode and stays
+  // fail-closed for every normal release.
+  const legacySkip = process.env.MINIMAX_RELEASE_MODE === 'legacy' ? ['ffprobe.exe'] : [];
+  const runtime = verifyRuntimeAssets(path.join(releaseDir, 'resources', 'bin'), { skipPaths: legacySkip });
   issues.push(...runtime.issues.map((issue) => `resources/bin/${issue}`));
 
   const unpacked = path.join(releaseDir, 'resources', 'app.asar.unpacked');
