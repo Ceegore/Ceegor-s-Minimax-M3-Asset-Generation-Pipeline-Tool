@@ -299,7 +299,12 @@ function printPrivilegeFix() {
   if (PACKAGE_EXISTING) {
     log('');
     log('Step 1.5: verifying the prebuilt packaged runtime (no re-copy — byte-locked trees must not change)...');
-    const packagedRuntime = verifyRuntimeAssets(destBin);
+    // A-004/§15.1: the composed legacy candidate reuses the 1.0.0 shell, which
+    // predates ffprobe.exe; compose enforces exact lock equality, so the
+    // exemption is only honored in explicit legacy release mode and stays
+    // fail-closed for every normal release.
+    const legacySkip = process.env.MINIMAX_RELEASE_MODE === 'legacy' ? ['ffprobe.exe'] : [];
+    const packagedRuntime = verifyRuntimeAssets(destBin, { skipPaths: legacySkip });
     if (!packagedRuntime.ok) fail('prebuilt packaged runtime is incomplete or changed:\n  ' + packagedRuntime.issues.join('\n  '));
     log(`  verified ${packagedRuntime.count} prebuilt runtime files by SHA-256`);
   } else if (fs.existsSync(sourceBin)) {
