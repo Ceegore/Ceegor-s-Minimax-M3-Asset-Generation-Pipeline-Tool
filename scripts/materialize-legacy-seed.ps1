@@ -1,3 +1,8 @@
+# Materialize the legacy seed from downloaded release-asset archives inside a
+# GitHub Actions job. Supports the single ZIP, the independent .partN.zip
+# sequence, and the raw .001/.002 split sequence; extracts into OutputDir and
+# exports seed_path (the directory containing MiniMaxAssetTool.exe +
+# resources\app.asar) to GITHUB_OUTPUT.
 param(
   [Parameter(Mandatory=$true)][string]$DownloadDir,
   [Parameter(Mandatory=$true)][string]$OutputDir

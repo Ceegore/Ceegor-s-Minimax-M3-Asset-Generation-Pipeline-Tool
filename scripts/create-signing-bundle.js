@@ -1,5 +1,10 @@
 'use strict';
 
+// Create the SignPath signing input bundle: exactly MiniMaxAssetTool.exe,
+// validated against PE metadata (ProductName / ProductVersion /
+// OriginalFilename) before upload. Writes SIGNING_INPUT.json evidence next to
+// the bundle. Phase 2 tooling; unused by the v1.0.7 legacy flow.
+
 const crypto = require('crypto');
 const fs = require('fs');
 const path = require('path');

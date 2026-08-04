@@ -1,5 +1,12 @@
 'use strict';
 
+// Compose a legacy-compatible release tree: a fresh donor build (from
+// scripts/build-unpacked.js) provides the application content, while every
+// runtime binary is byte-replaced from the hash-locked warning-free seed.
+// Hard rules: the donor's every PE except MiniMaxAssetTool.exe must already
+// equal the lock, and the composed tree must reach EXACT PE equality with the
+// lock. Any mismatch stops the release. Writes LEGACY_RUNTIME_NOTICE.json.
+
 const fs = require('fs');
 const path = require('path');
 const { hashFile, hasPeMagic, isPe, normalize, walkFiles } = require('./capture-legacy-shell-lock');

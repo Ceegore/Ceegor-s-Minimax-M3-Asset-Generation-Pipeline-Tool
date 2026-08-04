@@ -1,5 +1,11 @@
 'use strict';
 
+// Verify the signing scope of an unpacked release tree.
+// legacy mode: every PE must exactly match scripts/legacy-shell.lock.json.
+// signpath mode: every PE must classify as owned (validly SignPath-signed) or
+// upstream (must NOT carry the project signature) per a policy file; unknown
+// PEs stop the release. Used by verify:release:legacy / verify:release:signpath.
+
 const fs = require('fs');
 const path = require('path');
 const { getSignatureInfo } = require('./merge-signed-bundle');

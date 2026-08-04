@@ -1,5 +1,12 @@
 'use strict';
 
+// Capture a byte-lock ("legacy shell lock") of a locally-working, warning-free
+// runtime seed (e.g. C:\Tools\MinimaxAssetTool1.0.0). The lock freezes every
+// file except the documented mutable surface (app.asar, models, docs) and
+// inventories every PE file by SHA-256 + size. User data paths are refused.
+// The lock feeds scripts/compose-legacy-release.js so v1.0.7 ships exactly the
+// proven runtime binaries.
+
 const crypto = require('crypto');
 const fs = require('fs');
 const path = require('path');

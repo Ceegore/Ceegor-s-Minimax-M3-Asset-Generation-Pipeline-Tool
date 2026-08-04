@@ -1,3 +1,7 @@
+# Prepare the pinned Minisign 0.11 toolchain inside a GitHub Actions runner,
+# outside the repository worktree. The archive hash is pinned so the signing
+# tool cannot be silently swapped. Requires MINISIGN_KEY_B64 / MINISIGN_PUB_KEY
+# secrets and exports MINISIGN_TOOL_PATH / MINISIGN_KEY_PATH / MINISIGN_PUB_PATH.
 param()
 $ErrorActionPreference = 'Stop'
 if (-not $env:GITHUB_ENV -or -not $env:GITHUB_PATH -or -not $env:RUNNER_TEMP) { throw 'Must run inside GitHub Actions.' }

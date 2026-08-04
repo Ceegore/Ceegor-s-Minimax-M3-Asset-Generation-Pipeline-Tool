@@ -1,5 +1,12 @@
 'use strict';
 
+// Merge a SignPath-signed bundle back into the unsigned unpacked tree:
+// validates the Authenticode signature (status Valid, SignPath Foundation
+// signer, matching PE metadata), proves the signed bytes differ from the
+// unsigned ones, swaps ONLY MiniMaxAssetTool.exe, writes SIGNING_RESULT.json,
+// and replaces the output atomically. Nothing else from the signed bundle is
+// ever copied.
+
 const crypto = require('crypto');
 const fs = require('fs');
 const path = require('path');
