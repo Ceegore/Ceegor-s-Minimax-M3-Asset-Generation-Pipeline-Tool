@@ -30,6 +30,13 @@ function copyRequiredRuntime(root, unpacked) {
     throw new Error(`offline runtime is incomplete or changed:\n  ${sourceRuntime.issues.join('\n  ')}`);
   }
   const destBin = path.join(unpacked, 'resources', 'bin');
+  // NOTE: ffprobe.exe is intentionally NOT shipped here. The legacy seed
+  // (1.0.0) that the hash lock was captured from never contained it, and
+  // compose-legacy-release enforces exact PE equality against that lock —
+  // adding a PE the seed lacks would fail the composed-candidate check.
+  // Dev/QA builds get ffprobe via the @ffprobe-installer/ffprobe wrapper;
+  // the packaged legacy release probes media through the app's bundled
+  // ffmpeg.exe path instead.
   const shipEntries = [
     'models',
     'realesrgan-ncnn-vulkan.exe',
@@ -46,7 +53,11 @@ function copyRequiredRuntime(root, unpacked) {
     if (fs.statSync(source).isDirectory()) fs.cpSync(source, target, { recursive: true, dereference: false });
     else fs.copyFileSync(source, target);
   }
-  const packagedRuntime = verifyRuntimeAssets(destBin);
+  // Q-003 (1.0.7 qualification): the packaged donor is verified against the
+  // runtime manifest minus ffprobe.exe — the legacy seed predates ffprobe
+  // and compose enforces exact PE equality against that seed's lock, so the
+  // release donor must not carry it (see shipEntries note above).
+  const packagedRuntime = verifyRuntimeAssets(destBin, { skipPaths: ['ffprobe.exe'] });
   if (!packagedRuntime.ok) {
     throw new Error(`packaged offline runtime is incomplete or changed:\n  ${packagedRuntime.issues.join('\n  ')}`);
   }

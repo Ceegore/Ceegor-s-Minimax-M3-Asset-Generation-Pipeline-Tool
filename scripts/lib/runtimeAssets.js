@@ -31,11 +31,17 @@ function sha256File(filePath) {
 
 function verifyRuntimeAssets(binRoot, options = {}) {
   const verifyHashes = options.verifyHashes !== false;
+  // Q-003: documented, explicit per-call asset exemptions (e.g. the legacy
+  // release donor, whose seed predates ffprobe.exe). Only exact manifest
+  // paths are exempted; the exemption list is part of the caller's audit
+  // trail, never a silent omission.
+  const skipPaths = new Set(Array.isArray(options.skipPaths) ? options.skipPaths : []);
   const manifest = readManifest();
   const issues = [];
   let totalBytes = 0;
 
   for (const asset of manifest.assets) {
+    if (skipPaths.has(asset.path)) continue;
     const filePath = path.resolve(binRoot, ...asset.path.split('/'));
     const expectedRoot = path.resolve(binRoot) + path.sep;
     if (!filePath.startsWith(expectedRoot)) {

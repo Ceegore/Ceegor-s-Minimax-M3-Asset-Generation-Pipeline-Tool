@@ -357,3 +357,63 @@ test('hhhhu3 M-022: ffprobe discovery is cached and prefers the pinned dependenc
   assert.match(first.replace(/\\/g, '/'), /ffprobe-installer|ffprobe\.exe/, 'pinned copy is used, not PATH');
   assert.ok(fs.existsSync(first), 'resolved ffprobe exists on disk');
 });
+
+// ---------------------------------------------------------------------------
+// §15.1 FFprobe-Sonderfall — ffmpeg fallback probe (legacy shell without
+// ffprobe.exe reuses the locked ffmpeg-static binary; no new PE)
+// ---------------------------------------------------------------------------
+
+test('§15.1: ffmpeg banner parser maps streams/duration into probe shape', () => {
+  const { _parseFfmpegBanner } = require(path.join(ROOT, 'main', 'services', 'mediaProbe'));
+  const banner = [
+    'ffmpeg version 6.1.1-static',
+    "Input #0, mp4, from 'demo.mp4':",
+    '  Duration: 00:00:12.34, start: 0.000000, bitrate: 512 kb/s',
+    '  Stream #0:0[0x1](und): Video: h264 (High), yuv420p, 1280x720, 30 fps',
+    '  Stream #0:1[0x2](und): Audio: aac (LC), 44100 Hz, stereo, fltp',
+  ].join('\n');
+  const data = _parseFfmpegBanner(banner);
+  assert.equal(data.format.format_name, 'mp4');
+  assert.equal(data.format.duration, '12.34');
+  assert.equal(data.streams.length, 2);
+  assert.equal(data.streams[0].codec_type, 'video');
+  assert.equal(data.streams[0].width, 1280);
+  assert.equal(data.streams[0].height, 720);
+  assert.equal(data.streams[1].codec_type, 'audio');
+  const withData = _parseFfmpegBanner('Input #0, mkv, from \'x.mkv\':\n  Stream #0:2: Data: bin_data');
+  assert.equal(withData.streams[0].codec_type, 'data', 'data streams stay detectable for rejection');
+});
+
+test('§15.1: probeMedia falls back to the locked ffmpeg when ffprobe is absent', async () => {
+  const mp = require(path.join(ROOT, 'main', 'services', 'mediaProbe'));
+  mp._resetFfmpegCacheForTest();
+  const ffmpeg = mp.resolveFfmpeg();
+  assert.ok(ffmpeg && fs.existsSync(ffmpeg), 'locked ffmpeg-static binary resolves');
+  mp._setFfprobeCacheForTest(null); // simulate the legacy runtime without ffprobe
+  try {
+    const video = path.join(ROOT, 'bin', 'onepiece_demo.mp4');
+    assert.ok(fs.existsSync(video), 'demo video fixture exists');
+    const res = await mp.probeMedia(video, { modality: 'video', maxDurationSec: 3600 });
+    assert.equal(res.ok, true, `ffmpeg fallback probe ok (${res.error || ''})`);
+    assert.ok(res.duration > 0, 'positive duration extracted');
+    assert.ok(res.streams.some((s) => s.codec_type === 'video'), 'video stream detected');
+    assert.ok(res.streams.some((s) => s.width > 0 && s.height > 0), 'dimensions extracted');
+  } finally {
+    mp._resetFfprobeCacheForTest();
+  }
+});
+
+test('§15.1: ffmpeg fallback fails closed on corrupt input', async () => {
+  const mp = require(path.join(ROOT, 'main', 'services', 'mediaProbe'));
+  mp._setFfprobeCacheForTest(null);
+  const dir = tmpDir('mp-ffmpeg-fallback-');
+  try {
+    const bad = path.join(dir, 'bad.mp4');
+    fs.writeFileSync(bad, Buffer.from('this is not media data at all'));
+    const res = await mp.probeMedia(bad, { modality: 'video' });
+    assert.equal(res.ok, false, 'corrupt input is rejected');
+  } finally {
+    mp._resetFfprobeCacheForTest();
+    rmrf(dir);
+  }
+});

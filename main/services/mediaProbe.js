@@ -118,6 +118,129 @@ function resolveFfprobe() {
 /** Test hook: clear the discovery cache. */
 function _resetFfprobeCacheForTest() { _ffprobeCache = undefined; }
 
+/** Test hook: force the discovery cache to a fixed value (null = absent). */
+function _setFfprobeCacheForTest(value) { _ffprobeCache = value; }
+
+// ---------------------------------------------------------------------------
+// FFmpeg fallback probe (spec §15.1 FFprobe-Sonderfall, priority 1)
+//
+// The legacy 1.0.0 release shell (and its lock) predates ffprobe.exe, so the
+// composed legacy candidate must not add a new ffprobe PE. Instead, probing
+// reuses the FFmpeg flow already locked into the runtime: the pinned
+// ffmpeg-static ffmpeg.exe. Same security envelope as the ffprobe path:
+// shell disabled, fixed argument array, timeout, output cap, no PATH, no
+// network protocols (ffmpeg's default file whitelist is file,pipe,crypto,
+// data — no network), and the result is validated by the identical
+// validateProbeResult constraints.
+// ---------------------------------------------------------------------------
+
+let _ffmpegCache;
+
+/**
+ * Discover the locked ffmpeg-static binary (asar-unpacked in releases).
+ * Never falls back to PATH (H-004).
+ * @returns {string|null}
+ */
+function resolveFfmpeg() {
+  if (_ffmpegCache !== undefined) return _ffmpegCache;
+  try {
+    const fs = require('fs');
+    const ffmpegPath = require('ffmpeg-static');
+    const candidate = ffmpegPath ? _asarUnpacked(ffmpegPath) : null;
+    _ffmpegCache = candidate && fs.existsSync(candidate) ? candidate : null;
+  } catch (_) {
+    _ffmpegCache = null;
+  }
+  return _ffmpegCache;
+}
+
+/** Test hook: clear the ffmpeg discovery cache. */
+function _resetFfmpegCacheForTest() { _ffmpegCache = undefined; }
+
+/**
+ * Parse ffmpeg's input banner (stderr of `ffmpeg -hide_banner -i <file>
+ * -f null -`) into an ffprobe-shaped structure so the exact same
+ * validateProbeResult constraints apply.
+ * @param {string} text
+ * @returns {{streams: object[], format: {duration: string, format_name: string}}}
+ */
+function _parseFfmpegBanner(text) {
+  const streams = [];
+  const format = { duration: '', format_name: 'unknown' };
+  const inputMatch = /Input #\d+, ([^,]+),/.exec(text);
+  if (inputMatch) format.format_name = inputMatch[1].trim();
+  const durMatch = /Duration: (\d+):(\d+):(\d+(?:\.\d+)?)/.exec(text);
+  if (durMatch) {
+    format.duration = String(
+      Number(durMatch[1]) * 3600 + Number(durMatch[2]) * 60 + Number(durMatch[3]),
+    );
+  }
+  const streamRe = /^\s*Stream #\d+:\d+(?:\[[^\]]*\])?(?:\([^)]*\))?: (\w+): (.*)$/gm;
+  let m;
+  while ((m = streamRe.exec(text)) !== null) {
+    const stream = { codec_type: m[1].toLowerCase() };
+    if (stream.codec_type === 'video') {
+      const dim = /(\d{2,5})x(\d{2,5})/.exec(m[2]);
+      if (dim) {
+        stream.width = Number(dim[1]);
+        stream.height = Number(dim[2]);
+      }
+    }
+    streams.push(stream);
+  }
+  return { streams, format };
+}
+
+/**
+ * Probe via the locked ffmpeg.exe. `-t 0` makes ffmpeg open the input,
+ * analyze its streams and exit immediately without decoding — a corrupt or
+ * unreadable input yields a non-zero exit code and fails closed.
+ */
+function _probeViaFfmpeg(ffmpeg, filePath, constraints, signal) {
+  const args = [
+    '-hide_banner',
+    '-nostdin',
+    '-analyzeduration', '5000000',
+    '-probesize', '5000000',
+    '-i', filePath,
+    '-t', '0',
+    '-f', 'null',
+    '-',
+  ];
+  return new Promise((resolve) => {
+    if (signal?.aborted) {
+      resolve({ ok: false, error: 'Aborted before probe.' });
+      return;
+    }
+    const child = execFile(ffmpeg, args, {
+      timeout: PROBE_TIMEOUT_MS,
+      maxBuffer: PROBE_OUTPUT_CAP,
+      shell: false,
+      windowsHide: true,
+    }, (error, _stdout, stderr) => {
+      if (error) {
+        if (error.killed || (error.signal && error.signal === 'SIGTERM')) {
+          resolve({ ok: false, error: 'ffmpeg probe timed out.' });
+        } else {
+          resolve({ ok: false, error: `ffmpeg probe failed: ${(error.message || '').slice(0, 200)}` });
+        }
+        return;
+      }
+      if (!stderr || stderr.length > PROBE_OUTPUT_CAP) {
+        resolve({ ok: false, error: 'ffmpeg probe output too large or empty.' });
+        return;
+      }
+      const data = _parseFfmpegBanner(stderr);
+      validateProbeResult(data, resolve, constraints);
+    });
+    if (signal) {
+      const onAbort = () => { try { child.kill('SIGTERM'); } catch (_) {} };
+      signal.addEventListener('abort', onAbort, { once: true });
+      child.on('close', () => signal.removeEventListener('abort', onAbort));
+    }
+  });
+}
+
 /**
  * Probe a media file and validate it against modality constraints.
  * @param {string} filePath - Canonical path to the staged file
@@ -134,8 +257,23 @@ function _resetFfprobeCacheForTest() { _ffprobeCache = undefined; }
 async function probeMedia(filePath, opts, signal) {
   const ffprobe = resolveFfprobe();
   // M-004 (hhhhu2 audit): fail with a clear diagnostic when ffprobe is absent.
+  // §15.1 priority 1: when the packaged runtime has no ffprobe (legacy seed),
+  // fall back to the locked ffmpeg-static binary instead of failing.
   if (!ffprobe) {
-    return { ok: false, error: 'ffprobe is not available. Audio/video validation requires the bundled ffprobe binary. Reinstall the application.' };
+    const ffmpeg = resolveFfmpeg();
+    if (!ffmpeg) {
+      return { ok: false, error: 'ffprobe is not available. Audio/video validation requires the bundled ffprobe binary. Reinstall the application.' };
+    }
+    if (!MODALITY_STREAM[opts.modality]) {
+      return { ok: false, error: `Cannot probe modality: ${opts.modality}` };
+    }
+    return _probeViaFfmpeg(ffmpeg, filePath, {
+      expectedStreamType: MODALITY_STREAM[opts.modality],
+      maxDuration: opts.maxDurationSec || 3600,
+      maxWidth: opts.maxWidth || 7680,
+      maxHeight: opts.maxHeight || 4320,
+      maxStreams: opts.maxStreams || 10,
+    }, signal);
   }
   const maxDuration = opts.maxDurationSec || 3600; // 1 hour default
   const maxWidth = opts.maxWidth || 7680;
@@ -273,4 +411,14 @@ function validateProbeResult(data, resolve, constraints) {
   });
 }
 
-module.exports = { probeMedia, resolveFfprobe, _resetFfprobeCacheForTest, PROBE_TIMEOUT_MS, MODALITY_STREAM };
+module.exports = {
+  probeMedia,
+  resolveFfprobe,
+  resolveFfmpeg,
+  _resetFfprobeCacheForTest,
+  _setFfprobeCacheForTest,
+  _resetFfmpegCacheForTest,
+  _parseFfmpegBanner,
+  PROBE_TIMEOUT_MS,
+  MODALITY_STREAM,
+};

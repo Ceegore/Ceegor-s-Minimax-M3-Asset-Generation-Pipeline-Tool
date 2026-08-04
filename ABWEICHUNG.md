@@ -78,3 +78,34 @@ Abweichung von der Vorgabe festgehalten.
   nachgeholt.
 - **Abnahmeentscheidung:** Entspricht den im Skript selbst dokumentierten
   Opt-outs; endgültige Abnahme erfolgt mit den §16.7- und §17-Gates.
+
+## A-004 — Legacy-Kandidat ohne `ffprobe.exe` (Seed-Gleichheit vor Manifest)
+
+- **Ursprüngliche Vorgabe:** `scripts/runtime-assets.json` verlangt
+  `ffprobe.exe` in jedem vollständigen Offline-Release (`npm run check`
+  prüft die Quelle dagegen grün).
+- **Technische Ursache:** Der Legacy-Seed 1.0.0
+  (`C:\Tools\MinimaxAssetTool1.0.0\resources\bin`) enthält kein
+  `ffprobe.exe` — es wurde erst nach 1.0.0 eingeführt. §14 verlangt exakte
+  PE-Gleichheit des komponierten Kandidaten mit dem Lock; eine zusätzliche
+  PE würde die Komposition hart abbrechen.
+- **Gewählte Alternative:** Der Release-Donor (`build-unpacked.js`)
+  verschifft `ffprobe.exe` bewusst nicht; seine Verpackt-Prüfung nutzt eine
+  dokumentierte, explizite `skipPaths`-Ausnahme in `verifyRuntimeAssets`
+  (nur exakte Manifestpfade, auditierbar im Aufruf). Dev-/QA-Builds nutzen
+  weiter den `@ffprobe-installer/ffprobe`-Wrapper aus den Dependencies.
+- **Risiko:** Der paketierten Legacy-Kandidat hat kein `resources/bin/ffprobe.exe`;
+  Media-Probing läuft über die gebündelten ffmpeg/Wrapper-Pfade der App.
+  Die Clean-VM-Acceptance (§18) und die Funktionsmatrix (§17.5/§17.9) auf
+  dem echten Kandidaten bestätigen das Verhalten.
+- **Konsequenz für Phase 2:** Mit dem SignPath-Release 1.1.0 (neue
+  signierte Laufzeit) kehrt `ffprobe.exe` gemäß Manifest in den Releasebaum
+  zurück.
+
+## A-005 - Media-Probing-Fallback ueber gesperrtes FFmpeg (Spezifikation 15.1 Prioritaet 1)
+
+- **Urspruengliche Vorgabe:** `main/services/mediaProbe.js` validiert Audio/Video ausschliesslich ueber ffprobe; ohne ffprobe scheitert `probeMedia` hart (und damit jede Audio-/Videogenerierung ueber `ArtifactFinalizer` Schritt 5).
+- **Technische Ursache:** Der Legacy-Seed/das Lock 1.0.0 enthaelt kein `ffprobe.exe` (siehe A-004); Abschnitt 14 verbietet jede zusaetzliche PE im komponierten Kandidaten.
+- **Gewahlte Alternative:** Abschnitt 15.1 Prioritaet 1 - den vorhandenen kompatiblen FFmpeg-Flow verwenden: `probeMedia` nutzt bei abwesendem ffprobe das bereits im Lock verankerte, hash-gepinnte `ffmpeg-static` ffmpeg.exe (Lock-PE `04e13079`, bereits Bestandteil jeder Laufzeit) mit fester Argumentfolge `-hide_banner -nostdin -analyzeduration 5000000 -probesize 5000000 -i <datei> -t 0 -f null -` und wendet exakt dieselben `validateProbeResult`-Schranken an. Gleiche Sicherheitshuelle: shell:false, fixes argv, 15 s Timeout, 1 MiB Ausgabe-Cap, kein PATH, keine Netzwerkprotokolle. Zusaetzlich verschifft der Donor `@ffprobe-installer` nicht mehr (`package.json` build.files/asarUnpack), damit die Donor-PE-Menge exakt dem Lock entspricht; Dev/QA (`npm start`, Unit-Tests) nutzt die npm-Abhaengigkeit weiter.
+- **Risiko:** Das Banner-Parsing erfasst weniger Metadaten als ffprobe-JSON - aber genau die Felder, die die Validierung verwendet (codec_type, Abmessungen, Dauer, Format). Abgedeckt durch drei neue Abschnitt-15.1-Unit-Tests sowie die Abschnitt-17.4/16.7-Matrizen auf dem realen Kandidaten.
+- **Konsequenz fuer Phase 2:** Mit 1.1.0 kehrt `ffprobe.exe` gemaess Manifest zurueck; der ffprobe-Primaerpfad von `probeMedia` bleibt unveraendert.
