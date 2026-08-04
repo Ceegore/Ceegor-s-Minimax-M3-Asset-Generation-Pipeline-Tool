@@ -1,0 +1,300 @@
+# .github/workflows/release-legacy-final.yml
+# ============================================================================
+# One-time Phase-1 workflow (spec §19): the FINAL legacy-compatible release.
+#
+# Properties (all mandated by §19):
+#   - workflow_dispatch ONLY — no tag trigger, no automatic publication.
+#   - Version input is locked to 1.0.7; any other value refuses to run.
+#   - Qualification and candidate creation are SEPARATE jobs.
+#   - The candidate is published as an immutable workflow artifact; the
+#     publication job ships EXACTLY that tested artifact — nothing else.
+#   - Publication is gated on the protected `legacy-publication`
+#     environment (required reviewer).
+#   - releaseMode: legacy-compatible-transition (LEGACY_RUNTIME_NOTICE.json).
+#   - Integrity = SHA-256 inventory manifest + detached Minisign signature +
+#     provenance + SBOM. This workflow makes NO Authenticode claim.
+#   - All actions are pinned to full commit SHAs; minimal token permissions.
+#
+# After v1.0.7 is published this workflow is retired (spec §22) and a CI
+# test forbids re-adding the legacy compose flow.
+# ============================================================================
+
+name: release-legacy-final
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Release version — locked to 1.0.7 for this one-time workflow'
+        required: true
+        type: string
+        default: '1.0.7'
+
+permissions: {}
+
+concurrency:
+  group: release-legacy-final
+  cancel-in-progress: false
+
+env:
+  LOCKED_VERSION: '1.0.7'
+  SEED_RELEASE_TAG: 'legacy-shell-seed-2026-08-04'
+
+jobs:
+  # --------------------------------------------------------------------------
+  # Job 1: full local-qualification gate inventory (§16.1) on the branch.
+  # --------------------------------------------------------------------------
+  qualify:
+    name: Qualification gates (§16.1)
+    if: inputs.version == '1.0.7'
+    runs-on: windows-latest
+    timeout-minutes: 300
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: '22'
+          cache: 'npm'
+
+      - name: Version lock (input AND package.json must be 1.0.7)
+        run: |
+          node -e "const v=require('./package.json').version; if(v!=='${{ env.LOCKED_VERSION }}'){console.error('package.json version '+v+' != ${{ env.LOCKED_VERSION }}');process.exit(1)}"
+
+      - name: Clean tree guard
+        run: git status --short; if ((git status --porcelain | Measure-Object -Line).Lines -ne 0) { throw 'Worktree is not clean.' }
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Setup offline runtime (downloads, staged activation)
+        run: npm run setup
+
+      - name: Verify offline runtime (size + SHA-256)
+        run: npm run check
+
+      - name: Dependency drift check
+        run: npm run check:deps
+
+      - name: Architecture lint
+        run: npm run lint
+
+      - name: Unit tests (with line coverage)
+        run: npm run test:coverage
+
+      - name: Unit coverage gate
+        run: npm run test:coverage:gate -- --threshold=50
+
+      - name: Contract gate (sanctioned skip — see ABWEICHUNG.md A-003)
+        env:
+          MMX_CONTRACT_OPTIONAL: '1'
+        run: npm run test:contract
+
+      - name: IPC coverage gate
+        run: npm run test:ipc-coverage -- --threshold=95
+
+      - name: Mutation battery
+        run: npm run test:mutation
+
+      - name: Flakiness qualification (no release present yet — acceptance phase opted out)
+        env:
+          MMX_CONTRACT_OPTIONAL: '1'
+          FLAKY_SKIP_ACCEPTANCE: '1'
+        run: npm run test:flaky
+
+      - name: E2E
+        run: npm run test:e2e -- --surface-threshold=96
+
+      - name: Smoke
+        run: npm run test:smoke
+
+  # --------------------------------------------------------------------------
+  # Job 2: compose the legacy-compatible candidate, package, sign (Minisign),
+  # verify, run legacy-mode acceptance, and publish the immutable artifact.
+  # --------------------------------------------------------------------------
+  candidate:
+    name: Compose + package + verify candidate
+    needs: qualify
+    runs-on: windows-latest
+    timeout-minutes: 240
+    permissions:
+      contents: read
+    env:
+      MINIMAX_RELEASE_MODE: 'legacy'
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: '22'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Setup offline runtime
+        run: npm run setup
+
+      - name: Verify offline runtime
+        run: npm run check
+
+      - name: Download the pinned legacy seed release asset
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          New-Item -ItemType Directory -Path seed-download | Out-Null
+          gh release download ${{ env.SEED_RELEASE_TAG }} --repo ${{ github.repository }} --pattern '*.zip' --dir seed-download
+          # materialize-legacy-seed.ps1 identifies archives by the release
+          # naming convention — rename the pinned seed asset into it.
+          $asset = Get-ChildItem seed-download -File | Select-Object -First 1
+          if (-not $asset) { throw 'Seed asset download failed.' }
+          Move-Item -LiteralPath $asset.FullName -Destination (Join-Path 'seed-download' 'MiniMaxAssetTool-1.0.0-legacy-seed-x64.zip')
+
+      - name: Materialize the legacy seed
+        id: seed
+        run: |
+          .\scripts\materialize-legacy-seed.ps1 -DownloadDir seed-download -OutputDir legacy-seed
+
+      - name: Build the current unsigned content donor
+        run: node scripts/build-unpacked.js --out dist-work/current
+
+      - name: Compose the legacy-compatible runtime (hard PE equality)
+        run: |
+          node scripts/compose-legacy-release.js `
+            --seed "${{ steps.seed.outputs.seed_path }}" `
+            --current "dist-work/current/win-unpacked" `
+            --out "dist-out/win-unpacked" `
+            --lock "scripts/legacy-shell.lock.json" `
+            --version "${{ env.LOCKED_VERSION }}" `
+            --commit "${{ github.sha }}"
+
+      - name: Package the composed candidate
+        run: npm run package:existing
+
+      - name: SBOM
+        run: npm run sbom
+
+      - name: Finalize release inventory
+        run: npm run finalize:release
+
+      - name: Prepare pinned Minisign toolchain
+        env:
+          MINISIGN_KEY_B64: ${{ secrets.MINISIGN_KEY_B64 }}
+          MINISIGN_PUB_KEY: ${{ secrets.MINISIGN_PUB_KEY }}
+        run: .\scripts\prepare-minisign.ps1
+
+      - name: Sign the release inventory (Minisign — integrity only)
+        run: npm run sign:release
+
+      - name: Verify the release (legacy mode — no Authenticode requirement)
+        run: npm run verify:release:legacy
+
+      - name: Verify the signing scope (legacy mode)
+        run: |
+          node scripts/verify-signing-scope.js `
+            --mode legacy `
+            --root "dist-out/win-unpacked" `
+            --legacy-lock "scripts/legacy-shell.lock.json"
+
+      - name: Legacy-mode acceptance — packaged release
+        run: npm run test:packaged:release
+
+      - name: Legacy-mode acceptance — installer
+        run: npm run test:installer
+
+      - name: Legacy-mode acceptance — acceptance suite
+        run: npm run test:acceptance
+
+      - name: Stage the publication inventory
+        run: npm run stage:publication
+
+      - name: Upload the immutable candidate artifact
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: MiniMaxAssetTool-1.0.7-legacy-candidate
+          path: dist-out/publication/*
+          if-no-files-found: error
+          retention-days: 90
+
+  # --------------------------------------------------------------------------
+  # Job 3: publication — manual approval via the protected environment, then
+  # ships EXACTLY the tested candidate artifact as release v1.0.7 (§20).
+  # --------------------------------------------------------------------------
+  publish:
+    name: Publish v1.0.7 (environment-gated)
+    needs: candidate
+    runs-on: windows-latest
+    timeout-minutes: 90
+    environment: legacy-publication
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: '22'
+          cache: 'npm'
+
+      - name: Download EXACTLY the tested candidate artifact
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
+        with:
+          name: MiniMaxAssetTool-1.0.7-legacy-candidate
+          path: dist-out
+
+      - name: Prepare pinned Minisign toolchain (verification only)
+        env:
+          MINISIGN_KEY_B64: ${{ secrets.MINISIGN_KEY_B64 }}
+          MINISIGN_PUB_KEY: ${{ secrets.MINISIGN_PUB_KEY }}
+        run: .\scripts\prepare-minisign.ps1
+
+      - name: Verify the staged publication before shipping
+        env:
+          MINIMAX_RELEASE_MODE: 'legacy'
+        run: npm run verify:release:legacy
+
+      - name: Write the release notes (§20)
+        run: |
+          @'
+          # MiniMax Asset Tool 1.0.7
+
+          Version 1.0.7 is the final legacy-compatible 1.0.x release.
+
+          It contains the current application code and complete offline runtime. To
+          avoid reintroducing the Windows execution problem that affected newly built
+          unsigned launchers, this transition release keeps the previously validated
+          Windows runtime binaries byte-identical and updates the Electron application
+          content through `resources/app.asar`.
+
+          This is not a newly Authenticode-signed release and does not establish a new
+          verified Windows publisher. Integrity is protected through SHA-256 manifests,
+          a detached Minisign signature, build provenance, and an SBOM.
+
+          Do not disable Microsoft Defender, SmartScreen, Smart App Control, or add
+          antivirus exclusions. Download only from this repository and verify the
+          published files.
+
+          The next release line is being prepared for managed Authenticode signing.
+          '@ | Set-Content -Path release-notes.md -Encoding utf8
+
+      - name: Create the immutable release v1.0.7 with the exact tested files
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create v${{ env.LOCKED_VERSION }} --repo ${{ github.repository }} `
+            --target ${{ github.sha }} `
+            --title 'MiniMax Asset Tool v1.0.7 — Final legacy-compatible release' `
+            --notes-file release-notes.md `
+            (Get-ChildItem dist-out -File | ForEach-Object { $_.FullName })
+
+      - name: Post-publication verification (re-download + manifest + Minisign)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          New-Item -ItemType Directory -Path redownload | Out-Null
+          gh release download v${{ env.LOCKED_VERSION }} --repo ${{ github.repository }} --dir redownload
+          & $env:MINISIGN_TOOL_PATH -V -m redownload/MiniMaxAssetTool-1.0.7-x64.sha256 -p $env:MINISIGN_PUB_PATH -x redownload/MiniMaxAssetTool-1.0.7-x64.sha256.minisig
+          if ($LASTEXITCODE -ne 0) { throw 'Re-downloaded manifest failed Minisign verification.' }
+          Write-Host 'Post-publication verification passed: manifest signature valid against the pinned key.'

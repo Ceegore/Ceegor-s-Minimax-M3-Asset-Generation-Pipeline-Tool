@@ -53,3 +53,28 @@ Abweichung von der Vorgabe festgehalten.
 - **Konsequenz für compose:** `state.json`/`batches.json` sind weder im Lock
   noch mutable Präfixe; der Compose-Schritt kopiert sie nicht, der
   Erststart legt sie neu an (entspricht dem Verhalten einer Neuinstallation).
+
+## A-003 — Vorqualifikation: Contract-Skip und Flaky-Acceptance-Opt-out
+
+- **Ursprüngliche Vorgabe:** §16.1 verlangt `npm run test:contract` als
+  Pflichtgate; Contract-Skips sind nur „bei dokumentierter externer Quota und
+  mit manuellem Ersatztest“ zulässig. Der Flaky-Läufer führt zudem eine
+  Installer-Acceptance-Phase gegen ein fertiges Release in `dist-out` aus.
+- **Technische Ursache:** Die Contract-Tests rufen die echte MiniMax-API ab
+  und verbrauchen bezahlt Credits; das Repository sieht dafür ausdrücklich
+  den sanktionierten Skip `MMX_CONTRACT_OPTIONAL=1` vor. Zum Zeitpunkt der
+  Vorqualifikation existiert der 1.0.7-Kandidat noch nicht — `dist-out`
+  enthält nur Alt-Releases (1.0.1/1.0.2/1.0.4), gegen die die
+  Acceptance-Phase keine gültige 1.0.7-Evidenz liefern kann.
+- **Gewählte Alternative:** Die Vorqualifikation läuft mit
+  `MMX_CONTRACT_OPTIONAL=1` (sanktionierter Skip, Exit 0) und
+  `FLAKY_SKIP_ACCEPTANCE=1` (eingebauter Opt-out des Flaky-Läufers).
+  Der manuelle Ersatztest ist die Funktionsmatrix §17 (BatchGen je
+  Medientyp §17.4) auf dem paketierten 1.0.7-Kandidaten sowie die
+  Legacy-Acceptance §16.7 (`test:packaged:release`, `test:installer`,
+  `test:acceptance` mit `MINIMAX_RELEASE_MODE=legacy`) nach der Komposition.
+- **Risiko:** Kein zusätzlicher Flakiness-Nachweis gegen ein reales Release
+  vor der Komposition — dieser wird durch §16.7 auf dem echten Kandidaten
+  nachgeholt.
+- **Abnahmeentscheidung:** Entspricht den im Skript selbst dokumentierten
+  Opt-outs; endgültige Abnahme erfolgt mit den §16.7- und §17-Gates.
