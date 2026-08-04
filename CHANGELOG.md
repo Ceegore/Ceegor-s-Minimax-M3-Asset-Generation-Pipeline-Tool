@@ -2,6 +2,40 @@
 
 Notable user-facing changes are recorded here.
 
+## 1.0.7 - 2026-08-04
+
+Final legacy-compatible 1.0.x release. It ships the exact hash-locked runtime
+binaries of the locally proven, warning-free 1.0.0 installation (new
+application code only via `resources/app.asar`) and corrects every previous
+false code-signing claim. Integrity is provided by Minisign + SHA-256
+inventories only; this release is NOT Authenticode-signed (see README and
+`LEGACY_RUNTIME_NOTICE.json` inside the package).
+
+### Changed
+
+- Release build is decomposed: an unpacked donor build
+  (`scripts/build-unpacked.js`) is composed against the byte-locked legacy
+  shell (`scripts/compose-legacy-release.js` + `scripts/legacy-shell.lock.json`)
+  before packaging (`zip-portable.js --package-existing`). Every shipped PE
+  must match the lock exactly; any mismatch aborts the release.
+- The outer publication manifest no longer lists the internal unpacked
+  executable; the archive-internal `FILES.sha256` inventory continues to
+  protect it.
+- Documentation (README, START HERE, SECURITY, release docs, UI texts) now
+  states the truth: no Authenticode signature, no "verified publisher";
+  trust anchors are the pinned Minisign key and SHA-256 chains. Guidance to
+  disable Defender/SmartScreen or "Run anyway" is explicitly forbidden and
+  absent.
+
+### Fixed
+
+- Coverage gate: waived critical modules are now evaluated against their
+  documented waiver scope per metric, so Node coverage noise on waived lines
+  can no longer fail the gate while strict floors still apply to everything
+  outside the documented scope.
+- E2E persistence scenario: `state.json` is now read with a bounded polling
+  loop, removing the truncation-race flake ("Unexpected end of JSON input").
+
 ## 1.0.6 - 2026-08-04
 
 Release-gate repairs for the v1.0.5 tag run (CI red on E2E, flakiness, and mutation). No feature changes; every fix ships in a new immutable tag.
