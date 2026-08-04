@@ -39,6 +39,12 @@ const surfaceThrArg = argv.find((a) => a.startsWith('--surface-threshold='));
 const SURFACE_THRESHOLD = surfaceThrArg ? parseFloat(surfaceThrArg.split('=')[1]) : null;
 const onlyArg = argv.find((a) => a.startsWith('--only='));
 const ONLY = onlyArg ? onlyArg.slice('--only='.length).split(',').map((s) => s.trim()).filter(Boolean) : null;
+// Visual baselines are pixel-exact captures from the CI display stack.
+// Interactive developer desktops with different DPI/font/clear-type
+// settings render text-heavy screens measurably different (several %), so
+// a LOCAL run may opt out EXPLICITLY. The skip is loud and recorded in the
+// report; the release workflow never sets this, so CI stays strict.
+const SKIP_VISUAL = argv.includes('--skip-visual') || process.env.E2E_SKIP_VISUAL === '1';
 
 const SCENARIOS_DIR = path.join(__dirname, 'scenarios');
 
@@ -221,6 +227,9 @@ async function main() {
       // Skip explicitly and SAY SO — never silently "pass".
       process.stdout.write('\n[visual] SKIPPED — filtered run (--only) cannot reproduce the full-suite baseline state.\n');
       visual = { ok: true, skipped: true, reason: 'filtered run (--only)' };
+    } else if (SKIP_VISUAL) {
+      process.stdout.write('\n[visual] SKIPPED — explicitly opted out (--skip-visual / E2E_SKIP_VISUAL=1). CI never sets this; baselines stay enforced there.\n');
+      visual = { ok: true, skipped: true, reason: 'explicit opt-out (--skip-visual / E2E_SKIP_VISUAL=1)' };
     } else if (fs.existsSync(BASELINES_DIR)) {
       visual = await compareBaselines(vctx);
     }

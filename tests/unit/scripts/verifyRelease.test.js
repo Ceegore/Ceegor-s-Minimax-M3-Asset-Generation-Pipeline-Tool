@@ -176,8 +176,45 @@ test('evaluate PASSES on a complete, consistent single-archive release', () => {
     makeRealZip(paths.archive);
     const easyInstaller = path.join(paths.output, 'Install MiniMax Asset Tool.cmd');
     fs.writeFileSync(easyInstaller, '@echo off\r\n', 'utf8');
-    // H-067: manifest must include ALL expected release files (completeness).
+    // QA-025: provenance is now required.
+    fs.writeFileSync(paths.provenance, JSON.stringify({
+      version: '9.8.7', electronVersion: '99.0.0', asarSha256: null,
+      commit: '0123456789ab', commitDirty: false,
+    }), 'utf8');
+    // H-067 + V104-C002: manifest must include ALL expected release files
+    // (completeness) — now INCLUDING the provenance record, which is a
+    // first-class signed artifact.
     // Use forward-slash relative paths (matching the releaseArtifacts.relative() convention).
+    const exeRel = path.relative(paths.output, paths.executable).replace(/\\/g, '/');
+    const provRel = path.relative(paths.output, paths.provenance).replace(/\\/g, '/');
+    const manifestLines = [
+      `${infoFor(easyInstaller).sha256}  ${path.basename(easyInstaller)}`,
+      `${infoFor(paths.executable).sha256}  ${exeRel}`,
+      `${infoFor(paths.archive).sha256}  ${path.basename(paths.archive)}`,
+      `${infoFor(paths.provenance).sha256}  ${provRel}`,
+    ];
+    fs.writeFileSync(paths.manifest, manifestLines.join('\n') + '\n', 'utf8');
+    const report = evaluate(root, { requireArchive: true });
+    assert.equal(report.errors.length, 0, 'errors: ' + report.errors.join('; '));
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('V104-C002: evaluate FAILS when the manifest omits the provenance entry', () => {
+  const root = fixtureRoot();
+  try {
+    const paths = releasePaths(root);
+    fs.mkdirSync(paths.output, { recursive: true });
+    makeExe(root);
+    makeRealZip(paths.archive);
+    const easyInstaller = path.join(paths.output, 'Install MiniMax Asset Tool.cmd');
+    fs.writeFileSync(easyInstaller, '@echo off\r\n', 'utf8');
+    fs.writeFileSync(paths.provenance, JSON.stringify({
+      version: '9.8.7', electronVersion: '99.0.0', asarSha256: null,
+      commit: '0123456789ab', commitDirty: false,
+    }), 'utf8');
+    // Manifest WITHOUT the provenance entry — the completeness gate must catch it.
     const exeRel = path.relative(paths.output, paths.executable).replace(/\\/g, '/');
     const manifestLines = [
       `${infoFor(easyInstaller).sha256}  ${path.basename(easyInstaller)}`,
@@ -185,13 +222,9 @@ test('evaluate PASSES on a complete, consistent single-archive release', () => {
       `${infoFor(paths.archive).sha256}  ${path.basename(paths.archive)}`,
     ];
     fs.writeFileSync(paths.manifest, manifestLines.join('\n') + '\n', 'utf8');
-    // QA-025: provenance is now required.
-    fs.writeFileSync(paths.provenance, JSON.stringify({
-      version: '9.8.7', electronVersion: '99.0.0', asarSha256: null,
-      commit: '0123456789ab', commitDirty: false,
-    }), 'utf8');
     const report = evaluate(root, { requireArchive: true });
-    assert.equal(report.errors.length, 0, 'errors: ' + report.errors.join('; '));
+    assert.ok(report.errors.length > 0, 'a manifest missing the provenance entry must fail');
+    assert.match(report.errors.join(' '), /provenance/i);
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }

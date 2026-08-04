@@ -10,6 +10,9 @@ const fs = require('fs');
 const path = require('path');
 const { randomUUID } = require('crypto');
 const providersStore = require('../../src/providersStore');
+// V104-H004: strict payload schema for providers:set (full replacements
+// must never wipe the store or orphan credential blobs).
+const { validateProvidersSetPayload } = require('../../src/providersPayloadSchema');
 const openaiCompat = require('../../src/providers/openaiCompatible');
 const replicate = require('../../src/providers/replicate');
 // Reuse (call-only) the SAME grant authorizer the tested mmx write path uses.
@@ -124,6 +127,13 @@ function register({ getMainWindow }) {
 
   secureHandle('providers:set', { getMainWindow }, async (_e, data) => {
     try {
+      // V104-H004: STRICT top-level schema BEFORE anything else. A
+      // malformed full replacement is rejected atomically — no store
+      // write and no key operation happens, so an empty/duplicate-id/
+      // builtin-dropping payload can neither wipe providers.json nor
+      // orphan encrypted credential blobs.
+      const schema = validateProvidersSetPayload(data);
+      if (!schema.ok) return { ok: false, error: schema.error };
       // B-004: built-in provider origins are immutable — reject any attempt
       // to change the baseUrl or kind of openrouter/replicate outright (the
       // store additionally re-pins them at read/write time as defense in
@@ -150,29 +160,16 @@ function register({ getMainWindow }) {
           }
         }
       }
-      // P1-D (C-008, H-020): validate ALL provider base URLs for SSRF safety.
-      // Even in dev mode, block localhost/private IPs to prevent accidental SSRF.
-      // MED-041: basic schema validation for each provider entry.
-      if (data && Array.isArray(data.providers)) {
-        for (const p of data.providers) {
-          // MED-041: reject entries without a string id or with unknown fields
-          // that could confuse the store.
-          if (!p.id || typeof p.id !== 'string') {
-            return { ok: false, error: 'Each provider must have a string "id" field.' };
-          }
-          if (p.kind && typeof p.kind !== 'string') {
-            return { ok: false, error: `Provider "${p.id}": "kind" must be a string.` };
-          }
-          if (p.baseUrl && typeof p.baseUrl !== 'string') {
-            return { ok: false, error: `Provider "${p.id}": "baseUrl" must be a string.` };
-          }
-          if (p.baseUrl && typeof p.baseUrl === 'string' && p.baseUrl.length > 0) {
-            // H-018 (_5 audit): use the ASYNC DNS-validating variant so a
-            // hostname that resolves to a private IP is caught at set-time.
-            const urlCheck = await validateProviderUrlWithDns(p.baseUrl, { allowHttp: !require('electron').app.isPackaged });
-            if (!urlCheck.ok) {
-              return { ok: false, error: `Provider "${p.label || p.id}": ${urlCheck.error}` };
-            }
+      // P1-D (C-008, H-020): SSRF-validate every provider base URL.
+      // V104-H004: structural per-entry checks (id/kind/baseUrl types)
+      // moved into src/providersPayloadSchema.js (see the schema gate above).
+      for (const p of data.providers) {
+        if (p.baseUrl && p.baseUrl.length > 0) {
+          // H-018 (_5 audit): async DNS-validating variant catches a
+          // hostname that resolves to a private IP at set-time.
+          const urlCheck = await validateProviderUrlWithDns(p.baseUrl, { allowHttp: !app.isPackaged });
+          if (!urlCheck.ok) {
+            return { ok: false, error: `Provider "${p.label || p.id}": ${urlCheck.error}` };
           }
         }
       }

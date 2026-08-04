@@ -1,0 +1,85 @@
+{
+  "noiseTolerancePoints": 5,
+  "files": {
+    "providersStore.js": {
+      "line": 78, "branch": 78, "function": 81,
+      "reason": "Encrypted credential repository: OS keychain fallback paths and legacy-migration branches are not unit-reachable.",
+      "remediation": "Extract the fallback/migration branches behind an injectable keychain and cover them."
+    },
+    "providersPayloadSchema.js": {
+      "line": 96, "branch": 95, "function": 100,
+      "reason": "Defensive type-coercion branches for hostile payloads are partially unreached.",
+      "remediation": "Add hostile-payload cases for the remaining coercion branches."
+    },
+    "mmxApiKeySync.js": {
+      "line": 90, "branch": 58, "function": 100,
+      "reason": "Sync edge cases (concurrent config rewrites, absent key file) branch widely; several OS-level branches are not unit-reachable.",
+      "remediation": "Inject the config IO to reach the remaining branches."
+    },
+    "mmxCredentialBridge.js": {
+      "line": 100, "branch": 60, "function": 100,
+      "reason": "Bridge guards for malformed credential payloads are only partially exercised.",
+      "remediation": "Cover the remaining malformed-payload guard branches."
+    },
+    "deepRedactor.js": {
+      "line": 100, "branch": 96, "function": 100,
+      "reason": "One redaction pattern branch remains unreached.",
+      "remediation": "Add the missing pattern fixture."
+    },
+    "mmxResultRedactor.js": {
+      "line": 100, "branch": 71, "function": 100,
+      "reason": "Redactor handles many output shapes; some non-redaction branches unreached.",
+      "remediation": "Add shape fixtures for the unreached branches."
+    },
+    "stateCorruptBackup.js": {
+      "line": 100, "branch": 66, "function": 100,
+      "reason": "Backup rotation edge branches (disk-full, locked file) are not unit-reachable.",
+      "remediation": "Inject fs to simulate rotation failures."
+    },
+    "stateSanitizers.js": {
+      "line": 99, "branch": 92, "function": 100,
+      "reason": "Sanitizer edge branches for exotic state shapes remain.",
+      "remediation": "Add fixtures for the remaining exotic shapes."
+    },
+    "state.js": {
+      "line": 98, "branch": 96, "function": 100,
+      "reason": "State-store recovery branches for corrupt-then-recover sequences partially unreached.",
+      "remediation": "Extend the corruption-recovery suite."
+    },
+    "windowsNamePolicy.js": {
+      "line": 85, "branch": 70, "function": 100,
+      "reason": "Reserved-device-name and long-path normalization branches partially unreached (two modules share this filename; waiver applies to both).",
+      "remediation": "Add reserved-name and long-path fixtures."
+    },
+    "pathUtils.js": {
+      "line": 98, "branch": 80, "function": 100,
+      "reason": "Cross-drive and UNC-path branches partially unreached.",
+      "remediation": "Add UNC/drive-relative fixtures."
+    },
+    "assetPaths.js": {
+      "line": 96, "branch": 80, "function": 100,
+      "reason": "Packaged-vs-dev resolution branches partially unreached in unit scope.",
+      "remediation": "Cover the remaining resolution branches with injected app paths."
+    },
+    "config.js": {
+      "line": 94, "branch": 87, "function": 100,
+      "reason": "Config discovery fallback chain partially unreached.",
+      "remediation": "Cover the remaining discovery fallbacks."
+    },
+    "batches.js": {
+      "line": 94, "branch": 79, "function": 100,
+      "reason": "Batch partition edge branches partially unreached.",
+      "remediation": "Add partition edge fixtures."
+    },
+    "jobRegistry.js": {
+      "line": 98, "branch": 92, "function": 83,
+      "reason": "Job lifecycle teardown functions not all invoked by unit tests.",
+      "remediation": "Invoke the remaining lifecycle functions in the registry suite."
+    },
+    "cpuGuard.js": {
+      "line": 100, "branch": 75, "function": 100,
+      "reason": "Throttle branches for high-core hosts unreached on small runners.",
+      "remediation": "Inject core counts to reach the remaining branches."
+    }
+  }
+}

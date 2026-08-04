@@ -49,6 +49,10 @@ function runInstaller(cwd, extraEnv) {
       // The fixtures are tiny stand-ins for the real tree; relax the
       // production minimum-entry count (50) for the completeness check.
       MINIMAX_MANIFEST_MIN_ENTRIES: '1',
+      // V104-C001: fixtures are UNSIGNED dev-harness trees. The escape
+      // hatch only applies when no .minisig exists at all — the negative
+      // cases below run WITHOUT it to prove the fail-closed behaviour.
+      MINIMAX_INSTALLER_ALLOW_UNSIGNED: '1',
       ...extraEnv,
     },
   });
@@ -263,6 +267,45 @@ if (process.platform === 'win32' && fs.existsSync(bootstrapInstaller)) {
           fail(`multipart easy install failed: ${(result.stderr || result.stdout || '').trim()}${missing.length ? `; missing ${missing.join(', ')}` : ''}`);
         } else {
           process.stdout.write(`[test-release-installer] PASS: multipart checksum, built-in extraction, and install work (${parts.length} independent parts)\n`);
+        }
+
+        // V104-C001: FAIL-CLOSED negative cases. An unsigned download
+        // WITHOUT the dev-harness escape hatch must be refused outright.
+        const unsignedTarget = path.join(temp, 'unsigned install');
+        const unsignedResult = runInstaller(downloadDir, {
+          MINIMAX_INSTALL_DIR: unsignedTarget,
+          MINIMAX_INSTALL_DESKTOP: desktop,
+          MINIMAX_INSTALL_START_MENU: startMenu,
+          MINIMAX_INSTALL_NO_LAUNCH: '1',
+          MINIMAX_INSTALLER_ALLOW_UNSIGNED: '0',
+        });
+        if (unsignedResult.status === 0 || fs.existsSync(path.join(unsignedTarget, 'MiniMaxAssetTool.exe'))) {
+          fail('installer accepted an UNSIGNED download without the dev-harness flag (signature gate did not fail closed)');
+        } else if (!/signature/i.test(`${unsignedResult.stdout || ''}${unsignedResult.stderr || ''}`)) {
+          fail('unsigned-rejection output did not mention the missing signature');
+        } else {
+          process.stdout.write('[test-release-installer] PASS: an unsigned download is refused (fail-closed signature gate)\n');
+        }
+
+        // V104-C001: a signature file + pinned key WITHOUT a resolvable
+        // verifier must also abort (missing tool is no longer a warning).
+        const noVerifierDir = path.join(temp, 'download no verifier');
+        fs.cpSync(downloadDir, noVerifierDir, { recursive: true });
+        fs.writeFileSync(path.join(noVerifierDir, `${baseName}.sha256.minisig`), 'untrusted signature placeholder\n', 'utf8');
+        fs.writeFileSync(path.join(noVerifierDir, 'minisign.pub'), 'untrusted comment: placeholder\nRWQplaceholder\n', 'utf8');
+        const noVerifierResult = runInstaller(noVerifierDir, {
+          MINIMAX_INSTALL_DIR: path.join(temp, 'no-verifier install'),
+          MINIMAX_INSTALL_DESKTOP: desktop,
+          MINIMAX_INSTALL_START_MENU: startMenu,
+          MINIMAX_INSTALL_NO_LAUNCH: '1',
+          // Force the PATH lookup to miss even on machines with minisign.
+          MINIMAX_MINISIGN_TOOL: path.join(temp, 'does-not-exist', 'minisign.exe'),
+          PATH: path.join(process.env.SystemRoot || 'C:\\Windows', 'System32'),
+        });
+        if (noVerifierResult.status === 0) {
+          fail('installer proceeded without a resolvable minisign verifier (must abort)');
+        } else {
+          process.stdout.write('[test-release-installer] PASS: a signature without a resolvable verifier aborts the install\n');
         }
       }
     } finally {

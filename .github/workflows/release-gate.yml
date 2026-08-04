@@ -148,15 +148,19 @@ jobs:
           retention-days: 7
 
   # ------------------------------------------------------------------
-  # Gate 3 — RQ-004 fix: flakiness qualification. Ten consecutive full
-  # suite runs; ANY failed repetition fails the release.
+  # Gate 3 — RQ-004 fix + V104-H002: flakiness qualification over the
+  # FULL release-suite inventory under VARIED conditions: one serial
+  # unit run (order effects), 10 repetitions of unit + smoke + E2E, and
+  # 50 high-risk credential/security suite runs with alternating
+  # concurrency. ANY failed repetition fails the release.
   # ------------------------------------------------------------------
   flakiness:
-    name: Flakiness qualification (10x full suite)
+    name: Flakiness qualification (serial + 10x suites + 50x high-risk)
     runs-on: windows-latest
-    timeout-minutes: 180
+    timeout-minutes: 420
     env:
       FLAKY_REPEATS: '10'
+      FLAKY_HIGH_RISK_REPEATS: '50'
     steps:
       - uses: actions/checkout@v7
 
@@ -257,6 +261,10 @@ jobs:
           $exe = Get-ChildItem -Path (Join-Path $env:RUNNER_TEMP 'minisign') -Recurse -Filter minisign.exe | Select-Object -First 1
           if (-not $exe) { throw 'Minisign archive did not contain minisign.exe' }
           Add-Content -Path $env:GITHUB_PATH -Value $exe.DirectoryName
+          # V104-C002: ship the pinned verifier WITH the release so the
+          # installer bootstrap can verify the manifest signature without
+          # trusting a host-provided minisign (fail-closed chain).
+          Add-Content -Path $env:GITHUB_ENV -Value "MINISIGN_TOOL_PATH=$($exe.FullName)"
           & $exe.FullName -v
 
       # B-003 (hhhhu3 audit): prepare the signing material and fail with
@@ -341,6 +349,13 @@ jobs:
       - name: Generate SBOM
         run: node scripts/generate-sbom.js
 
+      # V104-C002: finalize the canonical release inventory AFTER SBOM and
+      # signing material exist, so the signed outer manifest covers every
+      # published artifact (archives, exe, installer, provenance, SBOM,
+      # pinned minisign key + verifier). Fail-closed on missing inputs.
+      - name: Finalize release inventory
+        run: npm run finalize:release
+
       # B-003 (hhhhu3 audit): sign the outer manifest BEFORE strict
       # verification — the verifier requires the .minisig to exist.
       - name: Sign release manifest (Minisign)
@@ -364,12 +379,17 @@ jobs:
 
   # ------------------------------------------------------------------
   # Gate 6 — RQ-004 fix: clean-VM acceptance. GitHub-hosted runners are
-  # freshly imaged VMs, so this job exercises packaged boot, installer,
-  # upgrade-over-existing-install and tamper rejection on a clean
-  # machine against the EXACT build output from Gate 5.
+  # freshly imaged VMs.
+  #
+  # V104-B001/V104-B002/V104-M001: this job exercises the EXACT build
+  # output from Gate 5 — it boots the real packaged MiniMaxAssetTool.exe
+  # from the downloaded win-unpacked tree and installs/upgrades/interrupts
+  # the real release through the signed installer bootstrap. It does NOT
+  # build a temp ASAR from the checkout, does not use the dev harness, and
+  # needs no dev dependencies (Node built-ins only), so no `npm ci` runs.
   # ------------------------------------------------------------------
   clean-vm-acceptance:
-    name: Clean-VM acceptance (packaged boot, installer, upgrade)
+    name: Clean-VM acceptance (real release boot + installer acceptance)
     runs-on: windows-latest
     timeout-minutes: 45
     needs: [build-sign-verify]
@@ -379,10 +399,6 @@ jobs:
       - uses: actions/setup-node@v6
         with:
           node-version: '22'
-          cache: 'npm'
-
-      - name: Install dependencies
-        run: npm ci
 
       - name: Download exact build output
         uses: actions/download-artifact@v7
@@ -390,11 +406,15 @@ jobs:
           name: release-build
           path: dist-out/
 
-      - name: Packaged boot (asar-packed renderer + preload)
-        run: npm run test:packaged
+      # V104-B001/V104-M001: boot the REAL packaged executable from the
+      # downloaded release (not a rebuilt ASAR, no --no-sandbox dev shim).
+      - name: Real packaged release boot
+        run: npm run test:packaged:release
 
-      - name: Installer test (fresh install + upgrade + tamper rejection)
-        run: npm run test:installer
+      # V104-B002: install/launch/upgrade/interrupt/rollback the exact
+      # downloaded release through the signed installer bootstrap.
+      - name: Installer acceptance (real release artifacts)
+        run: npm run test:acceptance
 
   # ------------------------------------------------------------------
   # Publication — ONLY after every mandatory gate is green for the
@@ -406,11 +426,24 @@ jobs:
     timeout-minutes: 20
     needs: [qualification, e2e-and-smoke, flakiness, mutation, build-sign-verify, clean-vm-acceptance]
     steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '22'
+
       - name: Download qualified build output
         uses: actions/download-artifact@v7
         with:
           name: release-build
           path: dist-out/
+
+      # V104-C002: publication must contain EXACTLY the signed inventory —
+      # never the whole dist-out tree. stage-publication.js re-verifies the
+      # manifest signature and every entry hash, then stages only the
+      # inventoried files (fail-closed on any mismatch).
+      - name: Stage publication from signed inventory
+        run: npm run stage:publication
 
       # M-001 (hhhhu3 audit): only a tag-triggered run uploads publication
       # output. A manual dispatch run must never produce "release artifacts".
@@ -419,5 +452,5 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           name: release-artifacts
-          path: dist-out/
+          path: dist-out/publication/
           retention-days: 30

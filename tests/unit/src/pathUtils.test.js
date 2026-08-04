@@ -45,6 +45,21 @@ test('isPathUnder: sibling directory returns false', () => {
   assert.equal(pathUtils.isPathUnder(path.join(b, 'x.txt'), a), false);
 });
 
+test('isPathUnder: sibling whose name is a STRING PREFIX of the root returns false (V104-H001 M10)', () => {
+  // Kills the `startsWith(root)` mutant: "Gen2" starts with "Gen", so a
+  // bare-prefix check would wrongly accept C:\Gen2\x.txt under root C:\Gen.
+  // The comparison must include the separator (startsWith(root + sep)).
+  const root = path.join(tmpRoot, 'Gen');
+  const sibling = path.join(tmpRoot, 'Gen2');
+  fs.mkdirSync(root, { recursive: true });
+  fs.mkdirSync(sibling, { recursive: true });
+  assert.equal(pathUtils.isPathUnder(path.join(sibling, 'x.txt'), root), false);
+  assert.equal(pathUtils.isPathUnderAny(path.join(sibling, 'x.txt'), [root]), false);
+  assert.equal(pathUtils.isParentUnderAny(path.join(sibling, 'x.txt'), [root]), false);
+  // Positive counterpart: a real child of the prefix-named root still passes.
+  assert.equal(pathUtils.isPathUnder(path.join(root, 'x.txt'), root), true);
+});
+
 // ----- Symlink tests -----
 // Skipped gracefully on platforms where symlink creation is denied
 // (Windows without Developer Mode / admin).

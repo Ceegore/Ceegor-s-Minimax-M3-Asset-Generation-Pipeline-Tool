@@ -22,7 +22,9 @@
     "test:mutation": "node scripts/mutation-test.js",
     "test:flaky": "node scripts/flakiness-run.js",
     "test:packaged": "node scripts/e2e/packaged-boot.js",
+    "test:packaged:release": "node scripts/e2e/real-release-boot.js",
     "test:installer": "node scripts/test-release-installer.js",
+    "test:acceptance": "node scripts/test-release-acceptance.js",
     "test:visual": "node scripts/e2e/launch.js",
     "test:visual:capture": "node scripts/e2e/launch.js --visual-capture",
     "check:deps": "node scripts/check-bundled-deps.js",
@@ -34,6 +36,8 @@
     "verify:release": "node scripts/verify-release.js --require-archive --require-authenticode --require-manifest-signature --require-provenance --require-sbom",
     "assert:identity": "node scripts/assert-release-identity.js",
     "sign:release": "node scripts/sign-release.js",
+    "finalize:release": "node scripts/finalize-release-inventory.js",
+    "stage:publication": "node scripts/stage-publication.js",
     "sbom": "node scripts/generate-sbom.js",
     "set-fuses": "node scripts/set-fuses.js",
     "enable-devmode": "node scripts/enable-devmode.js"
@@ -65,7 +69,8 @@
     "@electron/fuses": "^1.8.0",
     "7zip-bin": "^5.2.0",
     "electron": "^43.1.0",
-    "electron-builder": "^26.15.3"
+    "electron-builder": "^26.15.3",
+    "js-yaml": "4.3.0"
   },
   "engines": {
     "node": ">=22.12.0"

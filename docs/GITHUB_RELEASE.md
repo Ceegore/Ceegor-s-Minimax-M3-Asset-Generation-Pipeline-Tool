@@ -10,7 +10,7 @@ Windows batch asset production for MiniMax: turn a GDD or story into image, spee
 
 ## Release title
 
-MiniMax Asset Tool v1.0.2 — Security hardening + audit remediation
+MiniMax Asset Tool v1.0.4 — Release integrity requalification
 
 ## Release body
 
@@ -35,7 +35,7 @@ The app is MIT licensed and designed for commercial workflows without an extra s
 
 #### Easy installation (recommended)
 
-1. Download `Install-MiniMax-Asset-Tool.cmd`, `MiniMaxAssetTool-1.0.1-x64.sha256`, and every `MiniMaxAssetTool-1.0.1-x64.part1.zip`, `.part2.zip`, and later part. Keep them in the same folder.
+1. Download `Install-MiniMax-Asset-Tool.cmd`, `MiniMaxAssetTool-1.0.4-x64.sha256`, and every `MiniMaxAssetTool-1.0.4-x64.part1.zip`, `.part2.zip`, and later part. Keep them in the same folder.
 2. Double-click `Install-MiniMax-Asset-Tool.cmd`. It verifies every part, extracts the release with built-in Windows tools, installs the app for your account, and creates Desktop and Start menu shortcuts.
 3. When the app opens, add your API key and choose an output folder.
 
@@ -45,7 +45,7 @@ The installer makes no network requests and does not weaken Windows security set
 
 #### Portable use
 
-Experienced users can extract every part into the same folder with any archiver (the parts merge into one `MiniMaxAssetTool-1.0.1-x64` folder), keep that folder together, and run `MiniMaxAssetTool.exe` directly.
+Experienced users can extract every part into the same folder with any archiver (the parts merge into one `MiniMaxAssetTool-1.0.4-x64` folder), keep that folder together, and run `MiniMaxAssetTool.exe` directly.
 
 ### Requirements
 
@@ -53,4 +53,4 @@ Experienced users can extract every part into the same folder with any archiver 
 - A MiniMax account and API access for generation.
 - Enough free disk space for the app, local models, and generated assets.
 
-This release is code-signed: every shipped executable carries an Authenticode signature, and the published `.sha256` manifest has a detached Minisign signature (`.sha256.minisig`). Download only from this repository, verify the files against the published SHA-256 manifest, and check the Authenticode signature (`MiniMaxAssetTool.exe` → Properties → Digital Signatures) before running. SmartScreen may still warn while a new signature builds reputation; only then choose **More info → Run anyway**, after the signature and checksums verify. Do not disable Defender or add an antivirus exclusion, and never run files whose signature or checksums do not match. Managed computers may require administrator approval.
+This release is code-signed: every shipped executable carries an Authenticode signature, and the published `.sha256` inventory manifest covers every shipped file (archives, installer, provenance, SBOM, signing key, and the pinned Minisign verifier) with a detached Minisign signature (`.sha256.minisig`). Download only from this repository, verify the files against the published SHA-256 manifest, and check the Authenticode signature (`MiniMaxAssetTool.exe` → Properties → Digital Signatures) before running. SmartScreen may still warn while a new signature builds reputation; only then choose **More info → Run anyway**, after the signature and checksums verify. Do not disable Defender or add an antivirus exclusion, and never run files whose signature or checksums do not match. Managed computers may require administrator approval.

@@ -419,7 +419,9 @@ test('KGO7-021: the coverage gate does NOT ratchet, and records why', () => {
   // The finding proposed a ratchet. Building and measuring it showed the
   // metric has ~+/-3 points of run-to-run noise on an unchanged tree, so a
   // ratchet fails every honest run. The measurement must stay next to the
-  // code so nobody re-adds it from the report alone.
+  // code so nobody re-adds it from the report alone. V104-B003 replaced the
+  // single-line-floor gate with full metrics + a per-file critical rule,
+  // but the no-ratchet decision stands and stays documented.
   const src = read('scripts/check-unit-coverage.js');
   assert.match(src, /deliberately removed/,
     'the removed ratchet must be documented, not silently absent');
@@ -428,7 +430,8 @@ test('KGO7-021: the coverage gate does NOT ratchet, and records why', () => {
   const code = readCode('scripts/check-unit-coverage.js');
   assert.ok(!/RATCHET_FILE/.test(code),
     'no ratchet file: the metric is not reproducible enough to support one');
-  assert.match(code, /linePct < THRESHOLD/, 'the fixed floor must still gate');
+  assert.match(code, /agg\.line < lineThreshold/,
+    'the fixed aggregate floor must still gate');
 });
 
 test('KGO7-022: verify:release rejects an archive older than the source', () => {

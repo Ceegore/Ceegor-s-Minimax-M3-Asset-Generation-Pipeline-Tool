@@ -201,10 +201,16 @@ function printPrivilegeFix() {
       || new RegExp(`^${stalePartBase}\\.part\\d+\\.zip$`).test(name)
       || name === `${path.basename(ZIP_PATH)}.sha256` // legacy manifest name
       || name === `${BASE_NAME}.sha256`
+      || name === `${BASE_NAME}.sha256.minisig`
+      || name === `${BASE_NAME}.provenance.json`
       || name === `MiniMaxAssetTool-${VERSION}-x64.provenance.json`
+      || name === `${BASE_NAME}.sbom.json`
+      || name === 'minisign.pub'
+      || name === 'minisign.exe'
+      || name === 'publication'
       || name === 'Install MiniMax Asset Tool.cmd'
       || name === 'Install-MiniMax-Asset-Tool.cmd') {
-      await fsp.rm(path.join(DIST, name), { force: true });
+      await fsp.rm(path.join(DIST, name), { recursive: true, force: true });
     }
   }
 
@@ -496,10 +502,20 @@ function printPrivilegeFix() {
   // directly when it is run from inside the extracted release.
   const easyInstallerPath = path.join(DIST, 'Install-MiniMax-Asset-Tool.cmd');
   await fsp.copyFile(path.join(ROOT, 'Install MiniMax Asset Tool.cmd'), easyInstallerPath);
+
+  log('');
+  log('Step 3: writing build provenance...');
+  // V104-C002: provenance is written BEFORE the outer manifest so the
+  // canonical inventory already covers it when the manifest is written.
+  // (finalize-release-inventory.js rewrites the manifest again later,
+  // once SBOM + signing material exist — that is the signed copy.)
+  writeProvenance();
+
   // B-002 (hhhhu3 audit): write the outer .sha256 manifest from the ONE
   // canonical release-artifact inventory (releaseArtifacts.outerManifestEntries)
   // so the strict verifier, signer, and installer bootstrap all agree on the
-  // exact same file set — executable, archive part(s), and installer CMD.
+  // exact same file set — executable, archive part(s), installer CMD and the
+  // build provenance (V104-C002).
   const canonicalEntries = outerManifestEntries(releasePaths(ROOT));
   const checksumLines = [];
   for (const rel of canonicalEntries) {
@@ -515,9 +531,6 @@ function printPrivilegeFix() {
   }
   fs.writeFileSync(MANIFEST_PATH, checksumLines.join('\n') + '\n', 'utf8');
 
-  log('');
-  log('Step 3: writing build provenance...');
-  writeProvenance();
   log('');
   log('Done. Output:');
   for (const fp of finalPaths) {

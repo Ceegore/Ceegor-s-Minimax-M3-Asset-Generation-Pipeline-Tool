@@ -89,3 +89,6 @@ scratch_verify/_tmp*/
 scratch_verify/_*.log
 scratch_verify/_*.txt
 test-run.txt
+
+# release-qualification bundle extractions (evidence input, not source)
+_rq*/

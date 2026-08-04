@@ -147,6 +147,12 @@ function _migrateKeys(d) {
 }
 
 function write(d) {
+  // V104-H004: defense-in-depth store guard. Even if a future caller skips
+  // the providersPayloadSchema gate, a destructive full replacement (empty/
+  // missing provider array, dropped built-ins) is refused HERE — throwing
+  // before any tmp file is created keeps the persisted store untouched.
+  const guard = require('./providersPayloadSchema').validateProvidersSetPayload(d);
+  if (!guard.ok) throw new Error('providersStore.write rejected: ' + guard.error);
   // SEC-002: merge API keys from existing config when the incoming
   // payload omits them (renderer sends partial updates without raw keys).
   // B-006 (hhhhu3 audit): when the encrypted credential repository is

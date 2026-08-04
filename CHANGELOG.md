@@ -7,10 +7,19 @@ Notable user-facing changes are recorded here.
 ### Fixed
 
 - Release-gate workflow YAML parse error: an unquoted ": " in a step name made GitHub reject every run of the workflow with no diagnostics (this invalidated the v1.0.3 tag run). The step name is now quoted.
+- Installer signature verification no longer fails open when the Minisign verifier is missing — the install chain is fail-closed with a pinned verifier and published key (V104-C001).
+- `providers:set` now enforces a strict top-level schema, unique provider IDs, mandatory built-ins, and atomic rejection of malformed full replacements (V104-H004).
+- Release documentation aligned with the signed v1.0.4 pipeline; the outdated "no Authenticode certificate" statement is gone (V104-H005).
 
 ### Added
 
 - Workflow contract test now parses every workflow file as YAML and rejects unquoted names containing ": ", so a workflow that GitHub cannot parse can never reach a tag again.
+- Clean-VM acceptance boots and exercises the EXACT downloaded release executable, and installer acceptance installs/upgrades/interrupts/tamper-tests the real signed artifacts instead of synthetic fixtures (V104-B001/B002/M001).
+- Coverage gate now enforces line, branch, AND function floors plus a per-file 100% rule for release-critical credential/security modules, with an explicit waiver matrix and retained evidence (V104-B003).
+- The signed release inventory covers every shipped file — archives, installer, provenance, SBOM, signing key, and the pinned Minisign verifier — and publication stages ONLY that signed inventory (V104-C002).
+- Flakiness qualification runs the full release-suite inventory under varied conditions: one serial unit run, ten repetitions of unit + smoke + E2E, and fifty high-risk credential/security repetitions with alternating concurrency (V104-H002).
+- Mutation testing is now systematic: 16 mutants across 11 release-critical modules, each with a dedicated regression suite (V104-H001).
+- The SBOM is complete (full transitive production tree plus every offline runtime asset with pinned hashes) and its verification fails closed on any omission (V104-H003).
 
 ## 1.0.3 - 2026-08-03
 

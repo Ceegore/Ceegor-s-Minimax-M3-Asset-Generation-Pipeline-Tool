@@ -21,6 +21,7 @@ function releasePaths(root, pkg = readPackage(root)) {
     archive: path.join(output, `${baseName}.zip`),
     manifest: path.join(output, `${baseName}.sha256`),
     provenance: path.join(output, `${baseName}.provenance.json`),
+    sbom: path.join(output, `${baseName}.sbom.json`),
   };
 }
 
@@ -108,6 +109,14 @@ function relative(root, filePath) {
 // verifier (verify-release.js), the signer (sign-release.js), and the
 // installer bootstrap all agree on exactly this file set — no component
 // computes its own list anymore. Entries are output-dir-relative paths.
+//
+// V104-C002: the inventory is COMPLETE — provenance, SBOM, the pinned
+// Minisign public key and (when shipped) the pinned verifier binary are
+// part of the signed manifest, so nothing can be published or swapped in
+// next to the archives without breaking the signature. Entries that do
+// not exist yet (e.g. the SBOM during the early build step) are omitted
+// until they exist; finalize-release-inventory.js rewrites the manifest
+// as the LAST step before signing so the signed inventory is complete.
 function outerManifestEntries(paths) {
   const entries = [];
   // The executable inside the unpacked tree is part of the published set.
@@ -117,6 +126,16 @@ function outerManifestEntries(paths) {
   // The dual-purpose installer CMD published beside the archive(s).
   const installer = path.join(paths.output, 'Install-MiniMax-Asset-Tool.cmd');
   if (fs.existsSync(installer)) entries.push(relative(paths.output, installer));
+  // V104-C002: build provenance + SBOM are first-class signed artifacts.
+  if (fs.existsSync(paths.provenance)) entries.push(relative(paths.output, paths.provenance));
+  if (fs.existsSync(paths.sbom)) entries.push(relative(paths.output, paths.sbom));
+  // V104-C001/C002: the pinned Minisign public key and (when the pipeline
+  // ships it) the pinned verifier binary travel with the release so end
+  // users can fail-closed-verify without downloading extra tooling.
+  const pubKey = path.join(paths.output, 'minisign.pub');
+  if (fs.existsSync(pubKey)) entries.push(relative(paths.output, pubKey));
+  const verifier = path.join(paths.output, 'minisign.exe');
+  if (fs.existsSync(verifier)) entries.push(relative(paths.output, verifier));
   return entries.sort();
 }
 

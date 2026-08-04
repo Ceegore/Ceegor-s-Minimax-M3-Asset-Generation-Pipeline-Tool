@@ -79,8 +79,57 @@ test('RQ-004: gate jobs carry their mandatory commands', () => {
   assert.match(jobBlock('mutation'), /npm run test:mutation/, 'mutation gate');
   assert.match(jobBlock('build-sign-verify'), /npm run assert:identity/, 'identity assertion');
   assert.match(jobBlock('build-sign-verify'), /npm run verify:release/, 'strict verification');
-  assert.match(jobBlock('clean-vm-acceptance'), /npm run test:packaged/, 'packaged boot on clean VM');
-  assert.match(jobBlock('clean-vm-acceptance'), /npm run test:installer/, 'installer acceptance on clean VM');
+  // V104-B001/V104-B002/V104-M001: clean-VM acceptance must exercise the
+  // REAL downloaded release, not a rebuilt ASAR or synthetic fixtures.
+  assert.match(jobBlock('clean-vm-acceptance'), /npm run test:packaged:release/, 'real packaged release boot on clean VM');
+  assert.match(jobBlock('clean-vm-acceptance'), /npm run test:acceptance/, 'real-release installer acceptance on clean VM');
+  assert.doesNotMatch(jobBlock('clean-vm-acceptance'), /npm ci/, 'clean-VM acceptance must not install dev dependencies');
+});
+
+test('V104-H002: flakiness gate runs the full suite under varied conditions', () => {
+  const job = jobBlock('flakiness');
+  assert.match(job, /FLAKY_REPEATS: '10'/, 'ten repetitions of the release-suite inventory');
+  assert.match(job, /FLAKY_HIGH_RISK_REPEATS: '50'/, 'fifty high-risk repetitions must be configured');
+  const src = fs.readFileSync(path.join(ROOT, 'scripts', 'flakiness-run.js'), 'utf8');
+  assert.match(src, /--test-concurrency=1/, 'a serial unit run must surface order effects');
+  assert.match(src, /run-smoke\.js/, 'the smoke suite must be part of every repetition');
+  assert.match(src, /e2e\/launch\.js/, 'the E2E suite must be part of every repetition');
+  assert.match(src, /mutation-test\.js/, 'the high-risk battery must reuse the mutation regression suites');
+  assert.match(src, /% 2/, 'high-risk runs must alternate concurrency (varied conditions)');
+});
+
+test('V104-H001: the mutation battery is systematic, not a directed sample', () => {
+  const { MUTANTS, SUITES } = require(path.join(ROOT, 'scripts', 'mutation-test.js'));
+  assert.ok(MUTANTS.length >= 15, `the battery must carry at least 15 mutants (found ${MUTANTS.length})`);
+  const targetedFiles = new Set(MUTANTS.map((m) => m.file));
+  assert.ok(targetedFiles.size >= 10, `mutants must span at least 10 modules (found ${targetedFiles.size})`);
+  assert.ok(Object.keys(SUITES).length >= 10, 'every targeted module needs a dedicated regression suite');
+  for (const m of MUTANTS) {
+    assert.ok(Array.isArray(SUITES[m.file]) && SUITES[m.file].length > 0,
+      `mutant ${m.id} targets ${m.file}, which has no regression suite mapped`);
+  }
+});
+
+test('V104-C002: inventory finalization runs after SBOM and before signing', () => {
+  const b = jobBlock('build-sign-verify');
+  const sbom = b.indexOf('scripts/generate-sbom.js');
+  const finalize = b.indexOf('npm run finalize:release');
+  const sign = b.indexOf('npm run sign:release');
+  assert.ok(sbom !== -1, 'SBOM generation step must exist');
+  assert.ok(finalize !== -1, 'finalize:release step must exist');
+  assert.ok(sign !== -1, 'sign:release step must exist');
+  assert.ok(sbom < finalize, 'inventory finalization must run AFTER SBOM generation');
+  assert.ok(finalize < sign, 'inventory finalization must run BEFORE manifest signing');
+  assert.match(b, /MINISIGN_TOOL_PATH/, 'the pinned minisign verifier must ship with the release');
+});
+
+test('V104-C002: publication stages ONLY the signed inventory', () => {
+  const pub = jobBlock('release-publication');
+  assert.match(pub, /npm run stage:publication/, 'publication must stage from the signed inventory');
+  assert.match(pub, /dist-out\/publication\//, 'publication must upload the staged inventory, not all of dist-out');
+  const uploadIdx = pub.indexOf('npm run stage:publication');
+  const uploadPath = pub.indexOf('path: dist-out/publication/');
+  assert.ok(uploadPath > uploadIdx, 'staging must run before the upload');
 });
 
 test('RQ-008: the coverage GATE runs after coverage collection', () => {

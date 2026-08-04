@@ -1,7 +1,7 @@
 // scripts/mutation-test.js
 // ============================================================================
-// RQ-004 fix: mutation-testing gate for the release-critical credential
-// and security modules.
+// RQ-004 fix + V104-H001: systematic mutation-testing gate for the
+// release-critical credential and security modules.
 //
 // Directed mutants are injected ONE AT A TIME into the production source
 // (with backup + guaranteed restore), and the targeted regression suite is
@@ -9,9 +9,16 @@
 // means a real regression of that shape could ship undetected — so any
 // survivor fails this gate.
 //
-// Mutants are curated to mirror REAL past defects (RQ-003 credential
-// reference loss, RQ-006 corrupt-key reporting, orphaned secret blobs,
-// plaintext resurrection, session-key resolution, builtin origin pinning).
+// V104-H001: the v1.0.4 requalification rejected a gate that covered only
+// six mutants in two files. The battery now spans EVERY critical module
+// that carries a dedicated regression suite: credential store + repository,
+// payload schema, secret redaction, path containment, API-key sync,
+// config parsing, batch recovery latch, job registry, CPU reservation and
+// asset-path resolution. Mutants still mirror REAL defect shapes (RQ-003
+// credential reference loss, RQ-006 corrupt-key reporting, orphaned secret
+// blobs, plaintext resurrection, session-key resolution, builtin origin
+// pinning) plus the classic security regressions (prefix-path escape,
+// redaction leak, fail-open schema gates).
 //
 // Usage:  node scripts/mutation-test.js [--min-score=100]
 // Output: console verdict per mutant + coverage/mutation-report.json.
@@ -31,17 +38,46 @@ function fail(m) { process.stderr.write(`[mutation] ERROR: ${m}\n`); process.exi
 
 const scoreArg = process.argv.find((a) => a.startsWith('--min-score='));
 const MIN_SCORE = scoreArg ? parseFloat(scoreArg.split('=')[1]) : 100;
-
 // Kill suites per mutated module. node --test runs each file in its own
 // process, so module-state mutations cannot leak between files.
 const SUITES = {
   'src/providersStore.js': [
     'tests/unit/src/providers/providersStore.test.js',
     'tests/unit/main/providersCredential.rq102.test.js',
+    'tests/unit/src/providers/providersPayloadSchema.rq104.test.js',
   ],
   'main/services/ProviderCredentialRepository.js': [
     'tests/unit/main/services/CredentialRepository.hhhhu3.test.js',
     'tests/unit/main/providersCredential.rq102.test.js',
+  ],
+  'src/providersPayloadSchema.js': [
+    'tests/unit/src/providers/providersPayloadSchema.rq104.test.js',
+  ],
+  'src/deepRedactor.js': [
+    'tests/unit/src/deepRedactor.r24.test.js',
+    'tests/unit/src/deepRedactor.r241.test.js',
+  ],
+  'src/pathUtils.js': [
+    'tests/unit/src/pathUtils.test.js',
+  ],
+  'src/mmxApiKeySync.js': [
+    'tests/unit/src/mmxApiKeySync.r23.test.js',
+    'tests/unit/src/mmxApiKeySync.r23pp.test.js',
+  ],
+  'src/config.js': [
+    'tests/unit/src/config.test.js',
+  ],
+  'src/batches.js': [
+    'tests/unit/src/batches.h053.test.js',
+  ],
+  'src/jobRegistry.js': [
+    'tests/unit/src/jobRegistry.test.js',
+  ],
+  'src/cpuGuard.js': [
+    'tests/unit/kgo2AndCpuFixes.test.js',
+  ],
+  'src/assetPaths.js': [
+    'tests/unit/src/assetPaths.h065.test.js',
   ],
 };
 
@@ -90,6 +126,77 @@ const MUTANTS = [
     find: 'try { this.blobStore.remove(blobId); } catch (_) {}',
     replace: '/* mutant M6: orphan the blob on migration rollback */',
   },
+  // V104-H001: systematic battery across the remaining critical modules.
+  {
+    id: 'M7',
+    file: 'src/providersPayloadSchema.js',
+    shape: 'H004 regression: an empty providers[] full replacement wipes the store',
+    find: 'if (data.providers.length === 0) {',
+    replace: 'if (false) { /* mutant M7: empty replacements accepted */',
+  },
+  {
+    id: 'M8',
+    file: 'src/providersStore.js',
+    shape: 'H004 regression: the defense-in-depth store guard is bypassed',
+    find: "const guard = require('./providersPayloadSchema').validateProvidersSetPayload(d);",
+    replace: "const guard = { ok: true }; /* mutant M8: store guard bypassed */",
+  },
+  {
+    id: 'M9',
+    file: 'src/deepRedactor.js',
+    shape: 'R0.1-003 regression: argv two-token secret leaks unredacted',
+    find: 'out[i + 1] = repl; // redact the value',
+    replace: 'out[i + 1] = value[i + 1]; // mutant M9: secret value not redacted',
+  },
+  {
+    id: 'M10',
+    file: 'src/pathUtils.js',
+    shape: 'path-containment regression: sibling-prefix escape (C:\\Gen2 under C:\\Gen)',
+    find: 'return pLow.startsWith(rLow + path.sep);',
+    replace: 'return pLow.startsWith(rLow); /* mutant M10: prefix escape */',
+  },
+  {
+    id: 'M11',
+    file: 'src/mmxApiKeySync.js',
+    shape: 'R2.3 regression: the persisted API key survives the privacy clear',
+    find: 'delete existing.api_key;',
+    replace: '/* mutant M11: persisted key not deleted */',
+  },
+  {
+    id: 'M12',
+    file: 'src/config.js',
+    shape: 'P4.3 regression: the billable-units clamp is bypassed on parse',
+    find: 'out.batch_max_units = Number.isFinite(n) && n >= 1 ? Math.min(n, 10000) : 200;',
+    replace: 'out.batch_max_units = n; /* mutant M12: clamp bypassed */',
+  },
+  {
+    id: 'M13',
+    file: 'src/batches.js',
+    shape: 'H-053 regression: a newer-schema batches.json is reinterpreted (fail-open)',
+    find: 'if (raw && typeof raw.schemaVersion === \'number\' && raw.schemaVersion > SCHEMA_VERSION) {',
+    replace: 'if (false) { /* mutant M13: newer schema accepted */',
+  },
+  {
+    id: 'M14',
+    file: 'src/jobRegistry.js',
+    shape: 'R6.6.3 regression: a stale close event deletes a newer same-jobId entry',
+    find: 'if (entry && entry.proc !== proc) return false; // stale close event',
+    replace: '/* mutant M14: stale close events delete newer entries */',
+  },
+  {
+    id: 'M15',
+    file: 'src/cpuGuard.js',
+    shape: 'KGO-2 regression: heavy backends no longer reserve OS cores',
+    find: 'return Math.max(1, cores - 2);',
+    replace: 'return Math.max(1, cores); /* mutant M15: no OS reservation */',
+  },
+  {
+    id: 'M16',
+    file: 'src/assetPaths.js',
+    shape: 'H-065 regression: writable resolution without a userData guard',
+    find: "if (!userDataPath) {\n    throw new Error('userDataPath is required for resolveWritableOverride');\n  }",
+    replace: '/* mutant M16: writable override without userData guard */',
+  },
 ];
 
 // KNOWN FALSE POSITIVE: spawnSync launches ONLY the Node binary
@@ -117,6 +224,7 @@ function applyMutant(mutant) {
 const results = [];
 let killed = 0;
 
+function runBattery() {
 // Baseline: the targeted suites must pass on the UNMUTATED source first,
 // otherwise a "kill" below could be a false positive from a broken suite.
 log('Running baseline (unmutated) targeted suites...');
@@ -170,3 +278,8 @@ if (score < MIN_SCORE) {
   process.exit(1);
 }
 log('PASS: every directed mutant was killed by the regression suite.');
+}
+
+if (require.main === module) runBattery();
+
+module.exports = { MUTANTS, SUITES, runBattery };
