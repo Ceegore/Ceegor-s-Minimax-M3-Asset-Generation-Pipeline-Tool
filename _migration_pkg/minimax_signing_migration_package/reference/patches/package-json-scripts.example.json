@@ -1,0 +1,14 @@
+{
+  "scripts": {
+    "build:unpacked": "node scripts/build-unpacked.js",
+    "legacy:capture-lock": "node scripts/capture-legacy-shell-lock.js",
+    "legacy:compose": "node scripts/compose-legacy-release.js",
+    "package:existing": "node scripts/zip-portable.js --package-existing",
+    "signing:create-bundle": "node scripts/create-signing-bundle.js",
+    "signing:merge": "node scripts/merge-signed-bundle.js",
+    "signing:verify-scope": "node scripts/verify-signing-scope.js",
+    "verify:release:legacy": "node scripts/verify-release.js --require-archive --require-manifest-signature --require-provenance --require-sbom",
+    "verify:release:signpath": "node scripts/verify-release.js --require-archive --require-authenticode --require-manifest-signature --require-provenance --require-sbom",
+    "prepare:minisign": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/prepare-minisign.ps1"
+  }
+}

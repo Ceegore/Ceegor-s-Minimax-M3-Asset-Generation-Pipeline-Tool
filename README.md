@@ -80,16 +80,28 @@ Experienced users can instead extract every archive part into the same folder wi
 
 ### Verifying release authenticity
 
-Releases are **code-signed**: every executable shipped in the release carries an Authenticode signature, and the `.sha256` manifest has a detached **Minisign** signature (`.sha256.minisig`) attached to it. The installer verifies the manifest signature **and** the `.sha256` manifest of every download before it extracts anything — this verification is mandatory, not optional, and the installer aborts if the signature, the pinned public key (`minisign.pub`), or the pinned verifier (`minisign.exe`) is missing.
+#### Windows trust and code signing
+
+The current public release does not yet carry a new project Authenticode
+signature. Release integrity is protected by published SHA-256 manifests,
+a detached Minisign signature, build provenance, and an SBOM.
+
+The final legacy-compatible 1.0.x release intentionally keeps the previously
+validated Windows runtime binaries byte-identical and updates the application
+content through Electron's app.asar package. This is a temporary transition
+mechanism, not the long-term release model.
+
+Future 1.1.x releases are being prepared for managed Authenticode signing.
+Do not disable Microsoft Defender, SmartScreen, Smart App Control, or add
+antivirus exclusions to run this application.
 
 To verify a release yourself:
 
 1. Download the release only from this repository's [Releases](../../releases) page — never from mirrors or third-party sites.
-2. Check the Authenticode signature: right-click `MiniMaxAssetTool.exe` → **Properties → Digital Signatures**; a valid signature from the publisher must be listed.
-3. Compare every downloaded file against the published `.sha256` manifest (for example `Get-FileHash -Algorithm SHA256 <file>` in PowerShell).
-4. Verify the manifest signature with the pinned verifier shipped in the release (this is the same mandatory check the installer performs): `minisign.exe -Vm MiniMaxAssetTool-<version>-x64.sha256 -P minisign.pub`. The signature must verify against the published `minisign.pub` — never against a key from any other source.
+2. Compare every downloaded file against the published `.sha256` manifest (for example `Get-FileHash -Algorithm SHA256 <file>` in PowerShell).
+3. Verify the manifest signature with the pinned verifier shipped in the release (this is the same mandatory check the installer performs): `minisign.exe -Vm MiniMaxAssetTool-<version>-x64.sha256 -P minisign.pub`. The signature must verify against the published `minisign.pub` — never against a key from any other source.
 
-Windows SmartScreen may still show **Windows protected your PC** for a newly signed release until enough installations build reputation. If it appears, confirm the digital signature and checksums as above first, then choose **More info → Run anyway**. Never disable Microsoft Defender or add an antivirus exclusion, and never run a release whose signature or checksums do not match. A managed work or school computer may require approval from its administrator.
+Never run a release whose signature or checksums do not match. A managed work or school computer may require approval from its administrator.
 
 ## Develop from source
 

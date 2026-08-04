@@ -1,0 +1,34 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "MiniMax Asset Tool release component license evidence",
+  "type": "object",
+  "required": ["releaseVersion", "components"],
+  "properties": {
+    "releaseVersion": { "type": "string" },
+    "generatedAt": { "type": "string", "format": "date-time" },
+    "components": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["name", "version", "paths", "upstream", "sha256", "sourceLicense", "redistributionStatus", "ownership"],
+        "properties": {
+          "name": { "type": "string" },
+          "version": { "type": "string" },
+          "paths": { "type": "array", "items": { "type": "string" } },
+          "upstream": { "type": "string" },
+          "releaseOrCommit": { "type": "string" },
+          "sha256": { "type": "array", "items": { "type": "string", "pattern": "^[0-9a-fA-F]{64}$" } },
+          "sourceLicense": { "type": "string" },
+          "binaryLicense": { "type": "string" },
+          "modelWeightLicense": { "type": ["string", "null"] },
+          "redistributionStatus": { "enum": ["approved", "blocked", "review-required"] },
+          "noticeRequirements": { "type": "string" },
+          "sourceOfferRequirements": { "type": "string" },
+          "commercialUse": { "enum": ["allowed", "not-allowed", "unclear"] },
+          "ownership": { "enum": ["project", "upstream"] },
+          "projectSigningAllowed": { "type": "boolean" }
+        }
+      }
+    }
+  }
+}

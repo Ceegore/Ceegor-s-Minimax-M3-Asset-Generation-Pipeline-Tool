@@ -8,7 +8,7 @@
 // product. This script instead boots the EXACT packaged executable from
 // the downloaded/built release tree (dist-out/win-unpacked by default):
 //
-//   * the real MiniMaxAssetTool.exe (Authenticode-signed PE),
+//   * the real MiniMaxAssetTool.exe (packaged launcher PE),
 //   * the real resources/app.asar and bundled runtime,
 //   * NO dev dependencies, NO --no-sandbox dev shim,
 //   * an isolated MINIMAX_CONFIG_DIR so no host state leaks in.

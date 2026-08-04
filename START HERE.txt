@@ -34,16 +34,23 @@ If you do not want to install it, keep the extracted folder together and double-
 Windows security message
 ------------------------
 
-This release is code-signed: every shipped executable carries an Authenticode
-signature, and the inventory manifest carries a detached Minisign signature that
-the installer verifies before extracting anything. Download releases only from the
-official Ceegore GitHub repository and compare the download with the published
-SHA-256 manifest.
+This release does not yet carry a new project Authenticode signature. Its
+integrity is protected by a published SHA-256 inventory manifest with a detached
+Minisign signature, which the installer verifies before extracting anything.
+Download releases only from the official Ceegore GitHub repository and compare
+the download with the published SHA-256 manifest.
 
-If the checksum matches and Windows shows "Windows protected your PC", choose
-"More info" and then "Run anyway". Never disable Microsoft Defender and never add a
-Defender exclusion for this app. A work or school computer may enforce a policy that
-only its administrator can approve; the installer does not try to bypass that policy.
+The final legacy-compatible 1.0.x release keeps the previously validated
+Windows runtime binaries byte-identical and updates the application content
+through Electron's app.asar package. This is a temporary transition mechanism,
+not the long-term release model. Future releases are being prepared for managed
+Authenticode signing.
+
+Never disable Microsoft Defender, SmartScreen or Smart App Control and never
+add a Defender exclusion for this app. Do not run files whose signature or
+checksums do not match. A work or school computer may enforce a policy that
+only its administrator can approve; the installer does not try to bypass that
+policy.
 
 Need help?
 ----------

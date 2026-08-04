@@ -1,0 +1,13 @@
+# Copy to .github/CODEOWNERS and adjust only if maintainers change.
+
+# Release, signing and supply-chain files require explicit maintainer review.
+/.github/workflows/ @Ceegore
+/scripts/ @Ceegore
+/signpath/ @Ceegore
+/.signpath/ @Ceegore
+/CODE_SIGNING_POLICY.md @Ceegore
+/PRIVACY.md @Ceegore
+/SECURITY.md @Ceegore
+/THIRD_PARTY_NOTICES.md @Ceegore
+/package.json @Ceegore
+/package-lock.json @Ceegore

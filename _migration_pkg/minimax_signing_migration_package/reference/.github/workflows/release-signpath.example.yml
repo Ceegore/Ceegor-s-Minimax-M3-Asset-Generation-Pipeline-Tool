@@ -1,0 +1,221 @@
+name: SignPath Release
+
+on:
+  push:
+    tags:
+      - 'v1.1.*'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Version matching package.json
+        required: true
+        type: string
+      prerelease:
+        description: Publish as prerelease after environment approval
+        required: true
+        default: true
+        type: boolean
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: signpath-release-${{ github.ref_name }}-${{ inputs.version }}
+  cancel-in-progress: false
+
+jobs:
+  qualify-and-sign:
+    runs-on: windows-latest
+    timeout-minutes: 240
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '22'
+          cache: npm
+      - name: Resolve and validate version
+        id: version
+        shell: pwsh
+        run: |
+          $pkg = Get-Content package.json -Raw | ConvertFrom-Json
+          $requested = if ('${{ github.event_name }}' -eq 'workflow_dispatch') {
+            '${{ inputs.version }}'
+          } else {
+            '${{ github.ref_name }}'.TrimStart('v')
+          }
+          if ($pkg.version -ne $requested) { throw 'package.json version mismatch.' }
+          "version=$requested" | Out-File $env:GITHUB_OUTPUT -Append -Encoding utf8
+      - name: Assert commit belongs to main
+        shell: pwsh
+        run: |
+          git fetch origin main --depth=1
+          git merge-base --is-ancestor $env:GITHUB_SHA origin/main
+          if ($LASTEXITCODE -ne 0) { throw 'Release commit is not reachable from main.' }
+      - run: npm ci
+      - run: npm run setup
+      - run: npm run check
+      - run: npm run check:deps
+      - run: npm run lint
+      - run: npm run test:coverage
+      - run: npm run test:coverage:gate -- --threshold=50
+      - run: npm run test:contract
+        env:
+          RUN_CONTRACT_TESTS: '1'
+          MINIMAX_API_KEY: ${{ secrets.MINIMAX_API_KEY }}
+          MMX_CONTRACT_OPTIONAL: '1'
+      - run: npm run test:ipc-coverage
+      - run: npm run test:mutation
+      - run: npm run test:flaky
+      - run: npm run test:e2e
+      - run: npm run test:smoke
+      - name: Build complete unsigned tree
+        run: node scripts/build-unpacked.js --out dist-work/unsigned
+      - name: Create minimal SignPath input
+        run: >
+          node scripts/create-signing-bundle.js
+          --unpacked dist-work/unsigned/win-unpacked
+          --out dist-work/signing-input
+          --version '${{ steps.version.outputs.version }}'
+      - name: Read exact PE metadata
+        id: pe
+        shell: pwsh
+        run: |
+          $input = Get-Content dist-work/SIGNING_INPUT.json -Raw | ConvertFrom-Json
+          "product_version=$($input.metadata.ProductVersion)" | Out-File $env:GITHUB_OUTPUT -Append -Encoding utf8
+          "file_version=$($input.metadata.FileVersion)" | Out-File $env:GITHUB_OUTPUT -Append -Encoding utf8
+      - uses: actions/upload-artifact@v7
+        id: upload-unsigned
+        with:
+          name: signpath-input
+          path: dist-work/signing-input/MiniMaxAssetTool.exe
+          if-no-files-found: error
+          retention-days: 7
+      - uses: actions/upload-artifact@v7
+        with:
+          name: unsigned-full-tree
+          path: dist-work/unsigned/win-unpacked/
+          if-no-files-found: error
+          retention-days: 7
+      - name: Submit SignPath signing request
+        uses: signpath/github-action-submit-signing-request@v2
+        with:
+          api-token: ${{ secrets.SIGNPATH_API_TOKEN }}
+          organization-id: ${{ vars.SIGNPATH_ORGANIZATION_ID }}
+          project-slug: ${{ vars.SIGNPATH_PROJECT_SLUG }}
+          signing-policy-slug: ${{ vars.SIGNPATH_SIGNING_POLICY_SLUG }}
+          artifact-configuration-slug: minimaxassettool-exe-v1
+          github-artifact-id: ${{ steps.upload-unsigned.outputs.artifact-id }}
+          wait-for-completion: true
+          wait-for-completion-timeout-in-seconds: 7200
+          output-artifact-directory: dist-work/signpath-output
+          parameters: |
+            productVersion: ${{ toJSON(steps.pe.outputs.product_version) }}
+            fileVersion: ${{ toJSON(steps.pe.outputs.file_version) }}
+      - uses: actions/upload-artifact@v7
+        with:
+          name: signpath-output
+          path: dist-work/signpath-output/
+          if-no-files-found: error
+          retention-days: 30
+
+  assemble-and-accept:
+    needs: qualify-and-sign
+    runs-on: windows-latest
+    timeout-minutes: 240
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '22'
+          cache: npm
+      - run: npm ci
+      - run: npm run setup
+      - name: Prepare pinned Minisign outside the worktree
+        shell: pwsh
+        env:
+          MINISIGN_KEY_B64: ${{ secrets.MINISIGN_KEY_B64 }}
+          MINISIGN_PUB_KEY: ${{ secrets.MINISIGN_PUB_KEY }}
+        run: ./scripts/prepare-minisign.ps1
+      - uses: actions/download-artifact@v7
+        with:
+          name: unsigned-full-tree
+          path: dist-work/unsigned/win-unpacked
+      - uses: actions/download-artifact@v7
+        with:
+          name: signpath-output
+          path: dist-work/signpath-output
+      - name: Merge only signed project executable
+        run: >
+          node scripts/merge-signed-bundle.js
+          --unsigned dist-work/unsigned/win-unpacked
+          --signed dist-work/signpath-output
+          --out dist-out/win-unpacked
+          --version '${{ needs.qualify-and-sign.outputs.version }}'
+      - name: Verify signing ownership scope
+        run: >
+          node scripts/verify-signing-scope.js
+          --mode signpath
+          --root dist-out/win-unpacked
+          --policy scripts/pe-ownership-policy.json
+      - name: Package exact SignPath-merged tree
+        env:
+          REQUIRE_CODE_SIGNING: '1'
+        run: npm run package:existing
+      - name: Finalize and sign release inventory
+        run: |
+          npm run sbom
+          npm run finalize:release
+          npm run sign:release
+          npm run verify:release:signpath
+      - name: Real signed-package acceptance
+        run: |
+          npm run test:packaged:release
+          npm run test:installer
+          npm run test:acceptance
+      - name: Stage exact publication inventory
+        run: npm run stage:publication
+      - uses: actions/upload-artifact@v7
+        with:
+          name: MiniMaxAssetTool-${{ needs.qualify-and-sign.outputs.version }}-signed-candidate
+          path: dist-out/publication/
+          if-no-files-found: error
+          retention-days: 30
+
+  publish:
+    needs: [qualify-and-sign, assemble-and-accept]
+    runs-on: windows-latest
+    environment: signed-publication
+    permissions:
+      contents: write
+      actions: read
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.sha }}
+      - uses: actions/download-artifact@v7
+        with:
+          name: MiniMaxAssetTool-${{ needs.qualify-and-sign.outputs.version }}-signed-candidate
+          path: publication
+      - name: Assert flat publication
+        shell: pwsh
+        run: |
+          if (Get-ChildItem publication -Directory) { throw 'Nested publication directory found.' }
+          if (-not (Get-ChildItem publication -File)) { throw 'Publication is empty.' }
+      - name: Publish exact accepted candidate
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $tag = if ('${{ github.event_name }}' -eq 'push') { '${{ github.ref_name }}' } else { 'v${{ needs.qualify-and-sign.outputs.version }}' }
+          $assets = Get-ChildItem publication -File | ForEach-Object { $_.FullName }
+          $args = @('release', 'create', $tag) + $assets + @('--target', '${{ github.sha }}', '--title', "MiniMax Asset Tool $tag", '--notes-file', 'docs/GITHUB_RELEASE.md')
+          if ('${{ github.event_name }}' -eq 'workflow_dispatch' -and '${{ inputs.prerelease }}' -eq 'true') { $args += '--prerelease' }
+          & gh @args
+          if ($LASTEXITCODE -ne 0) { throw 'Release publication failed.' }

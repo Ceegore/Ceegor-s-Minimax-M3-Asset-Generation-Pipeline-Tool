@@ -1,0 +1,174 @@
+name: Final Legacy-Compatible Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Exact version; this one-time workflow accepts only 1.0.7
+        required: true
+        default: 1.0.7
+        type: string
+      seed_release_tag:
+        description: Draft/private release tag containing the hash-locked legacy seed
+        required: true
+        type: string
+      publish:
+        description: Create a publication job that waits for environment approval
+        required: true
+        default: true
+        type: boolean
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: legacy-release-${{ inputs.version }}
+  cancel-in-progress: false
+
+jobs:
+  qualify:
+    runs-on: windows-latest
+    timeout-minutes: 240
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '22'
+          cache: npm
+      - name: Assert final legacy version
+        shell: pwsh
+        run: |
+          if ('${{ inputs.version }}' -ne '1.0.7') { throw 'This workflow may only publish 1.0.7.' }
+          $pkg = Get-Content package.json -Raw | ConvertFrom-Json
+          if ($pkg.version -ne '${{ inputs.version }}') { throw 'package.json version mismatch.' }
+          if (git status --porcelain) { throw 'Source tree is not clean.' }
+      - run: npm ci
+      - run: npm run setup
+      - run: npm run check
+      - run: npm run check:deps
+      - run: npm run lint
+      - run: npm run test:coverage
+      - run: npm run test:coverage:gate -- --threshold=50
+      - run: npm run test:contract
+        env:
+          RUN_CONTRACT_TESTS: '1'
+          MINIMAX_API_KEY: ${{ secrets.MINIMAX_API_KEY }}
+          MMX_CONTRACT_OPTIONAL: '1'
+      - run: npm run test:ipc-coverage
+      - run: npm run test:mutation
+      - run: npm run test:flaky
+      - run: npm run test:e2e
+      - run: npm run test:smoke
+
+  build-candidate:
+    needs: qualify
+    runs-on: windows-latest
+    timeout-minutes: 240
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '22'
+          cache: npm
+      - run: npm ci
+      - run: npm run setup
+      - name: Prepare pinned Minisign outside the worktree
+        shell: pwsh
+        env:
+          MINISIGN_KEY_B64: ${{ secrets.MINISIGN_KEY_B64 }}
+          MINISIGN_PUB_KEY: ${{ secrets.MINISIGN_PUB_KEY }}
+        run: ./scripts/prepare-minisign.ps1
+      - name: Download legacy seed
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          New-Item -ItemType Directory -Path legacy-download | Out-Null
+          gh release download '${{ inputs.seed_release_tag }}' --dir legacy-download
+      - name: Materialize legacy seed
+        id: seed
+        shell: pwsh
+        run: ./scripts/materialize-legacy-seed.ps1 -DownloadDir legacy-download -OutputDir legacy-extracted
+      - name: Build complete content donor
+        run: node scripts/build-unpacked.js --out dist-work/current
+      - name: Compose hash-locked legacy release
+        shell: pwsh
+        run: |
+          node scripts/compose-legacy-release.js `
+            --seed '${{ steps.seed.outputs.seed_path }}' `
+            --current 'dist-work/current/win-unpacked' `
+            --out 'dist-out/win-unpacked' `
+            --lock 'scripts/legacy-shell.lock.json' `
+            --version '${{ inputs.version }}' `
+            --commit '${{ github.sha }}'
+      - name: Verify final legacy PE equality
+        run: >
+          node scripts/verify-signing-scope.js
+          --mode legacy
+          --root dist-out/win-unpacked
+          --legacy-lock scripts/legacy-shell.lock.json
+      - name: Package exact composed tree
+        env:
+          MINIMAX_RELEASE_MODE: legacy
+        run: npm run package:existing
+      - name: Finalize and sign release inventory
+        run: |
+          npm run sbom
+          npm run finalize:release
+          npm run sign:release
+          npm run verify:release:legacy
+      - name: Real packaged acceptance
+        env:
+          MINIMAX_RELEASE_MODE: legacy
+        run: |
+          npm run test:packaged:release
+          npm run test:installer
+          npm run test:acceptance
+      - name: Stage exact publication inventory
+        run: npm run stage:publication
+      - uses: actions/upload-artifact@v7
+        with:
+          name: MiniMaxAssetTool-${{ inputs.version }}-legacy-candidate
+          path: dist-out/publication/
+          if-no-files-found: error
+          retention-days: 30
+
+  publish:
+    if: inputs.publish
+    needs: build-candidate
+    runs-on: windows-latest
+    environment: legacy-publication
+    permissions:
+      contents: write
+      actions: read
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.sha }}
+      - uses: actions/download-artifact@v7
+        with:
+          name: MiniMaxAssetTool-${{ inputs.version }}-legacy-candidate
+          path: publication
+      - name: Assert flat publication
+        shell: pwsh
+        run: |
+          if (Get-ChildItem publication -Directory) { throw 'Nested publication directory found.' }
+          if (-not (Get-ChildItem publication -File)) { throw 'Publication is empty.' }
+      - name: Publish exact manually accepted candidate
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $assets = Get-ChildItem publication -File | ForEach-Object { $_.FullName }
+          $args = @('release', 'create', 'v${{ inputs.version }}') + $assets + @(
+            '--target', '${{ github.sha }}',
+            '--title', 'MiniMax Asset Tool v${{ inputs.version }}',
+            '--notes-file', 'docs/GITHUB_RELEASE.md'
+          )
+          & gh @args
+          if ($LASTEXITCODE -ne 0) { throw 'Release publication failed.' }

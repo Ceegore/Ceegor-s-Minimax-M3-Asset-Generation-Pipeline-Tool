@@ -1,0 +1,12 @@
+--- a/scripts/releaseArtifacts.js
++++ b/scripts/releaseArtifacts.js
+@@
+ function outerManifestEntries(paths) {
+   const entries = [];
+-  // The executable inside the unpacked tree is part of the published set.
+-  if (fs.existsSync(paths.executable)) entries.push(relative(paths.output, paths.executable));
++  // Do not publish the internal unpacked EXE as a separate GitHub asset.
++  // FILES.sha256 protects it inside the tree and the outer manifest protects
++  // each final ZIP/part containing that tree. Authenticode is verified
++  // directly before packaging and after test extraction.
+   // Archive: single zip, or every independent part zip.

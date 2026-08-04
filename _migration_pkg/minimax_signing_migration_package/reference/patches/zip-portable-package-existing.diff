@@ -1,0 +1,28 @@
+--- a/scripts/zip-portable.js
++++ b/scripts/zip-portable.js
+@@
+ const REQUIRE_CODE_SIGNING = process.env.REQUIRE_CODE_SIGNING === '1';
++const PACKAGE_EXISTING = process.argv.includes('--package-existing');
+@@
+-  await fsp.rm(UNPACKED, { recursive: true, force: true });
++  if (!PACKAGE_EXISTING) await fsp.rm(UNPACKED, { recursive: true, force: true });
+@@
+-  log('Step 1/2: building dist/win-unpacked/ via electron-builder --win dir...');
++  if (PACKAGE_EXISTING) {
++    log('Step 1/2: using the prebuilt dist-out/win-unpacked tree...');
++    for (const required of [path.join(UNPACKED, 'MiniMaxAssetTool.exe'), path.join(UNPACKED, 'resources', 'app.asar')]) {
++      if (!fs.existsSync(required)) fail(`--package-existing is missing ${required}`);
++    }
++  } else {
++  log('Step 1/2: building dist/win-unpacked/ via electron-builder --win dir...');
+@@
+-  if (!fs.existsSync(UNPACKED)) {
++  }
++  if (!fs.existsSync(UNPACKED)) {
+@@
+-  if (fs.existsSync(sourceBin)) {
++  if (PACKAGE_EXISTING) {
++    const packagedRuntime = verifyRuntimeAssets(destBin);
++    if (!packagedRuntime.ok) fail('prebuilt packaged runtime is incomplete or changed:\n  ' + packagedRuntime.issues.join('\n  '));
++    log(`  verified ${packagedRuntime.count} prebuilt runtime files by SHA-256`);
++  } else if (fs.existsSync(sourceBin)) {
