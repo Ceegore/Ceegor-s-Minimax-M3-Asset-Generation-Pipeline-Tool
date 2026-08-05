@@ -61,19 +61,35 @@ test('isPathUnder: sibling whose name is a STRING PREFIX of the root returns fal
 });
 
 // ----- Symlink tests -----
-// Skipped gracefully on platforms where symlink creation is denied
-// (Windows without Developer Mode / admin).
-function canSymlink() {
-  // Retry with backoff: on Windows the capability exists (Developer Mode)
-  // but fs.symlinkSync can fail TRANSIENTLY under load (Defender scanning,
-  // ERROR_BUSY/ACCESS_DENIED). A single failed probe used to skip all six
-  // symlink tests, which drops pathUtils.js branch coverage below its
-  // RR2-B003 waiver floor and flakes the release coverage gate. The
-  // privilege itself is deterministic, so retries cannot fake capability.
+// Skipped gracefully on platforms where neither symlink nor junction
+// creation is possible. On Windows a directory-junction fallback needs
+// NO privilege at all (see makeDirLink), so these tests run there
+// deterministically and the coverage gate cannot flake on capability.
+function makeDirLink(target, linkPath) {
+  try {
+    fs.symlinkSync(target, linkPath, 'dir');
+  } catch (err) {
+    if (process.platform !== 'win32') throw err;
+    // Windows without Developer Mode/admin denies symlinks (EPERM),
+    // including transiently under CI load even when the privilege is
+    // nominally present. A directory junction requires no privilege and
+    // realpathSync resolves it identically, so the realpath-based escape
+    // detection under test is exercised the same way. Never downgrade on
+    // non-Windows: skip semantics there must stay capability-driven.
+    fs.symlinkSync(target, linkPath, 'junction');
+  }
+}
+
+function canDirLink() {
+  // Retry with backoff: fs.symlinkSync can fail TRANSIENTLY under load
+  // (Defender scanning, ERROR_BUSY/ACCESS_DENIED). A single failed probe
+  // used to skip all six link tests, which drops pathUtils.js branch
+  // coverage below its RR2-B003 waiver floor and flakes the release
+  // coverage gate. The junction fallback above makes Windows immune.
   for (let attempt = 0; attempt < 5; attempt++) {
     try {
-      const probe = path.join(tmpRoot, `probe-symlink-${attempt}`);
-      fs.symlinkSync(tmpRoot, probe, 'dir');
+      const probe = path.join(tmpRoot, `probe-link-${attempt}`);
+      makeDirLink(tmpRoot, probe);
       fs.unlinkSync(probe);
       return true;
     } catch {
@@ -84,33 +100,33 @@ function canSymlink() {
   return false;
 }
 
-const skipOnNoSymlink = canSymlink() ? test : test.skip;
+const skipOnNoDirLink = canDirLink() ? test : test.skip;
 
-skipOnNoSymlink('isPathUnder: symlink inside root pointing outside returns false', () => {
+skipOnNoDirLink('isPathUnder: symlink inside root pointing outside returns false', () => {
   const root = path.join(tmpRoot, 'allowed');
   fs.mkdirSync(root, { recursive: true });
   const outside = path.join(tmpRoot, 'outside');
   fs.mkdirSync(outside, { recursive: true });
   fs.writeFileSync(path.join(outside, 'secret.txt'), 'x');
   const link = path.join(root, 'escape');
-  fs.symlinkSync(outside, link, 'dir');
+  makeDirLink(outside, link);
   // Without the fix, the normalised path `<root>/escape/secret.txt`
   // would have started with `<root>/` and the check would have passed.
   assert.equal(pathUtils.isPathUnder(path.join(link, 'secret.txt'), root), false);
 });
 
-skipOnNoSymlink('isPathUnder: symlink whose target IS under root still returns true', () => {
+skipOnNoDirLink('isPathUnder: symlink whose target IS under root still returns true', () => {
   const root = path.join(tmpRoot, 'realroot');
   fs.mkdirSync(root, { recursive: true });
   const target = path.join(root, 'data');
   fs.mkdirSync(target, { recursive: true });
   fs.writeFileSync(path.join(target, 'ok.txt'), 'x');
   const link = path.join(root, 'alias');
-  fs.symlinkSync(target, link, 'dir');
+  makeDirLink(target, link);
   assert.equal(pathUtils.isPathUnder(path.join(link, 'ok.txt'), root), true);
 });
 
-skipOnNoSymlink('isParentUnderAny: symlinked parent directory is realpath-resolved', () => {
+skipOnNoDirLink('isParentUnderAny: symlinked parent directory is realpath-resolved', () => {
   // The parent-dir helper is what fb:write / audio:cut use for
   // write targets that don't exist yet. Make sure a symlinked
   // parent that points inside the root still passes.
@@ -119,24 +135,24 @@ skipOnNoSymlink('isParentUnderAny: symlinked parent directory is realpath-resolv
   const realSub = path.join(root, 'realsub');
   fs.mkdirSync(realSub, { recursive: true });
   const link = path.join(tmpRoot, 'aliasdir');
-  fs.symlinkSync(realSub, link, 'dir');
+  makeDirLink(realSub, link);
   // Write target is a non-existent leaf under the symlinked dir.
   const writeTarget = path.join(link, 'newfile.png');
   assert.equal(pathUtils.isParentUnderAny(writeTarget, [root]), true);
 });
 
-skipOnNoSymlink('isParentUnderAny: write target whose symlinked parent points outside returns false', () => {
+skipOnNoDirLink('isParentUnderAny: write target whose symlinked parent points outside returns false', () => {
   const root = path.join(tmpRoot, 'safe');
   fs.mkdirSync(root, { recursive: true });
   const outside = path.join(tmpRoot, 'outside-dir');
   fs.mkdirSync(outside, { recursive: true });
   const link = path.join(root, 'escape-link');
-  fs.symlinkSync(outside, link, 'dir');
+  makeDirLink(outside, link);
   const writeTarget = path.join(link, 'evil.png');
   assert.equal(pathUtils.isParentUnderAny(writeTarget, [root]), false);
 });
 
-skipOnNoSymlink('isPathUnder: non-existent leaf under symlinked parent pointing outside returns false (R5 F1)', () => {
+skipOnNoDirLink('isPathUnder: non-existent leaf under symlinked parent pointing outside returns false (R5 F1)', () => {
   // The F1 gap: realIfExists used to return the unresolved string whenever
   // the leaf didn't exist, so `<root>/f1escape/evil.png` (a write target
   // that doesn't exist yet) passed isPathUnder even though f1escape points
@@ -147,12 +163,12 @@ skipOnNoSymlink('isPathUnder: non-existent leaf under symlinked parent pointing 
   const outside = path.join(tmpRoot, 'f1outside');
   fs.mkdirSync(outside, { recursive: true });
   const link = path.join(root, 'f1escape');
-  fs.symlinkSync(outside, link, 'dir');
+  makeDirLink(outside, link);
   const writeTarget = path.join(link, 'evil.png'); // does not exist yet
   assert.equal(pathUtils.isPathUnder(writeTarget, root), false);
 });
 
-skipOnNoSymlink('isPathUnder: non-existent leaf under symlinked parent pointing inside root still returns true (R5 F1)', () => {
+skipOnNoDirLink('isPathUnder: non-existent leaf under symlinked parent pointing inside root still returns true (R5 F1)', () => {
   // Positive counterpart: the walk-up fix must not over-reject a write
   // target whose symlinked parent resolves to INSIDE the root.
   const root = path.join(tmpRoot, 'f1posroot');
@@ -160,7 +176,7 @@ skipOnNoSymlink('isPathUnder: non-existent leaf under symlinked parent pointing 
   const realSub = path.join(root, 'f1realsub');
   fs.mkdirSync(realSub, { recursive: true });
   const link = path.join(root, 'f1alias');
-  fs.symlinkSync(realSub, link, 'dir');
+  makeDirLink(realSub, link);
   const writeTarget = path.join(link, 'newfile.png'); // does not exist yet
   assert.equal(pathUtils.isPathUnder(writeTarget, root), true);
 });
