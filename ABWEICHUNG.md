@@ -143,3 +143,12 @@ Abweichung von der Vorgabe festgehalten.
 - **Massnahme:** main (v1.0.6, dc75864) war direkter Vorfahre von release/1.0.7-legacy (2cc734f); der Merge erfolgte als reiner Fast-Forward ohne eigenen Merge-Commit und ohne Aenderung irgendeines Dateiinhalts. Danach Dispatch des Workflows mit --ref release/1.0.7-legacy und version=1.0.7 (Workflow-Laenge: Version ist hart auf 1.0.7 verriegelt).
 - **Sicherheit:** Keine Schwaechung - die Veroeffentlichung bleibt unveraendert an die legacy-publication-Umgebung mit erforderlichem Reviewer gebunden; der Merge enthaelt ausschliesslich bereits qualifizierte, lokal gruen getestete Commits.
 
+
+## A-010 - CI-Bereitstellung des kuratierten ffprobe.exe ueber die lock-verankerte npm-Abhaengigkeit
+
+- **Befund:** Der erste CI-Lauf von release-legacy-final.yml scheiterte im Qualifikations-Job beim Schritt 'Setup offline runtime': Q-002 in scripts/setup.js bricht ohne kuratiertes bin/ffprobe.exe fail-closed ab. Lokal existiert die Datei, in einem frischen CI-Checkout nicht.
+- **Ursache:** Das kuratierte ffprobe.exe ist kein Download des Setup-Skripts, sondern ein manuell verankertes Laufzeit-Asset (SHA-256-Pin in scripts/runtime-assets.json). Die frueheren Vollrelease-Workflows liefen nie 'npm run setup' in CI; der neue Qualifikations-Job folgt dagegen treu der Spezifikation 16.1 (setup + check).
+- **Fix:** Beide CI-Jobs (qualify, candidate) stellen bin/ffprobe.exe jetzt VOR 'npm run setup' bereit, indem sie die win32-x64-Binaer der lock-verankerten Abhaengigkeit @ffprobe-installer/ffprobe kopieren (npm ci garantiert die Registry-Integritaet ueber package-lock.json). Zusaetzlich wird die Kopie fail-closed gegen den unabhaengigen SHA-256- UND Byte-Pin in scripts/runtime-assets.json geprueft.
+- **Nachweis der Identitaet:** Das lokale kuratierte bin/ffprobe.exe ist bytetidentisch mit node_modules/@ffprobe-installer/win32-x64/ffprobe.exe (SHA-256 f28c4751e7367205267025aaf0fcfc921e34d9b7edaa46bd9c8abaf367fc9051, 80995328 Bytes, lokal verifiziert).
+- **Sicherheit:** Keine Schwaechung - der Fail-closed-Mechanismus von Q-002 bleibt unveraendert; das Asset wird lediglich aus einer bereits integritaetsgesicherten Quelle bereitgestellt und doppelt (npm-Lock plus SHA-256-Pin) verankert. Der Legacy-Kandidat verschifft weiterhin KEIN ffprobe.exe (A-004/A-005 bleiben gueltig).
+

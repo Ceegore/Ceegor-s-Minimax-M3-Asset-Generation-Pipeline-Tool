@@ -69,6 +69,27 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      # Q-002 fail-closes `npm run setup` without a curated bin/ffprobe.exe.
+      # The curated binary is byte-identical to the lock-file-pinned
+      # @ffprobe-installer win32-x64 dependency (npm ci guarantees registry
+      # integrity); provision it here and re-verify against the independent
+      # runtime-assets.json SHA-256 pin (fail-closed on any mismatch).
+      - name: Provision curated ffprobe.exe (hash-pinned)
+        run: |
+          $src = Join-Path 'node_modules' '@ffprobe-installer/win32-x64/ffprobe.exe'
+          if (-not (Test-Path -LiteralPath $src)) { throw 'lock-pinned @ffprobe-installer binary not found after npm ci' }
+          $expected = (Get-Content scripts/runtime-assets.json -Raw | ConvertFrom-Json).assets | Where-Object { $_.path -eq 'ffprobe.exe' } | Select-Object -First 1
+          if (-not $expected) { throw 'ffprobe.exe pin missing from scripts/runtime-assets.json' }
+          $actual = Get-FileHash -Algorithm SHA256 -LiteralPath $src
+          if ($actual.Hash.ToLowerInvariant() -ne $expected.sha256.ToLowerInvariant()) {
+            throw ('ffprobe.exe SHA-256 mismatch: expected ' + $expected.sha256 + ', got ' + $actual.Hash)
+          }
+          if ((Get-Item -LiteralPath $src).Length -ne $expected.bytes) {
+            throw 'ffprobe.exe byte-size mismatch against scripts/runtime-assets.json'
+          }
+          Copy-Item -LiteralPath $src -Destination (Join-Path 'bin' 'ffprobe.exe') -Force
+          Write-Host ('curated ffprobe.exe provisioned, sha256=' + $actual.Hash)
+
       - name: Setup offline runtime (downloads, staged activation)
         run: npm run setup
 
@@ -133,6 +154,23 @@ jobs:
 
       - name: Install dependencies
         run: npm ci
+
+      # Same hash-pinned provisioning as the qualify job (see comment there).
+      - name: Provision curated ffprobe.exe (hash-pinned)
+        run: |
+          $src = Join-Path 'node_modules' '@ffprobe-installer/win32-x64/ffprobe.exe'
+          if (-not (Test-Path -LiteralPath $src)) { throw 'lock-pinned @ffprobe-installer binary not found after npm ci' }
+          $expected = (Get-Content scripts/runtime-assets.json -Raw | ConvertFrom-Json).assets | Where-Object { $_.path -eq 'ffprobe.exe' } | Select-Object -First 1
+          if (-not $expected) { throw 'ffprobe.exe pin missing from scripts/runtime-assets.json' }
+          $actual = Get-FileHash -Algorithm SHA256 -LiteralPath $src
+          if ($actual.Hash.ToLowerInvariant() -ne $expected.sha256.ToLowerInvariant()) {
+            throw ('ffprobe.exe SHA-256 mismatch: expected ' + $expected.sha256 + ', got ' + $actual.Hash)
+          }
+          if ((Get-Item -LiteralPath $src).Length -ne $expected.bytes) {
+            throw 'ffprobe.exe byte-size mismatch against scripts/runtime-assets.json'
+          }
+          Copy-Item -LiteralPath $src -Destination (Join-Path 'bin' 'ffprobe.exe') -Force
+          Write-Host ('curated ffprobe.exe provisioned, sha256=' + $actual.Hash)
 
       - name: Setup offline runtime
         run: npm run setup
