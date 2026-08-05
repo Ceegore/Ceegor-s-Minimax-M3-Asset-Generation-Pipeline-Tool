@@ -63,6 +63,25 @@ jobs:
         run: |
           node -e "const v=require('./package.json').version; if(v!=='${{ env.LOCKED_VERSION }}'){console.error('package.json version '+v+' != ${{ env.LOCKED_VERSION }}');process.exit(1)}"
 
+      # The pathUtils symlink tests exercise the realpath-based escape
+      # detection and require the Windows symlink privilege. Hosted runners
+      # ship WITHOUT Developer Mode, so the capability probe fails
+      # deterministically there, six tests skip, and pathUtils.js branch
+      # coverage drops below its waiver floor — flaking the coverage gate
+      # on every repetition. Enabling Developer Mode via registry (runners
+      # run as admin) grants the privilege. Nothing is weakened: the
+      # following step fail-closes if the capability is still absent.
+      - name: Enable Windows Developer Mode (grants symlink privilege)
+        run: |
+          $key = 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\AppModelUnlock'
+          if (-not (Test-Path $key)) { New-Item -Path $key -Force | Out-Null }
+          New-ItemProperty -Path $key -Name AllowDevelopmentWithoutDevLicense -Value 1 -PropertyType DWord -Force | Out-Null
+          Write-Host 'Developer Mode registry value set.'
+
+      - name: Assert symlink capability (fail-closed — no silent test skips)
+        run: |
+          node -e "const fs=require('fs'),os=require('os'),p=require('path');const t=fs.mkdtempSync(p.join(os.tmpdir(),'ci-symlink-'));try{fs.symlinkSync(t,p.join(t,'l'),'dir');console.log('symlink capability present')}catch(e){console.error('symlink capability ABSENT: '+e.message);process.exit(1)}finally{try{fs.rmSync(t,{recursive:true,force:true})}catch{}}"
+
       - name: Clean tree guard
         run: git status --short; if ((git status --porcelain | Measure-Object -Line).Lines -ne 0) { throw 'Worktree is not clean.' }
 
