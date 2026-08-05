@@ -87,6 +87,7 @@ jobs:
           if ((Get-Item -LiteralPath $src).Length -ne $expected.bytes) {
             throw 'ffprobe.exe byte-size mismatch against scripts/runtime-assets.json'
           }
+          New-Item -ItemType Directory -Path bin -Force | Out-Null
           Copy-Item -LiteralPath $src -Destination (Join-Path 'bin' 'ffprobe.exe') -Force
           Write-Host ('curated ffprobe.exe provisioned, sha256=' + $actual.Hash)
 
@@ -169,6 +170,7 @@ jobs:
           if ((Get-Item -LiteralPath $src).Length -ne $expected.bytes) {
             throw 'ffprobe.exe byte-size mismatch against scripts/runtime-assets.json'
           }
+          New-Item -ItemType Directory -Path bin -Force | Out-Null
           Copy-Item -LiteralPath $src -Destination (Join-Path 'bin' 'ffprobe.exe') -Force
           Write-Host ('curated ffprobe.exe provisioned, sha256=' + $actual.Hash)
 
