@@ -167,3 +167,10 @@ Abweichung von der Vorgabe festgehalten.
 - **Fix:** tests/unit/src/pathUtils.test.js nutzt jetzt makeDirLink(): ein dir-Symlink wird versucht, und NUR auf Windows faellt der Helper auf eine Directory-Junction zurueck (fs.symlinkSync mit Typ junction). Junctions brauchen kein Privileg und werden von realpathSync identisch aufgeloest - der getestete Escape-Schutz (realpath-Vergleich in pathUtils) wird damit auf demselben Codepfad geprueft. Auf nicht-Windows-Plattformen bleibt alles unveraendert capability-gesteuert.
 - **Verifikation:** Lokal 12/12 Tests gruen (0 Skips). Zusaetzlicher Direktnachweis: eine Junction nach ausserhalb wird von isPathUnder/isParentUnderAny als Escape erkannt (false), eine Junction ins Root-Innere passiert (true), realpathSync loest die Junction exakt auf.
 - **Sicherheit:** Keine Schwaechung - Coverage-Gate und Waiver-Regeln unveraendert; die Tests koennen unter Windows nicht mehr durch ein fehlendes Privileg wegskippen. Die CI-Assertion aus A-011 bleibt als Zusatzschutz bestehen.
+
+## A-013 Seed-Release von Draft auf Pre-Release veroeffentlicht
+
+- **Befund:** CI-Lauf 31051924586 scheiterte im Kandidaten-Job beim Schritt 'Download the pinned legacy seed release asset': gh release download meldete 'release not found'.
+- **Ursache:** Die Seed-Release legacy-shell-seed-2026-08-04 war ein DRAFT. Das GITHUB_TOKEN des Workflows (contents: read) kann Draft-Releases nicht lesen.
+- **Fix:** Die Seed-Release wurde von Draft auf veroeffentlicht gestellt und als PRE-RELEASE markiert, damit sie nicht als Produktrelease oder 'Latest' missverstanden wird. Der Release-Text stellt klar: internes Build-Input, kein Produktrelease, nicht installieren.
+- **Sicherheit:** Keine Schwaechung - der Seed bleibt ueber die SHA-256-Pins in scripts/legacy-shell.lock.json verankert und wird von materialize-legacy-seed.ps1 fail-closed geprueft; die Oeffentlichkeit des Downloads aendert nichts an der Integritaetskette.
