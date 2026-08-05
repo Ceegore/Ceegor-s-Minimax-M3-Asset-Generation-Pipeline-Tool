@@ -118,7 +118,7 @@
       "owner": "Ceegor",
       "ticket": "RR2-B003",
       "expiry": "2026-11-30",
-      "reason": "Uncovered lines 32-33 are the Windows reserved-device rejection arm for inputs that Node's own fs layer refuses to create; every other path-traversal and normalization arm is fully covered.",
+      "reason": "Uncovered lines 32-33 are the Windows reserved-device rejection arm for inputs that Node's own fs layer refuses to create; the 65:* branches are the unreachable short-circuit halves of the isPathUnder null guards (normalize never returns a half-null pair for the tested inputs); every other path-traversal and normalization arm is fully covered. The scope was corrected on 2026-08-05 to list every BRDA key LCOV actually measures (10/10 gate snapshots stable), so the scope-honour safety net engages when Node's V8 percentage metric dips below the floor without any real coverage change.",
       "substituteEvidence": "Covered by the security test suite (tests/security) and the path-grant contract tests which exercise hostile paths end-to-end.",
       "remediation": "Add the remaining reserved-device fixtures (NUL variants, trailing-space forms) as pure unit inputs before expiry.",
       "waivers": [
@@ -132,7 +132,7 @@
           "metric": "branch",
           "floor": 75,
           "uncoveredLines": [],
-          "uncoveredBranches": ["31:7.0", "42:9.0", "65:12.0", "74:19.0", "86:21.0", "105:30.0"]
+          "uncoveredBranches": ["31:7.0", "42:9.0", "65:12.0", "65:13.0", "65:14.0", "74:19.0", "86:21.0", "105:30.0"]
         }
       ]
     },

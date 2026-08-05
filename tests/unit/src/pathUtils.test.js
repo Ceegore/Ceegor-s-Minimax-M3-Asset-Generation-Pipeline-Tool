@@ -64,14 +64,24 @@ test('isPathUnder: sibling whose name is a STRING PREFIX of the root returns fal
 // Skipped gracefully on platforms where symlink creation is denied
 // (Windows without Developer Mode / admin).
 function canSymlink() {
-  try {
-    const probe = path.join(tmpRoot, 'probe-symlink');
-    fs.symlinkSync(tmpRoot, probe, 'dir');
-    fs.unlinkSync(probe);
-    return true;
-  } catch {
-    return false;
+  // Retry with backoff: on Windows the capability exists (Developer Mode)
+  // but fs.symlinkSync can fail TRANSIENTLY under load (Defender scanning,
+  // ERROR_BUSY/ACCESS_DENIED). A single failed probe used to skip all six
+  // symlink tests, which drops pathUtils.js branch coverage below its
+  // RR2-B003 waiver floor and flakes the release coverage gate. The
+  // privilege itself is deterministic, so retries cannot fake capability.
+  for (let attempt = 0; attempt < 5; attempt++) {
+    try {
+      const probe = path.join(tmpRoot, `probe-symlink-${attempt}`);
+      fs.symlinkSync(tmpRoot, probe, 'dir');
+      fs.unlinkSync(probe);
+      return true;
+    } catch {
+      const waitUntil = Date.now() + 150 * (attempt + 1);
+      while (Date.now() < waitUntil) { /* busy backoff */ }
+    }
   }
+  return false;
 }
 
 const skipOnNoSymlink = canSymlink() ? test : test.skip;

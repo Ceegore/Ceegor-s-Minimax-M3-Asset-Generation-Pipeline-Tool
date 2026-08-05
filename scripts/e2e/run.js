@@ -311,6 +311,14 @@ app.whenReady().then(async () => {
       process.stdout.write('\nSURFACE_REPORT_ERROR ' + (e && e.message || e) + '\n');
     }
     process.stdout.write('\nE2E_BEGIN\n' + JSON.stringify(report, null, 2) + '\nE2E_END\n');
+    // Compact per-scenario failure digest: the full JSON report above is
+    // routinely truncated by log filters (e.g. the flakiness runner keeps
+    // only 'fail'-matching lines), which used to make a flaky repetition
+    // impossible to attribute to a scenario. One loud line per failure.
+    for (const r of report.results.filter((x) => !x.pass && !x.skipped)) {
+      const detail = r.error ? String(r.error).split('\n')[0] : (r.problems || []).join(' | ');
+      process.stdout.write(`\nE2E_FAILED_SCENARIO: ${r.name} :: ${String(detail).slice(0, 300)}\n`);
+    }
     process.stdout.write(exitCode
       ? `\nE2E_FAIL (${passed}/${total} passed, ${scenarioFailed} scenario + ${visualFailed} visual failure(s), exit=${exitCode})\n`
       : `\nE2E_PASS (${passed}/${total}, ${skipped} skipped)\n`);

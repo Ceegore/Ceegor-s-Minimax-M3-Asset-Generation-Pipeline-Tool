@@ -176,14 +176,17 @@ jobs:
       - name: SBOM
         run: npm run sbom
 
-      - name: Finalize release inventory
-        run: npm run finalize:release
-
       - name: Prepare pinned Minisign toolchain
         env:
           MINISIGN_KEY_B64: ${{ secrets.MINISIGN_KEY_B64 }}
           MINISIGN_PUB_KEY: ${{ secrets.MINISIGN_PUB_KEY }}
         run: .\scripts\prepare-minisign.ps1
+
+      # finalize must run AFTER the toolchain preparation: it fail-closes without
+      # MINISIGN_PUB_PATH and only embeds the RR2-C001 verifier SHA-256 pin when
+      # MINISIGN_TOOL_PATH points at the pinned minisign.exe.
+      - name: Finalize release inventory
+        run: npm run finalize:release
 
       - name: Sign the release inventory (Minisign — integrity only)
         run: npm run sign:release
