@@ -136,3 +136,10 @@ Abweichung von der Vorgabe festgehalten.
 - **Verifikation:** Vollstaendige Flakiness-Qualifikation mit beiden Fixes gruen: serielle Unit-Suite + 10x alle 7 Release-Suiten (unit-parallel, smoke, e2e, contract, coverage-gate, lint, renderer-isolation) + 50x High-Risk-Batterie, 0 Fehlschlaege, FLAKY_EXIT=0.
 - **Sicherheit:** Keine Schwaechung - die Coverage-Floors und Waiver-Regeln bleiben unveraendert streng; korrigiert wurden ein transienter Test-Skip und ein veralteter Scope-Eintrag sowie eine Diagnose-Luecke.
 
+
+## A-009 - Fast-Forward-Merge von release/1.0.7-legacy nach main vor der Veroeffentlichung
+
+- **Befund:** GitHub erlaubt workflow_dispatch ausschliesslich fuer Workflows, die auf dem Default-Branch (main) existieren. release-legacy-final.yml lag nur auf release/1.0.7-legacy; ein Dispatch war so unmoeglich.
+- **Massnahme:** main (v1.0.6, dc75864) war direkter Vorfahre von release/1.0.7-legacy (2cc734f); der Merge erfolgte als reiner Fast-Forward ohne eigenen Merge-Commit und ohne Aenderung irgendeines Dateiinhalts. Danach Dispatch des Workflows mit --ref release/1.0.7-legacy und version=1.0.7 (Workflow-Laenge: Version ist hart auf 1.0.7 verriegelt).
+- **Sicherheit:** Keine Schwaechung - die Veroeffentlichung bleibt unveraendert an die legacy-publication-Umgebung mit erforderlichem Reviewer gebunden; der Merge enthaelt ausschliesslich bereits qualifizierte, lokal gruen getestete Commits.
+
