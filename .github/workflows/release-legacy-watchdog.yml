@@ -1,0 +1,68 @@
+# .github/workflows/release-legacy-watchdog.yml
+# ============================================================================
+# Infrastructure watchdog for the one-time release-legacy-final workflow.
+#
+# Background (ABWEICHUNG A-016): on 2026-08-06 two consecutive
+# release-legacy-final runs (31116994911, 31118935892) were canceled from
+# OUTSIDE mid-flakiness-battery with the bare "The operation was canceled"
+# annotation — no test verdict, no timeout hit (job timeout is 300 min),
+# no push/dispatch event in the repository event feed, no human actor.
+# All gates up to the cancellation were green; the second run had already
+# passed all 10 flakiness repetitions (including the A-015 hardened
+# coverage-gate) when it was killed during the high-risk battery. The
+# signature is a hosted-runner host eviction — outside this repo's control.
+#
+# This watchdog retries EXCLUSIVELY the verdict-less cancellation case:
+#   - conclusion 'cancelled' -> re-run the failed/cancelled jobs of the
+#     SAME run (attempt cap: 3 total attempts; attempt 4 fails loudly).
+#   - conclusion 'failure'   -> NEVER retried: a failed gate is evidence.
+#   - conclusion 'success'   -> untouched.
+#
+# This adds NO automatic publication (spec §19): the publish job remains
+# gated on the protected legacy-publication environment (required reviewer)
+# and ships only the artifact produced by a fully green qualification.
+# A re-run re-executes the identical gates on the identical head SHA —
+# no floor lowered, no assertion weakened.
+#
+# NOTE: workflow_run listeners are only active from the DEFAULT branch,
+# so this file must exist on main (it is kept in sync with
+# release/1.0.7-legacy). It is retired together with release-legacy-final
+# after v1.0.7 publication (spec §22).
+# ============================================================================
+
+name: release-legacy-watchdog
+
+on:
+  workflow_run:
+    workflows: ['release-legacy-final']
+    types: [completed]
+
+permissions:
+  actions: write
+
+jobs:
+  retry-cancelled-run:
+    name: Retry verdict-less cancellation (max 3 attempts)
+    if: github.event.workflow_run.conclusion == 'cancelled'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Re-run the canceled release run (attempt cap)
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_ID: ${{ github.event.workflow_run.id }}
+          RUN_ATTEMPT: ${{ github.event.workflow_run.run_attempt }}
+          HEAD_BRANCH: ${{ github.event.workflow_run.head_branch }}
+        run: |
+          set -euo pipefail
+          echo "watchdog: release-legacy-final run ${RUN_ID} (branch ${HEAD_BRANCH}, attempt ${RUN_ATTEMPT}) ended CANCELLED without a test verdict."
+          if [ "${RUN_ATTEMPT}" -ge 3 ]; then
+            echo "::error::Three consecutive infrastructure cancellations of release-legacy-final run ${RUN_ID}. The watchdog stops here — human attention required."
+            exit 1
+          fi
+          echo "watchdog: re-running the failed/canceled jobs of run ${RUN_ID} (this becomes attempt $((RUN_ATTEMPT + 1)) of max 3)."
+          if ! gh run rerun --failed "${RUN_ID}" --repo "${GITHUB_REPOSITORY}"; then
+            echo "watchdog: rerun-failed-jobs was rejected; falling back to a full re-run of the same run."
+            gh run rerun "${RUN_ID}" --repo "${GITHUB_REPOSITORY}"
+          fi
+          echo "watchdog: re-run dispatched. No gate was skipped or weakened — the identical qualification runs again."
