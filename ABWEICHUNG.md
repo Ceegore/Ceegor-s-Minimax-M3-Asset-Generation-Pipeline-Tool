@@ -174,3 +174,9 @@ Abweichung von der Vorgabe festgehalten.
 - **Ursache:** Die Seed-Release legacy-shell-seed-2026-08-04 war ein DRAFT. Das GITHUB_TOKEN des Workflows (contents: read) kann Draft-Releases nicht lesen.
 - **Fix:** Die Seed-Release wurde von Draft auf veroeffentlicht gestellt und als PRE-RELEASE markiert, damit sie nicht als Produktrelease oder 'Latest' missverstanden wird. Der Release-Text stellt klar: internes Build-Input, kein Produktrelease, nicht installieren.
 - **Sicherheit:** Keine Schwaechung - der Seed bleibt ueber die SHA-256-Pins in scripts/legacy-shell.lock.json verankert und wird von materialize-legacy-seed.ps1 fail-closed geprueft; die Oeffentlichkeit des Downloads aendert nichts an der Integritaetskette.
+
+## A-014 CI: Fail-closed Link-Probe mit Diagnose statt stillem Skip
+
+- **Befund:** CI-Lauf 31056203453 scheiterte erneut in Repetition 6/10 des coverage-gates mit denselben Werten (pathUtils.js 96.85% / Branch 73.53%), obwohl A-012 den Junction-Fallback bereits enthaelt. Ein anderer Lauf (31051924586) war mit identischem Code 10/10 gruen - der Probe-Schlag fehlt also nur INTERMITTIEREND, und der stille Skip verschleiert die wahre Ursache.
+- **Fix:** Die Probe in tests/unit/src/pathUtils.test.js ist jetzt fail-closed mit Diagnose: (1) 10 Versuche mit wachsendem Backoff bis 2s statt 5 kurze, (2) kein sofortiges unlink mehr nach der Probe-Erzeugung (unter AV-Scans kann das unlink transient scheitern, obwohl die Erzeugung erfolgreich war - das faelschte bisher 'keine Faehigkeit'), (3) auf Windows WIRD NICHT MEHR GESKIPPT: scheitern alle Versuche, wirft die Suite einen harten Fehler mit den exakten OS-Fehlercodes aller Versuche. Auf nicht-Windows bleibt der graceful Skip erhalten.
+- **Sicherheit:** Keine Schwaechung - im Gegenteil: ein Kapazitaetsverlust wird jetzt als lauter Testfehler sichtbar statt als stiller Skip mit Coverage-Fehlalarm. Gate und Waiver-Regeln unveraendert.

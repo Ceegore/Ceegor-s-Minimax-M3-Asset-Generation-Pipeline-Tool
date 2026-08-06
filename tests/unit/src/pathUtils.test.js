@@ -61,10 +61,12 @@ test('isPathUnder: sibling whose name is a STRING PREFIX of the root returns fal
 });
 
 // ----- Symlink tests -----
-// Skipped gracefully on platforms where neither symlink nor junction
-// creation is possible. On Windows a directory-junction fallback needs
-// NO privilege at all (see makeDirLink), so these tests run there
-// deterministically and the coverage gate cannot flake on capability.
+// On Windows these tests run deterministically: a directory-junction
+// fallback needs NO privilege at all (see makeDirLink). On non-Windows
+// they skip only when symlink creation is genuinely impossible.
+// The probe is FAIL-CLOSED WITH DIAGNOSTICS: if no link mechanism works,
+// the suite throws instead of silently skipping, so a capability loss
+// surfaces as a hard test failure with the exact OS error.
 function makeDirLink(target, linkPath) {
   try {
     fs.symlinkSync(target, linkPath, 'dir');
@@ -80,27 +82,43 @@ function makeDirLink(target, linkPath) {
   }
 }
 
-function canDirLink() {
-  // Retry with backoff: fs.symlinkSync can fail TRANSIENTLY under load
-  // (Defender scanning, ERROR_BUSY/ACCESS_DENIED). A single failed probe
-  // used to skip all six link tests, which drops pathUtils.js branch
-  // coverage below its RR2-B003 waiver floor and flakes the release
-  // coverage gate. The junction fallback above makes Windows immune.
-  for (let attempt = 0; attempt < 5; attempt++) {
+function probeDirLink() {
+  const errors = [];
+  // 10 attempts with growing backoff: under heavy CI load (Defender
+  // scanning, parallel suites) link creation can fail TRANSIENTLY even
+  // when the capability is present. The budget is generous because a
+  // wrong "no capability" verdict skips six security tests and drops
+  // pathUtils.js below its coverage floor.
+  for (let attempt = 0; attempt < 10; attempt++) {
     try {
       const probe = path.join(tmpRoot, `probe-link-${attempt}`);
       makeDirLink(tmpRoot, probe);
-      fs.unlinkSync(probe);
+      // Deliberately no unlink here: under AV scanning an immediate
+      // unlink can fail transiently even when creation succeeded, which
+      // used to fake "no capability". Leftover probe links live inside
+      // tmpRoot and are removed by the test.after teardown.
       return true;
-    } catch {
-      const waitUntil = Date.now() + 150 * (attempt + 1);
+    } catch (err) {
+      errors.push(`${err.code}: ${err.message}`);
+      const waitUntil = Date.now() + Math.min(2000, 200 * (attempt + 1));
       while (Date.now() < waitUntil) { /* busy backoff */ }
     }
   }
-  return false;
+  throw new Error(
+    'pathUtils link tests cannot run: neither symlink nor junction creation '
+    + `worked on ${process.platform} (tmpRoot=${tmpRoot}). Errors: ${errors.join(' | ')}`,
+  );
 }
 
-const skipOnNoDirLink = canDirLink() ? test : test.skip;
+// Non-Windows keeps the original graceful skip (no junction concept).
+// Windows fails closed with diagnostics instead of skipping.
+let skipOnNoDirLink;
+if (process.platform === 'win32') {
+  probeDirLink(); // throws with full diagnostics when no mechanism works
+  skipOnNoDirLink = test;
+} else {
+  try { probeDirLink(); skipOnNoDirLink = test; } catch { skipOnNoDirLink = test.skip; }
+}
 
 skipOnNoDirLink('isPathUnder: symlink inside root pointing outside returns false', () => {
   const root = path.join(tmpRoot, 'allowed');
