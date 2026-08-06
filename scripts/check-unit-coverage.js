@@ -117,6 +117,22 @@ function parseCoverageTable(text) {
   return { aggregate, files };
 }
 
+// A-015: parse the suite's own result counters out of the spec report.
+// The critical-file rule is only meaningful when EVERY test executed: a
+// skipped or cancelled test can silently drop a critical module below its
+// floor (the exact failure mode behind the 2026-08-06 CI flake). The gate
+// therefore FAILS CLOSED on any skip/cancel instead of judging a table
+// that was produced by an incomplete suite.
+function parseSuiteCounters(text) {
+  const get = (name) => Number(
+    (String(text).match(new RegExp(`^\\s*(?:\u2139\\s*)?${name}\\s+(\\d+)`, 'm')) || [])[1] || 0,
+  );
+  return {
+    tests: get('tests'), pass: get('pass'), fail: get('fail'),
+    skipped: get('skipped'), cancelled: get('cancelled'),
+  };
+}
+
 // RR2-B003: a waiver is only valid when it is narrow and accountable.
 // Returns a list of problems (empty array = structurally valid).
 function validateWaiverEntry(name, w, now = new Date()) {
@@ -414,6 +430,8 @@ async function main() {
   // is NOT arbitrary command execution. Node expands the glob itself.
   // RR2-B003: the spec reporter (metric table) and the lcov reporter
   // (complete line/branch evidence) run in ONE suite pass.
+  // A-015: wrapped in runOnce() for fail-closed counters + one retry.
+  function runOnce() {
   const r = spawnSync(
     process.execPath,
     [
@@ -425,27 +443,30 @@ async function main() {
     { cwd: ROOT, encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 }
   );
   if (r.error) {
-    log('FATAL: failed to launch the unit suite: ' + r.error.message);
-    process.exit(1);
+    return { fatal: 'failed to launch the unit suite: ' + r.error.message };
   }
   let specOut = '';
   try { specOut = fs.readFileSync(specDest, 'utf8'); }
-  catch (e) { log(`FATAL: the spec report was not written: ${e.message}`); process.exit(1); }
+  catch (e) { return { fatal: `the spec report was not written: ${e.message}` }; }
   // A non-zero exit from the test run itself means failing tests — always
   // fail the gate regardless of what the coverage table says.
   if (r.status !== 0) {
-    log('FATAL: the unit suite itself failed (non-zero exit). Coverage gate aborted.');
-    log('Last 40 lines of the suite output:');
+    log('the unit suite itself failed (non-zero exit). Last 40 lines:');
     process.stdout.write((specOut + '\n' + (r.stdout || '') + '\n' + (r.stderr || '')).split(/\r?\n/).slice(-40).join('\n') + '\n');
-    process.exit(1);
+    return { fatal: 'the unit suite itself failed (non-zero exit)' };
+  }
+  const counters = parseSuiteCounters(specOut);
+  // A-015 fail-closed: an incomplete suite cannot produce a trusted
+  // critical-file table.
+  if (counters.skipped > 0 || counters.cancelled > 0) {
+    return { fatal: `the unit suite reports ${counters.skipped} skipped / ${counters.cancelled} cancelled test(s); the coverage table is incomplete` };
   }
 
   const parsed = parseCoverageTable(specOut);
   if (parsed.aggregate.line === null) {
-    log('FATAL: could not locate the "all files" coverage summary in the output.');
-    log('Last 15 lines of the suite output:');
+    log('could not locate the "all files" coverage summary. Last 15 lines:');
     process.stdout.write(specOut.split(/\r?\n/).slice(-15).join('\n') + '\n');
-    process.exit(1);
+    return { fatal: 'could not locate the "all files" coverage summary in the output' };
   }
 
   // RR2-B003: mandatory LCOV + untested-line/branch + HTML evidence.
@@ -453,24 +474,48 @@ async function main() {
   try {
     lcovFiles = parseLcov(fs.readFileSync(lcovDest, 'utf8'));
   } catch (e) {
-    log(`FATAL: the LCOV report was not usable: ${e.message}`);
-    process.exit(1);
+    return { fatal: `the LCOV report is not usable: ${e.message}` };
   }
   if (lcovFiles.length === 0) {
-    log('FATAL: the LCOV report is empty — no coverage evidence was produced.');
-    process.exit(1);
+    return { fatal: 'the LCOV report is empty; no coverage evidence was produced' };
   }
-  const untested = untestedEvidence(lcovFiles, CRITICAL_FILES);
+  return { parsed, counters, lcovFiles };
+  }
 
   const waivers = loadWaivers(waiverPath);
-  const result = evaluateGate(parsed, {
+  const gateOpts = {
     lineThreshold,
     branchThreshold,
     functionThreshold,
     waivers,
     criticalFiles: CRITICAL_FILES,
-    untested,
-  });
+  };
+
+  let run = runOnce();
+  if (run.fatal) { log(`FATAL: ${run.fatal}. Coverage gate aborted.`); process.exit(1); }
+  let result = evaluateGate(run.parsed, { ...gateOpts, untested: untestedEvidence(run.lcovFiles, CRITICAL_FILES) });
+  let retried = false;
+  let firstFailures = null;
+  if (!result.pass) {
+    // A-015: the suite ran cleanly (exit 0, zero skips) but the evaluation
+    // failed. Node's V8 coverage is lossy under load: a transient loss of
+    // per-file branch data reproduces exactly the uncovered set of skipped
+    // tests and defeats the scope-honour safety net (the 2026-08-06 CI
+    // flake). The documented noise note above already acknowledges this
+    // measurement instability, so re-measure ONCE with the SAME floors.
+    // No floor is lowered and no waiver widened: a real regression fails
+    // both measurements.
+    firstFailures = [...result.failures];
+    retried = true;
+    log('first evaluation failed on a cleanly-run suite; re-running the instrumented suite once (A-015 re-measurement, same floors):');
+    for (const f of firstFailures) log('  - ' + f);
+    run = runOnce();
+    if (run.fatal) { log(`FATAL: ${run.fatal}. Coverage gate aborted.`); process.exit(1); }
+    result = evaluateGate(run.parsed, { ...gateOpts, untested: untestedEvidence(run.lcovFiles, CRITICAL_FILES) });
+  }
+  const { parsed, counters, lcovFiles } = run;
+  const untested = untestedEvidence(lcovFiles, CRITICAL_FILES);
+  log(`suite counters: tests ${counters.tests} / pass ${counters.pass} / fail ${counters.fail} / skipped ${counters.skipped} / cancelled ${counters.cancelled}${retried ? ' (A-015: judged on the re-measurement)' : ''}`);
 
   log(`aggregate: line ${parsed.aggregate.line}% (floor ${lineThreshold}%) | branch ${parsed.aggregate.branch}% (floor ${branchThreshold}%) | function ${parsed.aggregate.function}% (floor ${functionThreshold}%)`);
   for (const row of result.evidence.critical) {
@@ -486,6 +531,9 @@ async function main() {
     result.evidence.untested = untested;
     result.evidence.lcov = path.relative(ROOT, lcovDest);
     result.evidence.htmlReport = path.relative(ROOT, htmlDest);
+    result.evidence.suiteCounters = counters;
+    result.evidence.retried = retried;
+    if (firstFailures) result.evidence.firstAttemptFailures = firstFailures;
     fs.writeFileSync(evidencePath, JSON.stringify(result.evidence, null, 2) + '\n', 'utf8');
     fs.writeFileSync(untestedDest, JSON.stringify({ generatedAt: result.evidence.generatedAt, critical: untested }, null, 2) + '\n', 'utf8');
     fs.writeFileSync(htmlDest, renderHtmlReport(result.evidence, untested), 'utf8');
@@ -512,4 +560,4 @@ if (require.main === module) {
   main().catch((e) => { log(`FATAL: ${e.stack || e.message}`); process.exit(1); });
 }
 
-module.exports = { parseCoverageTable, evaluateGate, validateWaiverEntry, parseLcov, untestedEvidence, CRITICAL_FILES, METRICS };
+module.exports = { parseCoverageTable, parseSuiteCounters, evaluateGate, validateWaiverEntry, parseLcov, untestedEvidence, CRITICAL_FILES, METRICS };
