@@ -13,9 +13,14 @@
 # signature is a hosted-runner host eviction — outside this repo's control.
 #
 # This watchdog retries EXCLUSIVELY the verdict-less cancellation case:
-#   - conclusion 'cancelled' -> re-run the failed/cancelled jobs of the
-#     SAME run (attempt cap: 3 total attempts; attempt 4 fails loudly).
-#   - conclusion 'failure'   -> NEVER retried: a failed gate is evidence.
+#   - every non-success job CANCELLED (no test verdict) -> re-run the
+#     failed/cancelled jobs of the SAME run. This covers BOTH the
+#     overall-conclusion 'cancelled' case AND the case where qualify
+#     succeeded but a later job was evicted while queued (run conclusion
+#     'failure' with zero failed jobs). Attempt cap: 3 total attempts;
+#     attempt 4 fails loudly.
+#   - ANY job with conclusion 'failure' -> NEVER retried: a failed gate
+#     is evidence and must not be overpainted by an automatic re-run.
 #   - conclusion 'success'   -> untouched.
 #
 # This adds NO automatic publication (spec §19): the publish job remains
@@ -41,26 +46,41 @@ permissions:
   actions: write
 
 jobs:
-  retry-cancelled-run:
-    name: Retry verdict-less cancellation (max 3 attempts)
-    if: github.event.workflow_run.conclusion == 'cancelled'
+  retry-verdict-less-run:
+    name: Retry verdict-less infra cancellation (max 3 attempts)
+    if: github.event.workflow_run.conclusion == 'cancelled' || github.event.workflow_run.conclusion == 'failure'
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
-      - name: Re-run the canceled release run (attempt cap)
+      - name: Re-run only verdict-less cancellations (attempt cap)
         env:
           GH_TOKEN: ${{ github.token }}
           RUN_ID: ${{ github.event.workflow_run.id }}
           RUN_ATTEMPT: ${{ github.event.workflow_run.run_attempt }}
+          RUN_CONCLUSION: ${{ github.event.workflow_run.conclusion }}
           HEAD_BRANCH: ${{ github.event.workflow_run.head_branch }}
         run: |
           set -euo pipefail
-          echo "watchdog: release-legacy-final run ${RUN_ID} (branch ${HEAD_BRANCH}, attempt ${RUN_ATTEMPT}) ended CANCELLED without a test verdict."
+          echo "watchdog: release-legacy-final run ${RUN_ID} (branch ${HEAD_BRANCH}, attempt ${RUN_ATTEMPT}) ended with conclusion '${RUN_CONCLUSION}'."
+          # A retry is permitted ONLY when no job carries a real failure
+          # verdict: a failed gate is evidence and must never be overpainted
+          # by an automatic second attempt. CANCELLED jobs never produced a
+          # verdict (runner eviction) — they are the retry target. A run
+          # whose qualify succeeded but whose later job was evicted while
+          # queued ends as overall 'failure' with zero failed jobs; that
+          # case is verdict-less too.
+          jobs_json="$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${RUN_ID}/jobs?per_page=100" --paginate)"
+          failed_jobs="$(printf '%s' "$jobs_json" | jq -r '.jobs[] | select(.conclusion == "failure") | .name')"
+          if [ -n "${failed_jobs}" ]; then
+            echo "watchdog: the run contains real job failure(s) — NOT retrying (a failed gate is evidence):"
+            printf '%s\n' "${failed_jobs}"
+            exit 0
+          fi
           if [ "${RUN_ATTEMPT}" -ge 3 ]; then
             echo "::error::Three consecutive infrastructure cancellations of release-legacy-final run ${RUN_ID}. The watchdog stops here — human attention required."
             exit 1
           fi
-          echo "watchdog: re-running the failed/canceled jobs of run ${RUN_ID} (this becomes attempt $((RUN_ATTEMPT + 1)) of max 3)."
+          echo "watchdog: every non-success job was canceled without a verdict (infrastructure). Re-running them (attempt $((RUN_ATTEMPT + 1)) of max 3)."
           if ! gh run rerun --failed "${RUN_ID}" --repo "${GITHUB_REPOSITORY}"; then
             echo "watchdog: rerun-failed-jobs was rejected; falling back to a full re-run of the same run."
             gh run rerun "${RUN_ID}" --repo "${GITHUB_REPOSITORY}"
