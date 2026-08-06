@@ -38,7 +38,7 @@ concurrency:
 
 env:
   LOCKED_VERSION: '1.0.7'
-  SEED_RELEASE_TAG: 'legacy-shell-seed-2026-08-04'
+  SEED_RELEASE_TAG: 'legacy-shell-seed-2026-08-06'
 
 jobs:
   # --------------------------------------------------------------------------

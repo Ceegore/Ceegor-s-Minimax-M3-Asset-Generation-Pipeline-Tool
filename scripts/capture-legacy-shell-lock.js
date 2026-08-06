@@ -115,7 +115,11 @@ function captureLegacyShellLock({ seed, tag, provenancePath, mutablePrefixes = D
     const exportRoot = path.resolve(exportDir);
     fs.rmSync(exportRoot, { recursive: true, force: true });
     fs.mkdirSync(exportRoot, { recursive: true });
-    const exportPaths = new Set([...Object.keys(frozenFiles), ...Object.keys(peFiles)]);
+    // The exported seed must be a runnable legacy shell: besides every
+    // frozen + PE file it MUST contain resources/app.asar, even though the
+    // asar is mutable content (the composition replaces it with the donor
+    // asar). A seed without app.asar is refused by materialize-legacy-seed.ps1.
+    const exportPaths = new Set([...Object.keys(frozenFiles), ...Object.keys(peFiles), 'resources/app.asar']);
     for (const relative of [...exportPaths].sort()) copyFilePreservingPath(seedRoot, relative, exportRoot);
     fs.writeFileSync(path.join(exportRoot, 'legacy-shell.lock.json'), `${JSON.stringify(lock, null, 2)}\n`, 'utf8');
   }

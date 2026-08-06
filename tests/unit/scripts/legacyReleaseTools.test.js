@@ -78,3 +78,16 @@ test('capture detects a PE file hidden behind an unusual extension', () => {
   const lock = captureLegacyShellLock({ seed: f.seed, tag: 'test' });
   assert.ok(lock.peFiles['resources/payload.bin']);
 });
+
+test('seed export is a runnable shell: it includes resources/app.asar', () => {
+  // The asar is mutable content (replaced by the donor asar at composition
+  // time), but a seed without it is not a legacy shell and is refused by
+  // materialize-legacy-seed.ps1. Regression test for the v1 seed ZIP that
+  // shipped without app.asar (CI run 31127764095).
+  const f = fixture();
+  const exportDir = path.join(f.base, 'export');
+  captureLegacyShellLock({ seed: f.seed, tag: 'test', exportDir });
+  assert.equal(fs.readFileSync(path.join(exportDir, 'resources/app.asar'), 'utf8'), 'old-app-content'.repeat(100));
+  assert.ok(fs.existsSync(path.join(exportDir, 'MiniMaxAssetTool.exe')));
+  assert.ok(fs.existsSync(path.join(exportDir, 'legacy-shell.lock.json')));
+});
