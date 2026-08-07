@@ -26,8 +26,30 @@ function log(m) { process.stdout.write(m + '\n'); }
 function fail(m) { process.stderr.write('ERROR: ' + m + '\n'); process.exit(1); }
 
 function findMinisign() {
-  const r = spawnSync('minisign', ['-V'], { encoding: 'utf8', windowsHide: true });
-  if (r.status === 0) return 'minisign';
+  // A-024: MINISIGN_TOOL_PATH is the CANONICAL pointer exported by
+  // scripts/prepare-minisign.ps1 (the pinned 0.11 toolchain outside the
+  // worktree). Honor it first and fail closed if it is set but unusable -
+  // silently falling back to some OTHER minisign would break the pin.
+  const pinned = process.env.MINISIGN_TOOL_PATH;
+  if (pinned) {
+    if (!fs.existsSync(pinned)) {
+      fail(`MINISIGN_TOOL_PATH is set but the file is missing: ${pinned}`);
+    }
+    // 'minisign -V' alone is the verify verb and exits non-zero with usage;
+    // a LIVE binary is proven by a successful spawn (no ENOENT/EACCES),
+    // regardless of the usage exit code.
+    const probe = spawnSync(pinned, ['-h'], { encoding: 'utf8', windowsHide: true });
+    if (probe.error) {
+      fail(`MINISIGN_TOOL_PATH points at an unlaunchable binary: ${pinned} (${probe.error.code || probe.error.message})`);
+    }
+    return pinned;
+  }
+  // Node's spawnSync does not consult PATHEXT on Windows, so probe both
+  // spellings of the PATH-resolved binary.
+  for (const name of ['minisign', 'minisign.exe']) {
+    const r = spawnSync(name, ['-h'], { encoding: 'utf8', windowsHide: true });
+    if (!r.error) return name;
+  }
   // Windows: check common install locations
   const candidates = [
     path.join(process.env.LOCALAPPDATA || '', 'Programs', 'minisign', 'minisign.exe'),

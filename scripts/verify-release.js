@@ -25,6 +25,28 @@ function signatureFor(filePath) {
   }
 }
 
+// A-024: resolve the minisign verifier the same way sign-release.js does.
+// MINISIGN_TOOL_PATH (exported by scripts/prepare-minisign.ps1) is the
+// canonical pinned-toolchain pointer; bare 'minisign' does not resolve via
+// Node's spawnSync on Windows (no PATHEXT), so probe both spellings.
+function resolveMinisign(root) {
+  const pinned = process.env.MINISIGN_TOOL_PATH;
+  if (pinned && fs.existsSync(pinned)) return pinned;
+  for (const name of ['minisign', 'minisign.exe']) {
+    const probe = childProcess.spawnSync(name, ['-h'], { encoding: 'utf8', windowsHide: true });
+    if (!probe.error) return name;
+  }
+  const candidates = [
+    path.join(process.env.LOCALAPPDATA || '', 'Programs', 'minisign', 'minisign.exe'),
+    'C:\\Program Files\\minisign\\minisign.exe',
+    path.join(root, 'dist-out', 'minisign.exe'),
+  ];
+  for (const c of candidates) {
+    if (fs.existsSync(c)) return c;
+  }
+  return null;
+}
+
 function parseArgs(argv) {
   return {
     requireArchive: argv.includes('--require-archive'),
@@ -345,11 +367,16 @@ function evaluate(root, opts = {}) {
         if (!fs.existsSync(pubKeyPath)) {
           errors.push(`Minisign public key not found at ${pubKeyPath} (set MINISIGN_PUB_PATH or track minisign.pub).`);
         } else {
-          const result = childProcess.spawnSync('minisign', [
-            '-V', '-p', pubKeyPath, '-m', manifestPath, '-x', sigPath,
-          ], { encoding: 'utf8', windowsHide: true });
-          if (result.status !== 0) {
-            errors.push(`Minisign verification failed: ${(result.stderr || '').trim()}`);
+          const minisignBin = resolveMinisign(root);
+          if (!minisignBin) {
+            errors.push('Minisign verifier not found (set MINISIGN_TOOL_PATH or put minisign.exe on PATH) - the manifest signature cannot be verified.');
+          } else {
+            const result = childProcess.spawnSync(minisignBin, [
+              '-V', '-p', pubKeyPath, '-m', manifestPath, '-x', sigPath,
+            ], { encoding: 'utf8', windowsHide: true });
+            if (result.status !== 0) {
+              errors.push(`Minisign verification failed: ${(result.stderr || '').trim()}`);
+            }
           }
         }
       } catch (e) {
