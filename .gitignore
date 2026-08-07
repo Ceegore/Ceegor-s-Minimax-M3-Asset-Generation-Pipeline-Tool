@@ -93,3 +93,11 @@ test-run.txt
 # release-qualification bundle extractions (evidence input, not source)
 _rq*/
 dist-work/
+
+# A-025: transient candidate-job staging dirs (seed download + materialized
+# legacy seed). Same class as the RQ-002 signing-material rule above: they
+# are pipeline scratch, not source — leaving them untracked made
+# `git status --porcelain` report the packaging tree as dirty and the
+# provenance gate rejected a correctly built candidate.
+seed-download/
+legacy-seed/
