@@ -20,7 +20,14 @@ $exe = Get-ChildItem -LiteralPath $toolDir -Recurse -File -Filter minisign.exe |
 if (-not $exe) { throw 'Pinned archive contains no minisign.exe.' }
 $keyPath = Join-Path $env:RUNNER_TEMP 'minisign.key'
 $pubPath = Join-Path $env:RUNNER_TEMP 'minisign.pub'
-[IO.File]::WriteAllBytes($keyPath, [Convert]::FromBase64String($env:MINISIGN_KEY_B64))
+# A-023: fail closed WITH diagnostics before decoding. A corrupt or
+# non-base64 secret must produce an actionable error, never an unexplained
+# .NET exception mid-write. Length is not secret material.
+$b64 = ($env:MINISIGN_KEY_B64 -replace '\s', '')
+if ($b64.Length -eq 0) { throw 'MINISIGN_KEY_B64 is empty after whitespace removal.' }
+if ($b64.Length % 4 -ne 0) { throw "MINISIGN_KEY_B64 is not valid base64: length $($b64.Length) is not a multiple of 4." }
+if ($b64 -notmatch '^[A-Za-z0-9+/]+={0,2}$') { throw 'MINISIGN_KEY_B64 contains characters outside the base64 alphabet.' }
+[IO.File]::WriteAllBytes($keyPath, [Convert]::FromBase64String($b64))
 Set-Content -LiteralPath $pubPath -Value $env:MINISIGN_PUB_KEY -Encoding ascii
 Add-Content -LiteralPath $env:GITHUB_PATH -Value $exe.DirectoryName
 Add-Content -LiteralPath $env:GITHUB_ENV -Value "MINISIGN_TOOL_PATH=$($exe.FullName)"
