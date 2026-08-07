@@ -126,10 +126,27 @@ if (!fs.existsSync(installer) || !fs.existsSync(executable)) {
           fail(`shortcut probe failed (exit ${probe.status}): ${(probe.stderr || probe.stdout || '').trim()}`);
         } else if (!probedTarget) {
           fail(`shortcut probe returned an EMPTY TargetPath for ${links[0]} (stderr: ${(probe.stderr || '').trim() || 'none'})`);
-        } else if (path.resolve(probedTarget) !== installedExecutable) {
-          fail(`shortcut does not point to the packaged executable (target: ${probedTarget}, expected: ${installedExecutable})`);
         } else {
-          process.stdout.write('[test-release-installer] PASS: no-admin install validation and shortcuts work\n');
+          // A-022: compare CANONICAL paths. On hosted runners os.tmpdir() can
+          // hand out the 8.3 short name (C:\Users\RUNNER~1\...) while
+          // WScript.Shell reports the expanded long name (runneradmin) - the
+          // SAME file in two spellings. realpathSync.native fails on missing
+          // paths, so a bogus target still fails closed instead of matching.
+          let actualNative;
+          try {
+            actualNative = fs.realpathSync.native(probedTarget);
+          } catch (err) {
+            fail(`shortcut target does not resolve to an existing file: ${probedTarget} (${err.code || err.message})`);
+            actualNative = null;
+          }
+          if (actualNative) {
+            const expectedNative = fs.realpathSync.native(installedExecutable);
+            if (actualNative !== expectedNative) {
+              fail(`shortcut does not point to the packaged executable (target: ${actualNative}, expected: ${expectedNative})`);
+            } else {
+              process.stdout.write('[test-release-installer] PASS: no-admin install validation and shortcuts work\n');
+            }
+          }
         }
       }
     }
