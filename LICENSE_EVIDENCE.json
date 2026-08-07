@@ -1,0 +1,92 @@
+{
+  "schemaVersion": 1,
+  "purpose": "License evidence for every component shipped in the 1.1.x release tree (§24 audit). Generated for the signing/signpath-1.1.0 line. Components without verifiable license evidence must not ship.",
+  "inventorySource": "THIRD_PARTY_NOTICES.md, scripts/runtime-assets.json, package-lock.json, LICENSE files bundled in the release tree",
+  "components": [
+    {
+      "name": "MiniMax Asset Tool (project code)",
+      "files": ["MiniMaxAssetTool.exe", "resources/app.asar"],
+      "license": "MIT",
+      "evidence": "LICENSE (repository root)",
+      "source": "this repository"
+    },
+    {
+      "name": "Electron runtime",
+      "files": ["ffmpeg.dll", "chrome_elf.dll", "d3dcompiler_47.dll", "libEGL.dll", "libGLESv2.dll", "vk_swiftshader.dll", "vulkan-1.dll", "LICENSE.electron.txt", "LICENSES.chromium.html"],
+      "license": "MIT (Electron), BSD-3-Clause (Chromium), see bundled license files",
+      "evidence": "LICENSE.electron.txt and LICENSES.chromium.html are shipped inside the release tree next to the runtime",
+      "source": "https://github.com/electron/electron"
+    },
+    {
+      "name": "FFmpeg ffprobe",
+      "files": ["resources/bin/ffprobe.exe"],
+      "license": "LGPL-2.1-or-later (ffprobe-only build; verify the exact configure flags of the pinned download before redistribution)",
+      "evidence": "scripts/setup.js pins the download URL and SHA-256; THIRD_PARTY_NOTICES.md documents GPL obligations for the shipped FFmpeg build",
+      "source": "https://ffmpeg.org / https://github.com/eugeneware/ffmpeg-static"
+    },
+    {
+      "name": "Real-ESRGAN ncnn Vulkan",
+      "files": ["resources/bin/realesrgan-ncnn-vulkan.exe"],
+      "license": "BSD-3-Clause (project distribution per THIRD_PARTY_NOTICES.md)",
+      "evidence": "THIRD_PARTY_NOTICES.md; hash pinned in scripts/runtime-assets.json",
+      "source": "https://github.com/xinntao/Real-ESRGAN"
+    },
+    {
+      "name": "ncnn",
+      "files": ["linked into resources/bin/realesrgan-ncnn-vulkan.exe"],
+      "license": "BSD-3-Clause",
+      "evidence": "THIRD_PARTY_NOTICES.md",
+      "source": "https://github.com/Tencent/ncnn"
+    },
+    {
+      "name": "Microsoft Visual C++ runtime (vcomp140.dll)",
+      "files": ["resources/bin/vcomp140.dll"],
+      "license": "Microsoft Visual C++ Redistributable license (redistributable runtime component)",
+      "evidence": "hash pinned in scripts/runtime-assets.json; shipped as a redistributable runtime dependency of Real-ESRGAN",
+      "source": "https://learn.microsoft.com/cpp/windows/redistributing-visual-cpp-files"
+    },
+    {
+      "name": "vcomp140d.dll (debug CRT)",
+      "files": [],
+      "license": "RESOLVED BY REMOVAL in the 1.1.x line",
+      "evidence": "Removed from scripts/runtime-assets.json, build-unpacked.js and zip-portable.js ship lists (§24): no runtime function and unclear redistribution terms. The 1.0.x seed releases remain byte-locked and keep the file.",
+      "source": "n/a"
+    },
+    {
+      "name": "Minisign verifier",
+      "files": ["minisign.exe (release attachment, not part of the application tree)"],
+      "license": "ISC",
+      "evidence": "pinned archive SHA-256 published in the release notes; public key published per release",
+      "source": "https://jedisct1.github.io/minisign/"
+    },
+    {
+      "name": "IS-Net model weights",
+      "files": ["resources/bin/models/isnet-general-use.onnx"],
+      "license": "Apache-2.0",
+      "evidence": "THIRD_PARTY_NOTICES.md; download URL and SHA-256 pinned in scripts/setup.js / src/isnetbg/modelRegistry.js",
+      "source": "https://github.com/xuebinqin/DIS"
+    },
+    {
+      "name": "BiRefNet model weights",
+      "files": ["resources/bin/models/birefnet-general.onnx", "resources/bin/models/birefnet-general-lite.onnx", "resources/bin/models/birefnet-portrait.onnx"],
+      "license": "MIT",
+      "evidence": "THIRD_PARTY_NOTICES.md; download URLs and SHA-256 pinned in scripts/setup.js / src/isnetbg/modelRegistry.js",
+      "source": "https://github.com/ZhengPeng7/BiRefNet"
+    },
+    {
+      "name": "Real-ESRGAN model weights",
+      "files": ["resources/bin/models/realesrgan-*"],
+      "license": "BSD-3-Clause project distribution",
+      "evidence": "THIRD_PARTY_NOTICES.md",
+      "source": "https://github.com/xinntao/Real-ESRGAN"
+    },
+    {
+      "name": "MI-GAN / LaMa inpainting model weights",
+      "files": ["downloaded on demand into the user's model directory"],
+      "license": "MIT (MI-GAN), Apache-2.0 (LaMa)",
+      "evidence": "THIRD_PARTY_NOTICES.md; download URLs pinned in src/inpaint/modelRegistry.js",
+      "source": "https://github.com/Picsart-AI-Research/MI-GAN / https://github.com/advimman/lama"
+    }
+  ],
+  "policy": "Any new binary or model added to the release tree must first add an entry here with verifiable evidence; unclear license = do not ship (§24)."
+}

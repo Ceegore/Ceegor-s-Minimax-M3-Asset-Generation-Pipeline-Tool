@@ -265,7 +265,7 @@ function printPrivilegeFix() {
     try {
       await run(process.execPath, [verify, '--require-signature'], { cwd: ROOT });
     } catch (_) {
-      fail('release build did not produce a validly signed executable. Configure WIN_CSC_LINK/WIN_CSC_KEY_PASSWORD or Azure Trusted Signing.');
+      fail('release build did not produce a validly signed executable. Signed 1.1.x releases are produced exclusively by the release-signpath workflow (SignPath Foundation signing); local signing via certificates is no longer supported.');
     }
   }
 
@@ -286,15 +286,15 @@ function printPrivilegeFix() {
   // Each entry is a source relative path (file or directory) that
   // the end-user's app needs at runtime. Models directory is
   // copied wholesale — IS-Net + Real-ESRGAN model files all live
-  // there. The `vcomp140*.dll` are the VC++ 2015 Redistributable
-  // Real-ESRGAN links against at runtime; without them the
-  // binary fails to start on a clean machine.
+  // there. The `vcomp140.dll` is the VC++ 2015 Redistributable
+  // Real-ESRGAN links against at runtime; without it the binary
+  // fails to start on a clean machine. vcomp140d.dll (debug CRT)
+  // is NOT shipped in the 1.1.x line (S24 license audit).
   const SHIP_ENTRIES = [
     'models',
     'realesrgan-ncnn-vulkan.exe',
     'realesrgan-ncnn-vulkan',
     'vcomp140.dll',
-    'vcomp140d.dll',
   ];
   if (PACKAGE_EXISTING) {
     log('');

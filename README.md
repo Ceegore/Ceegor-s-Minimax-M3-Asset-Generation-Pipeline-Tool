@@ -99,6 +99,10 @@ Future 1.1.x releases are being prepared for managed Authenticode signing.
 Do not disable Microsoft Defender, SmartScreen, Smart App Control, or add
 antivirus exclusions to run this application.
 
+Related documents: [CODE_SIGNING_POLICY.md](CODE_SIGNING_POLICY.md),
+[PRIVACY.md](PRIVACY.md), [LICENSE_EVIDENCE.json](LICENSE_EVIDENCE.json), and
+[UNINSTALL.md](UNINSTALL.md).
+
 To verify a release yourself:
 
 1. Download the release only from this repository's [Releases](../../releases) page — never from mirrors or third-party sites.

@@ -42,7 +42,10 @@ function copyRequiredRuntime(root, unpacked) {
     'realesrgan-ncnn-vulkan.exe',
     'realesrgan-ncnn-vulkan',
     'vcomp140.dll',
-    'vcomp140d.dll',
+    // vcomp140d.dll (debug CRT) is intentionally NOT shipped in the 1.1.x
+    // line: it has no runtime function and its redistribution terms are
+    // unclear (S24 license audit). The 1.0.x seed releases keep it because
+    // they are byte-locked to the 1.0.0 shell.
   ];
   fs.rmSync(destBin, { recursive: true, force: true });
   fs.mkdirSync(destBin, { recursive: true });

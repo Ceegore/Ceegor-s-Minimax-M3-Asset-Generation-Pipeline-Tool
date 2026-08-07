@@ -18,11 +18,6 @@
       "sha256": "8f72ef2e483465444b2059fc6744d6cb22cd8d8a27f6fa56befd2a42dcd0f78b"
     },
     {
-      "path": "vcomp140d.dll",
-      "bytes": 207736,
-      "sha256": "34980f5a28002967d4f2659b10a417b1b9a242e240195947c89195083d146c53"
-    },
-    {
       "path": "models/birefnet-general-lite.onnx",
       "bytes": 224005088,
       "sha256": "5600024376f572a557870a5eb0afb1e5961636bef4e1e22132025467d0f03333"

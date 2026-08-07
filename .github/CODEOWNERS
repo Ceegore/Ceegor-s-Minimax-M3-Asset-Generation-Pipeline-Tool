@@ -1,0 +1,16 @@
+# Release and signing paths require maintainer review (§47).
+# Single-maintainer project: all release-critical changes stay with Ceegore.
+
+* @Ceegore
+
+.github/workflows/release-signpath.yml @Ceegore
+.github/workflows/release-gate.yml @Ceegore
+scripts/pe-ownership-policy.json @Ceegore
+scripts/verify-signing-scope.js @Ceegore
+scripts/create-signing-bundle.js @Ceegore
+scripts/merge-signed-bundle.js @Ceegore
+scripts/verify-release.js @Ceegore
+scripts/releaseArtifacts.js @Ceegore
+signpath/ @Ceegore
+CODE_SIGNING_POLICY.md @Ceegore
+LICENSE_EVIDENCE.json @Ceegore
