@@ -221,3 +221,11 @@ Abweichung von der Vorgabe festgehalten.
 - **Verifikation:** Lokal 3x komplette E2E-Suite gruen (je 47/47, 0 Szenario-/Visual-Fehler, exit 0), resilience-disk in allen Laeufen bestanden.
 - **Sicherheit:** Keine Schwaechung - kein Floor (surface-threshold 96) und keine Gate-Logik wurden veraendert; das Flakiness-Gate verlangt weiterhin 10/10 gruen Repetitionen.
 
+## A-020 CI: Fail-closed Electron-Installationspruefung mit deterministischer Reparatur nach npm ci
+
+- **Befund:** Lauf 31134617191 von release-legacy-final scheiterte in der Qualifikation bei 'Unit tests (with line coverage)': exakt 1 von 2720 Tests ('fb:rename rejects newName with path separators') meldete 'Electron failed to install correctly. Please delete node_modules/electron and run npx install-electron'. Die identische Suite war unmittelbar zuvor lokal dreimal in Folge 2720/2720 gruen (Commits 9d5f3c7 und 22ab9a0, Pre-commit-Gate) - der Fehler ist eine beschaedigte Runner-Umgebung, kein Code-Fehler.
+- **Ursache:** npm ci laesst node_modules/electron UNVOLLSTAENDIG zurueck, wenn der Post-Install-Download der Electron-Binaerdatei unterbrochen wird (bekanntes transientes Verhalten gehosteter Runner). Ohne Pruefung vergiftet das die Unit-Gates mit einem Umweltfehler, der wie ein echtes Test-Verdikt aussieht.
+- **Fix:** Neuer Workflow-Schritt 'Assert Electron install integrity (A-020)' unmittelbar nach jedem npm ci (Qualifikation und Kandidat): eine fail-closed Sonde (node -e "require('electron')") prueft die Installation; schlaegt sie fehl, folgt GENAU EINE deterministische Reparatur (node node_modules/electron/install.js - der offizielle Installer des Paketinhalts, derselbe Codepfad wie der npm-Postinstall). Bleibt die Installation danach weiter beschaedigt, bricht der Job laut ab - die Gates laufen niemals auf einer kaputten Abhaengigkeit. Der Publish-Job braucht kein npm ci und ist unveraendert.
+- **Verifikation:** YAML-Syntax validiert (js-yaml-Parse), Sondenlogik lokal gruen (require('electron') aufgeloest), Schritt in beiden betroffenen Jobs vorhanden.
+- **Sicherheit:** Keine Schwaechung - kein Gate, kein Floor und keine Assertion wurden veraendert; die Sonde macht einen Umweltfehler FRUEH und UNTRENKBAR von echten Test-Verdikten sichtbar, statt ihn erst in den Unit-Gates als Einzeltest-Fehler sichtbar zu machen.
+

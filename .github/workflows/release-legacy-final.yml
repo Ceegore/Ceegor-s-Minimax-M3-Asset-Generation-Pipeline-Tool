@@ -88,6 +88,24 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      # A-020: npm ci can leave node_modules/electron INCOMPLETE when the
+      # post-install binary download is interrupted (run 31134617191: one unit
+      # test failed with 'Electron failed to install correctly'). Fail-closed
+      # probe with ONE deterministic repair (re-run electron's own installer);
+      # a still-broken install aborts the job instead of poisoning the gates.
+      - name: Assert Electron install integrity (A-020)
+        run: |
+          $probe = { node -e "require('electron')" 2>&1 }
+          $out = & $probe
+          if ($LASTEXITCODE -eq 0) { exit 0 }
+          Write-Host 'Electron install probe failed - running one deterministic repair:'
+          Write-Host $out
+          node node_modules/electron/install.js
+          if ($LASTEXITCODE -ne 0) { throw 'Electron repair install failed.' }
+          node -e "require('electron')"
+          if ($LASTEXITCODE -ne 0) { throw 'Electron is still broken after the repair attempt - refusing to run the gates on a damaged dependency install.' }
+          Write-Host 'Electron install repaired successfully.'
+
       # Q-002 fail-closes `npm run setup` without a curated bin/ffprobe.exe.
       # The curated binary is byte-identical to the lock-file-pinned
       # @ffprobe-installer win32-x64 dependency (npm ci guarantees registry
@@ -174,6 +192,24 @@ jobs:
 
       - name: Install dependencies
         run: npm ci
+
+      # A-020: npm ci can leave node_modules/electron INCOMPLETE when the
+      # post-install binary download is interrupted (run 31134617191: one unit
+      # test failed with 'Electron failed to install correctly'). Fail-closed
+      # probe with ONE deterministic repair (re-run electron's own installer);
+      # a still-broken install aborts the job instead of poisoning the gates.
+      - name: Assert Electron install integrity (A-020)
+        run: |
+          $probe = { node -e "require('electron')" 2>&1 }
+          $out = & $probe
+          if ($LASTEXITCODE -eq 0) { exit 0 }
+          Write-Host 'Electron install probe failed - running one deterministic repair:'
+          Write-Host $out
+          node node_modules/electron/install.js
+          if ($LASTEXITCODE -ne 0) { throw 'Electron repair install failed.' }
+          node -e "require('electron')"
+          if ($LASTEXITCODE -ne 0) { throw 'Electron is still broken after the repair attempt - refusing to run the gates on a damaged dependency install.' }
+          Write-Host 'Electron install repaired successfully.'
 
       # Same hash-pinned provisioning as the qualify job (see comment there).
       - name: Provision curated ffprobe.exe (hash-pinned)
