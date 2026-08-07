@@ -91,6 +91,10 @@ validated Windows runtime binaries byte-identical and updates the application
 content through Electron's app.asar package. This is a temporary transition
 mechanism, not the long-term release model.
 
+Version 1.0.7 was the final legacy-compatible release. Newer releases are built
+from source in GitHub Actions and submitted to the managed SignPath code-signing
+process. The old runtime-reuse mechanism is no longer used.
+
 Future 1.1.x releases are being prepared for managed Authenticode signing.
 Do not disable Microsoft Defender, SmartScreen, Smart App Control, or add
 antivirus exclusions to run this application.
