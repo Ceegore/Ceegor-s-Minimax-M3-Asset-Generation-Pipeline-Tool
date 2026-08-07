@@ -63,6 +63,26 @@ We aim to acknowledge reports within 48 hours and provide a fix within 7 days fo
 - Process tree kill on cancel/timeout
 - Interpreter binaries blocked as external tools
 
+## Windows security false positives (§55/56)
+
+If Microsoft Defender, SmartScreen, or Smart App Control warns about a genuine
+release of this application, the response is a submission, never a workaround:
+
+1. **Never disable protection.** Do not turn off Defender, SmartScreen, or
+   Smart App Control, and do not add antivirus exclusions for this
+   application. Any guidance suggesting that is a security red flag.
+2. Report the false positive to Microsoft through the Windows Defender
+   Security Intelligence submission portal
+   (https://www.microsoft.com/wdsi/filesubmission), attaching the flagged
+   file and selecting "False positive".
+3. Verify the release independently first (see README "Verifying release
+   authenticity"): SHA-256 manifest, Minisign signature, provenance, SBOM.
+   Only a release that passes verification is worth submitting as a false
+   positive.
+4. The 1.1.x release line is submitted to managed SignPath Foundation
+   code signing (see CODE_SIGNING_POLICY.md), which removes the
+   unsigned-reputation warning class for future releases.
+
 ## Threat Model
 
 The primary threat is a **compromised renderer** (via XSS, malicious content, or supply chain attack). The security boundary is the IPC layer — the renderer is treated as untrusted for all privileged operations.
