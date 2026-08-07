@@ -1,0 +1,271 @@
+# Phase 2 (§33-38): SignPath-signed release pipeline for the 1.1.x line.
+# DRAFT — lands on signing/signpath-1.1.0 after v1.0.7 is published.
+#
+# Properties mandated by the spec:
+#   - TAG-triggered only (v1.1.x); tag/version/main-origin are checked.
+#   - Full gate suite on the exact tagged commit before anything ships.
+#   - Fresh unsigned build from source (build-unpacked) — NO legacy composition.
+#   - PE ownership inventory: unknown PE = stop (§29).
+#   - Signing bundle contains EXACTLY MiniMaxAssetTool.exe (§30/35).
+#   - SignPath submit via pinned action; slug hardcoded, NOT a variable (§36).
+#   - Signed result validated (§37) and merged atomically; scope re-checked.
+#   - Strict order: sign -> merge -> zip -> manifests -> Minisign -> no byte
+#     changes afterwards (§38).
+#   - Publication gated on the protected `signed-publication` environment.
+
+name: release-signpath
+
+on:
+  push:
+    tags:
+      - 'v1.1.*'
+
+concurrency:
+  group: release-signpath-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  NODE_VERSION: '22'
+
+jobs:
+  # --------------------------------------------------------------------------
+  # Job 1: qualification + unsigned build + signing bundle
+  # --------------------------------------------------------------------------
+  build-and-request-signing:
+    name: Build, qualify, and submit the signing request
+    runs-on: windows-latest
+    timeout-minutes: 300
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          fetch-depth: 0
+
+      - name: Assert tag, version, and main-origin (§33)
+        run: |
+          $tag = "${{ github.ref_name }}"
+          if ($tag -notmatch '^v1\.1\.\d+(-rc\.\d+)?$') { throw "Unexpected tag: $tag" }
+          $pkg = Get-Content package.json -Raw | ConvertFrom-Json
+          $want = $tag.TrimStart('v') -replace '-rc\.\d+$', ''
+          if ($pkg.version -ne $want) { throw "package.json version $($pkg.version) does not match tag $tag" }
+          git merge-base --is-ancestor ${{ github.sha }} origin/main
+          if ($LASTEXITCODE -ne 0) { throw 'Tagged commit is not reachable from origin/main.' }
+          Write-Host "Tag $tag matches package.json $($pkg.version) and originates from main."
+
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Hash-pinned runtime setup
+        run: npm run setup
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Unit tests (with line coverage)
+        run: npm run test:coverage
+
+      - name: Coverage gate
+        run: npm run test:coverage:gate
+
+      - name: Contract tests
+        run: npm run test:contract
+
+      - name: IPC coverage
+        run: npm run test:ipc-coverage
+
+      - name: Mutation tests
+        run: npm run test:mutation
+
+      - name: Flakiness battery
+        run: npm run test:flaky
+
+      - name: E2E suite
+        run: npm run test:e2e
+
+      - name: Build the unsigned unpacked release (§34)
+        run: node scripts/build-unpacked.js --out "dist-work/unsigned"
+
+      - name: PE ownership inventory — unknown PE stops the build (§29)
+        run: |
+          node scripts/verify-signing-scope.js `
+            --mode signpath `
+            --root "dist-work/unsigned/win-unpacked" `
+            --policy "scripts/pe-ownership-policy.json" `
+            --allow-unsigned-owned
+
+      - name: Create the minimal signing bundle (§35, PE metadata §31)
+        id: bundle
+        run: |
+          node scripts/create-signing-bundle.js `
+            --unpacked "dist-work/unsigned/win-unpacked" `
+            --out "dist-work/signing-input" `
+            --version "${{ github.ref_name }}".TrimStart('v')
+          $v = (Get-Item dist-work/signing-input/MiniMaxAssetTool.exe).VersionInfo
+          "product_version=$($v.ProductVersion)" | Out-File -Append -Encoding ascii $env:GITHUB_OUTPUT
+          "file_version=$($v.FileVersion)" | Out-File -Append -Encoding ascii $env:GITHUB_OUTPUT
+
+      - name: Upload unsigned signing artifact
+        id: upload-unsigned
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: signpath-input
+          path: dist-work/signing-input/MiniMaxAssetTool.exe
+          if-no-files-found: error
+
+      - name: Submit SignPath signing request (§36)
+        uses: signpath/github-action-submit-signing-request@v2
+        with:
+          api-token: ${{ secrets.SIGNPATH_API_TOKEN }}
+          organization-id: ${{ vars.SIGNPATH_ORGANIZATION_ID }}
+          project-slug: ${{ vars.SIGNPATH_PROJECT_SLUG }}
+          signing-policy-slug: ${{ vars.SIGNPATH_SIGNING_POLICY_SLUG }}
+          artifact-configuration-slug: minimaxassettool-exe-v1
+          github-artifact-id: ${{ steps.upload-unsigned.outputs.artifact-id }}
+          wait-for-completion: true
+          wait-for-completion-timeout-in-seconds: 7200
+          output-artifact-directory: dist-work/signpath-output
+          parameters: |
+            productVersion: ${{ toJSON(steps.bundle.outputs.product_version) }}
+            fileVersion: ${{ toJSON(steps.bundle.outputs.file_version) }}
+
+      - name: Merge the signed result (§37)
+        run: |
+          node scripts/merge-signed-bundle.js `
+            --unsigned "dist-work/unsigned/win-unpacked" `
+            --signed "dist-work/signpath-output" `
+            --out "dist-out/win-unpacked" `
+            --version "${{ github.ref_name }}".TrimStart('v')
+
+      - name: Re-check the PE signing scope after merge (§33)
+        run: |
+          node scripts/verify-signing-scope.js `
+            --mode signpath `
+            --root "dist-out/win-unpacked" `
+            --policy "scripts/pe-ownership-policy.json"
+
+      - name: Package the signed tree (§38, strict order)
+        env:
+          REQUIRE_CODE_SIGNING: '1'
+        run: npm run package:existing
+
+      - name: SBOM
+        run: npm run sbom
+
+      - name: Finalize release metadata
+        run: npm run finalize:release
+
+      - name: Prepare pinned Minisign toolchain
+        env:
+          MINISIGN_KEY_B64: ${{ secrets.MINISIGN_KEY_B64 }}
+          MINISIGN_PUB_KEY: ${{ secrets.MINISIGN_PUB_KEY }}
+        run: .\scripts\prepare-minisign.ps1
+
+      - name: Sign the release inventory (Minisign, integrity only)
+        run: npm run sign:release
+
+      - name: Verify the release (signpath mode)
+        run: npm run verify:release:signpath
+
+      - name: Legacy-mode acceptance — packaged release (signpath mode)
+        env:
+          MINIMAX_RELEASE_MODE: 'signpath'
+        run: npm run test:packaged:release
+
+      - name: Legacy-mode acceptance — installer (signpath mode)
+        env:
+          MINIMAX_RELEASE_MODE: 'signpath'
+        run: npm run test:installer
+
+      - name: Legacy-mode acceptance — acceptance suite (signpath mode)
+        env:
+          MINIMAX_RELEASE_MODE: 'signpath'
+        run: npm run test:acceptance
+
+      - name: Stage the publication inventory
+        run: npm run stage:publication
+
+      - name: Upload the immutable signed candidate artifact
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: MiniMaxAssetTool-${{ github.ref_name }}-signpath-candidate
+          path: dist-out/publication/*
+          if-no-files-found: error
+          retention-days: 90
+
+  # --------------------------------------------------------------------------
+  # Job 2: publication — manual approval via the protected environment, then
+  # ships EXACTLY the tested signed candidate artifact.
+  # --------------------------------------------------------------------------
+  publish:
+    name: Publish the signed release (environment-gated)
+    needs: build-and-request-signing
+    runs-on: windows-latest
+    timeout-minutes: 90
+    environment: signed-publication
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+
+      - name: Download EXACTLY the tested signed candidate artifact
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
+        with:
+          name: MiniMaxAssetTool-${{ github.ref_name }}-signpath-candidate
+          path: dist-out
+
+      - name: Reconstruct the tested tree from the shipped archives
+        run: |
+          $stage = Join-Path $env:RUNNER_TEMP 'publish-extract'
+          New-Item -ItemType Directory -Path $stage -Force | Out-Null
+          $version = "${{ github.ref_name }}".TrimStart('v')
+          $parts = Get-ChildItem dist-out -File | Where-Object { $_.Name -match '^MiniMaxAssetTool-.*\.part\d+\.zip$' } | Sort-Object Name
+          if ($parts.Count -eq 0) { throw 'No .partN.zip archives found in the downloaded candidate artifact.' }
+          foreach ($p in $parts) { Expand-Archive -LiteralPath $p.FullName -DestinationPath $stage -Force }
+          $tree = Join-Path $stage ("MiniMaxAssetTool-" + $version + "-x64")
+          if (-not (Test-Path $tree)) { throw "Expected extracted tree not found: $tree" }
+          $dest = Join-Path (Get-Location) 'dist-out\win-unpacked'
+          if (Test-Path $dest) { Remove-Item $dest -Recurse -Force }
+          Move-Item -LiteralPath $tree -Destination $dest
+          if (-not (Test-Path (Join-Path $dest 'MiniMaxAssetTool.exe'))) { throw 'Reconstruction failed: exe missing.' }
+          if (-not (Test-Path (Join-Path $dest 'resources\app.asar'))) { throw 'Reconstruction failed: app.asar missing.' }
+
+      - name: Prepare pinned Minisign toolchain (verification only)
+        env:
+          MINISIGN_KEY_B64: ${{ secrets.MINISIGN_KEY_B64 }}
+          MINISIGN_PUB_KEY: ${{ secrets.MINISIGN_PUB_KEY }}
+        run: .\scripts\prepare-minisign.ps1
+
+      - name: Verify the staged publication before shipping
+        run: npm run verify:release:signpath
+
+      - name: Create the immutable release with the exact tested files
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create ${{ github.ref_name }} --repo ${{ github.repository }} `
+            --target ${{ github.sha }} `
+            --title "MiniMax Asset Tool ${{ github.ref_name }}" `
+            --generate-notes `
+            (Get-ChildItem dist-out -File | ForEach-Object { $_.FullName })
+
+      - name: Post-publication verification (re-download + Minisign)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $version = "${{ github.ref_name }}".TrimStart('v')
+          New-Item -ItemType Directory -Path redownload | Out-Null
+          gh release download ${{ github.ref_name }} --repo ${{ github.repository }} --dir redownload
+          & $env:MINISIGN_TOOL_PATH -V -m "redownload/MiniMaxAssetTool-$version-x64.sha256" -p $env:MINISIGN_PUB_PATH -x "redownload/MiniMaxAssetTool-$version-x64.sha256.minisig"
+          if ($LASTEXITCODE -ne 0) { throw 'Re-downloaded manifest failed Minisign verification.' }
+          Write-Host 'Post-publication verification passed.'

@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  SignPath Artifact Configuration (§32) for MiniMax Asset Tool.
+
+  actions/upload-artifact produces a ZIP; this configuration uses a zip root
+  and selects EXACTLY MiniMaxAssetTool.exe inside it for Authenticode
+  signing (§30 minimal bundle). The artifact-configuration slug in the
+  workflow is hardcoded: minimaxassettool-exe-v1 (§36 / Phase-2 step 1).
+-->
+<artifact-configuration xmlns="http://schemas.signpath.io/artifact-configuration/1.0">
+  <zip path="signpath-input">
+    <pe-file path="MiniMaxAssetTool.exe" sign="authenticode">
+      <for-each>
+        <verify-authenticode signature="SignPath Foundation" />
+      </for-each>
+    </pe-file>
+  </zip>
+</artifact-configuration>

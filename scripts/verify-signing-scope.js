@@ -57,7 +57,7 @@ function verifyLegacy(root, lock) {
   return { mode: 'legacy', peCount: expectedKeys.length };
 }
 
-function verifySignPath(root, policy, signatureProvider = getSignatureInfo) {
+function verifySignPath(root, policy, signatureProvider = getSignatureInfo, options = {}) {
   const pe = collectPe(root);
   const results = [];
   for (const [relative, info] of Object.entries(pe)) {
@@ -65,9 +65,14 @@ function verifySignPath(root, policy, signatureProvider = getSignatureInfo) {
     if (classification.kind === 'unknown') throw new Error(`unclassified PE file: ${relative}`);
     const signature = signatureProvider(info.absolute);
     if (classification.kind === 'owned') {
-      if (signature.Status !== 'Valid') throw new Error(`owned PE is not validly signed: ${relative} (${signature.Status})`);
-      const expectedSigner = classification.rule.expectedSigner || 'SignPath Foundation';
-      if (!new RegExp(expectedSigner, 'i').test(signature.SignerSubject || '')) throw new Error(`owned PE has wrong signer: ${relative} (${signature.SignerSubject || 'none'})`);
+      // --allow-unsigned-owned: classification-only inventory BEFORE signing;
+      // the owned signature does not exist yet, so only classification and
+      // existence are enforced. Upstream rules always apply.
+      if (!options.allowUnsignedOwned) {
+        if (signature.Status !== 'Valid') throw new Error(`owned PE is not validly signed: ${relative} (${signature.Status})`);
+        const expectedSigner = classification.rule.expectedSigner || 'SignPath Foundation';
+        if (!new RegExp(expectedSigner, 'i').test(signature.SignerSubject || '')) throw new Error(`owned PE has wrong signer: ${relative} (${signature.SignerSubject || 'none'})`);
+      }
     } else if (/SignPath Foundation/i.test(signature.SignerSubject || '')) throw new Error(`upstream PE must not carry the project SignPath signature: ${relative}`);
     results.push({ relative, kind: classification.kind, sha256: info.sha256, signature });
   }
@@ -94,7 +99,7 @@ function main() {
     result = verifyLegacy(root, JSON.parse(fs.readFileSync(path.resolve(args['legacy-lock']), 'utf8')));
   } else if (args.mode === 'signpath') {
     if (!args.policy) throw new Error('signpath mode requires --policy');
-    result = verifySignPath(root, JSON.parse(fs.readFileSync(path.resolve(args.policy), 'utf8')));
+    result = verifySignPath(root, JSON.parse(fs.readFileSync(path.resolve(args.policy), 'utf8')), getSignatureInfo, { allowUnsignedOwned: Boolean(args['allow-unsigned-owned']) });
   } else throw new Error(`unsupported mode: ${args.mode}`);
   process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
 }

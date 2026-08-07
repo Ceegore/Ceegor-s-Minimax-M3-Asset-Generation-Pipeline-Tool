@@ -1,0 +1,29 @@
+{
+  "$comment": "PE-ownership policy (§29) for the SignPath-signed 1.1.x line. Every PE in the release tree must classify as owned or upstream; unknown PE = build stop (verify-signing-scope.js --mode signpath). owned = valid SignPath signature required; upstream = must NOT carry the project SignPath signature.",
+  "ownedSigned": [
+    {
+      "path": "MiniMaxAssetTool.exe",
+      "expectedSigner": "SignPath Foundation",
+      "note": "§27: the ONLY project-owned signature target for 1.1.0. Installer/uninstaller EXEs may only be added after their complete source and build process live in the repository."
+    }
+  ],
+  "upstreamPatterns": [
+    "chrome_elf.dll",
+    "d3dcompiler_47.dll",
+    "ffmpeg.dll",
+    "libEGL.dll",
+    "libGLESv2.dll",
+    "vk_swiftshader.dll",
+    "vulkan-1.dll",
+    "resources/elevate.exe",
+    "resources/bin/**",
+    "resources/app.asar.unpacked/**",
+    "minisign.exe",
+    "vcomp140.dll"
+  ],
+  "rules": {
+    "unknownPe": "fail-closed: any PE not matched by ownedSigned or upstreamPatterns aborts the release (§29)",
+    "upstreamProvenance": "lockfile + runtime manifest + SHA-256 + SBOM (§29)",
+    "upstreamSignatures": "existing upstream signatures are checked but never replaced (§29)"
+  }
+}

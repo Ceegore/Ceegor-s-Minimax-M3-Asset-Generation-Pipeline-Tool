@@ -7,7 +7,7 @@ const path = require('path');
 const test = require('node:test');
 const { createSigningBundle } = require('../../../scripts/create-signing-bundle');
 const { mergeSignedBundle } = require('../../../scripts/merge-signed-bundle');
-const { classifyPath, globToRegExp } = require('../../../scripts/verify-signing-scope');
+const { classifyPath, globToRegExp, verifySignPath } = require('../../../scripts/verify-signing-scope');
 
 function file(root, relative, content) {
   const target = path.join(root, relative);
@@ -63,4 +63,39 @@ test('merge copies only the signed executable into the unsigned tree', () => {
   assert.equal(fs.readFileSync(path.join(output, 'resources/app.asar'), 'utf8'), 'app');
   assert.equal(fs.existsSync(path.join(output, 'must-not-copy.txt')), false);
   assert.notEqual(result.unsignedSha256, result.signedSha256);
+});
+
+function peFixture(base, relative) {
+  const target = path.join(base, relative);
+  fs.mkdirSync(path.dirname(target), { recursive: true });
+  // PE magic "MZ" so collectPe picks the fixture up as a PE.
+  fs.writeFileSync(target, 'MZ');
+}
+
+test('signpath scope: unsigned owned PE fails closed without the pre-sign flag', () => {
+  const base = fs.mkdtempSync(path.join(os.tmpdir(), 'signing-presign-'));
+  peFixture(base, 'MiniMaxAssetTool.exe');
+  const policy = { ownedSigned: [{ path: 'MiniMaxAssetTool.exe' }], upstreamPatterns: [] };
+  const unsigned = () => ({ Status: 'NotSigned', SignerSubject: '' });
+  assert.throws(
+    () => verifySignPath(base, policy, unsigned),
+    /owned PE is not validly signed/
+  );
+});
+
+test('signpath scope: --allow-unsigned-owned permits the pre-signing inventory only', () => {
+  const base = fs.mkdtempSync(path.join(os.tmpdir(), 'signing-presign-'));
+  peFixture(base, 'MiniMaxAssetTool.exe');
+  peFixture(base, 'chrome_elf.dll');
+  const policy = { ownedSigned: [{ path: 'MiniMaxAssetTool.exe' }], upstreamPatterns: ['chrome_elf.dll'] };
+  const unsigned = () => ({ Status: 'NotSigned', SignerSubject: '' });
+  const result = verifySignPath(base, policy, unsigned, { allowUnsignedOwned: true });
+  assert.equal(result.peCount, 2);
+  // Upstream rules still apply during the pre-signing inventory: an upstream
+  // PE carrying the project signature must still fail closed.
+  const projectSigned = () => ({ Status: 'Valid', SignerSubject: 'O=SignPath Foundation' });
+  assert.throws(
+    () => verifySignPath(base, policy, projectSigned, { allowUnsignedOwned: true }),
+    /upstream PE must not carry the project SignPath signature/
+  );
 });
