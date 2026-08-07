@@ -46,11 +46,21 @@ module.exports = {
     await sleep(DELAY + 500);
 
     // QA-031: Check that an error UI element was actually shown (not merely "no crash").
-    const errorShown = await exec(`(() => {
-      const toasts = document.querySelectorAll('#toast-root .toast, .error-toast, [data-toast]');
-      const errorPanels = document.querySelectorAll('.error-panel, .gen-error, [data-error]');
-      return toasts.length > 0 || errorPanels.length > 0;
-    })()`);
+    // A-019: the async error path (click -> validation -> toast) can take longer
+    // than DELAY+500 under CI load, while the toast itself stays visible for 3-4 s.
+    // Poll in-page up to 6 s instead of judging a single snapshot moment - an error
+    // that NEVER appears still fails the check.
+    const errorShown = await exec(`(() => new Promise((resolve) => {
+      const deadline = Date.now() + 6000;
+      const tick = () => {
+        const toasts = document.querySelectorAll('#toast-root .toast, .error-toast, [data-toast]');
+        const errorPanels = document.querySelectorAll('.error-panel, .gen-error, [data-error]');
+        if (toasts.length > 0 || errorPanels.length > 0) return resolve(true);
+        if (Date.now() > deadline) return resolve(false);
+        setTimeout(tick, 100);
+      };
+      tick();
+    }))()`);
     check(errorShown, 'resilience-disk: non-existent output_dir did not produce a visible error element (toast or panel)');
 
     // ---- Test 2: Very long path (250+ chars) ----
