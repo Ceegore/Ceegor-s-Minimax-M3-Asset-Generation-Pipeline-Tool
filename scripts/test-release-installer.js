@@ -109,13 +109,25 @@ if (!fs.existsSync(installer) || !fs.existsSync(executable)) {
         fail(`shortcut creation failed: ${missing.join(', ')}`);
       } else {
         const escaped = links[0].replace(/'/g, "''");
+        // A-021: read the shortcut target through the WScript.Shell COM
+        // object with pure .NET types - no cmdlet and no module dependency
+        // (same class of CI failure as A-018: a nested powershell.exe that
+        // cannot resolve a cmdlet prints nothing and this probe then judged
+        // an empty TargetPath as a wrong one). Fail-closed WITH diagnostics:
+        // a probe that errors or returns nothing is reported, never silently
+        // collapsed into a false 'wrong target' verdict.
         const probe = spawnSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command',
-          `$s=(New-Object -ComObject WScript.Shell).CreateShortcut('${escaped}'); [Console]::Write($s.TargetPath)`], {
+          `$ErrorActionPreference='Stop'; $lnk=(New-Object -ComObject WScript.Shell).CreateShortcut('${escaped}'); [Console]::Write($lnk.TargetPath)`], {
           encoding: 'utf8', windowsHide: true,
         });
         const installedExecutable = path.join(installTarget, 'MiniMaxAssetTool.exe');
-        if (probe.status !== 0 || path.resolve(probe.stdout.trim()) !== installedExecutable) {
-          fail('shortcut does not point to the packaged executable');
+        const probedTarget = (probe.stdout || '').trim();
+        if (probe.status !== 0) {
+          fail(`shortcut probe failed (exit ${probe.status}): ${(probe.stderr || probe.stdout || '').trim()}`);
+        } else if (!probedTarget) {
+          fail(`shortcut probe returned an EMPTY TargetPath for ${links[0]} (stderr: ${(probe.stderr || '').trim() || 'none'})`);
+        } else if (path.resolve(probedTarget) !== installedExecutable) {
+          fail(`shortcut does not point to the packaged executable (target: ${probedTarget}, expected: ${installedExecutable})`);
         } else {
           process.stdout.write('[test-release-installer] PASS: no-admin install validation and shortcuts work\n');
         }
