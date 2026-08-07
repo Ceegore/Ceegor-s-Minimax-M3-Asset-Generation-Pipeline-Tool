@@ -348,6 +348,33 @@ jobs:
           MINISIGN_PUB_KEY: ${{ secrets.MINISIGN_PUB_KEY }}
         run: .\scripts\prepare-minisign.ps1
 
+      # A-026: the candidate artifact contains ONLY the publication inventory
+      # (partN zips + manifests + provenance + SBOM), but verify:release:legacy
+      # also checks the extracted tree (exe, app.asar hash vs provenance).
+      # Reconstruct dist-out/win-unpacked from the EXACT shipped archives.
+      # This strengthens the gate: it proves the published zips contain the
+      # tested tree (equivalent to the §21 test-extraction check).
+      - name: Reconstruct the tested tree from the shipped archives (A-026)
+        run: |
+          $stage = Join-Path $env:RUNNER_TEMP 'publish-extract'
+          New-Item -ItemType Directory -Path $stage -Force | Out-Null
+          $parts = Get-ChildItem dist-out -File | Where-Object { $_.Name -match '^MiniMaxAssetTool-.*\.part\d+\.zip$' } | Sort-Object Name
+          if ($parts.Count -eq 0) { throw 'No .partN.zip archives found in the downloaded candidate artifact.' }
+          foreach ($p in $parts) {
+            Write-Host ("Extracting " + $p.Name)
+            Expand-Archive -LiteralPath $p.FullName -DestinationPath $stage -Force
+          }
+          $tree = Join-Path $stage ("MiniMaxAssetTool-" + $env:LOCKED_VERSION + "-x64")
+          if (-not (Test-Path $tree)) { throw "Expected extracted tree not found: $tree" }
+          $dest = Join-Path (Get-Location) 'dist-out\win-unpacked'
+          if (Test-Path $dest) { Remove-Item $dest -Recurse -Force }
+          Move-Item -LiteralPath $tree -Destination $dest
+          $exe = Join-Path $dest 'MiniMaxAssetTool.exe'
+          $asar = Join-Path $dest 'resources\app.asar'
+          if (-not (Test-Path $exe)) { throw 'Reconstruction failed: MiniMaxAssetTool.exe missing from the shipped archives.' }
+          if (-not (Test-Path $asar)) { throw 'Reconstruction failed: resources/app.asar missing from the shipped archives.' }
+          Write-Host 'Reconstructed dist-out\win-unpacked from the exact shipped archives.'
+
       - name: Verify the staged publication before shipping
         env:
           MINIMAX_RELEASE_MODE: 'legacy'
