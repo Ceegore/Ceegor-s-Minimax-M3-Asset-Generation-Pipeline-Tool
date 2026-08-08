@@ -1,6 +1,6 @@
 {
   "name": "ceegor-minimax-m3-asset-generation-pipeline-tool",
-  "version": "1.0.7",
+  "version": "1.0.8",
   "description": "Windows batch asset production for MiniMax with local image processing, organized exports, and pipeline reports.",
   "main": "main.js",
   "scripts": {

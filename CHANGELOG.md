@@ -2,6 +2,33 @@
 
 Notable user-facing changes are recorded here.
 
+## 1.0.8 - 2026-08-08
+
+Packaging hotfix over 1.0.7 (same application code). Released because v1.0.7
+installations silently failed to start when the second split archive
+(`part2.zip`) was not extracted: Chromium's V8 startup files lived in part2,
+and without them the executable dies with no error dialog at all
+(`FATAL: Error loading V8 startup snapshot file`).
+
+### Changed
+
+- Release is built directly from source in CI (no legacy runtime composition).
+- Split-archive partitioning now pins every boot-critical file (executable,
+  V8 snapshots, pak files, rendering DLLs, `resources/app.asar`, integrity
+  manifest, self-check tooling) into `part1.zip`; the build fails closed if
+  the pinning does not hold.
+- The package ships `verify-install.cmd` / `verify-install.ps1`: a
+  Node-free self-check that verifies every installed file against the shipped
+  `FILES.sha256` inventory and names exactly what is missing or damaged.
+- START HERE documents the mandatory "extract EVERY part into the SAME
+  folder" step and the self-check before first launch.
+
+### Notes
+
+- Integrity model is unchanged from 1.0.7: SHA-256 inventories + detached
+  Minisign signature + provenance + SBOM. This release is NOT
+  Authenticode-signed (see ABWEICHUNG A-028 for the release decision).
+
 ## 1.0.7 - 2026-08-04
 
 Final legacy-compatible 1.0.x release. It ships the exact hash-locked runtime

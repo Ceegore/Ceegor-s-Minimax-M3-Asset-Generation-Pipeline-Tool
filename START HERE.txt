@@ -31,6 +31,28 @@ Portable use
 If you do not want to install it, keep the extracted folder together and double-click
 "MiniMaxAssetTool.exe". Do not move only the EXE; it needs the resources folder beside it.
 
+Manual extraction of the split archives (IMPORTANT)
+---------------------------------------------------
+
+GitHub limits release files to 2 GB, so the release is split into independent
+archives: .part1.zip, .part2.zip (and possibly more). EVERY part must be
+extracted into the SAME folder; the parts then merge into one complete
+installation folder.
+
+1. Download ALL part archives plus the signature files (.sha256, .sha256.minisig,
+   minisign.pub, minisign.exe) into one download folder.
+2. Extract EVERY part archive into the same destination folder (for example
+   with Windows Explorer: right-click each .zip -> "Extract All..." -> same
+   target folder, confirm overwriting/merging when asked).
+3. Open the resulting MiniMaxAssetTool-<version>-x64 folder and run
+   "verify-install.cmd". It checks every file against the shipped FILES.sha256
+   inventory and tells you exactly if anything is missing.
+4. Only when the check reports OK, start "MiniMaxAssetTool.exe".
+
+If the application does not start at all and shows no error, almost always one
+part archive was not extracted. Run "verify-install.cmd" — it names the
+missing files.
+
 Windows security message
 ------------------------
 
@@ -40,11 +62,10 @@ Minisign signature, which the installer verifies before extracting anything.
 Download releases only from the official Ceegore GitHub repository and compare
 the download with the published SHA-256 manifest.
 
-The final legacy-compatible 1.0.x release keeps the previously validated
-Windows runtime binaries byte-identical and updates the application content
-through Electron's app.asar package. This is a temporary transition mechanism,
-not the long-term release model. Future releases are being prepared for managed
-Authenticode signing.
+This 1.0.x release is built directly from source and is a packaging hotfix
+over 1.0.7 (split-archive robustness); it is NOT Authenticode-signed. This is
+a temporary transition state, not the long-term release model. Future
+releases are being prepared for managed Authenticode signing.
 
 Never disable Microsoft Defender, SmartScreen or Smart App Control and never
 add a Defender exclusion for this app. Do not run files whose signature or

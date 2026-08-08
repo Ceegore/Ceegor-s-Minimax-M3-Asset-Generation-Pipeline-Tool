@@ -251,7 +251,9 @@ function printPrivilegeFix() {
 
   // Keep the end-user license and third-party obligations visible next to
   // the executable instead of burying them inside app.asar.
-  for (const name of ['START HERE.txt', 'Install MiniMax Asset Tool.cmd', 'README.md', 'LICENSE', 'THIRD_PARTY_NOTICES.md']) {
+  // A-028: verify-install.* ships the self-check that tells users exactly
+  // which files are missing when a split part was not extracted.
+  for (const name of ['START HERE.txt', 'Install MiniMax Asset Tool.cmd', 'README.md', 'LICENSE', 'THIRD_PARTY_NOTICES.md', 'verify-install.cmd', 'verify-install.ps1']) {
     const source = path.join(ROOT, name);
     if (!fs.existsSync(source)) fail(`required end-user file is missing: ${name}`);
     await fsp.copyFile(source, path.join(UNPACKED, name));
@@ -467,6 +469,41 @@ function printPrivilegeFix() {
           if (e.isDirectory()) walk(p); else files.push(p);
         }
       })(STAGE);
+      // A-028 (v1.0.7 extraction incident): when Chromium's startup files
+      // land in a LATER part, extracting only part1 yields an executable
+      // that dies silently ("Error loading V8 startup snapshot file") with
+      // no dialog at all. Pin every boot-critical file to the FIRST part so
+      // a part1-only extraction can still boot and show the app; the
+      // greedy packer fills partition 0 in list order, so pinned files are
+      // sorted to the front.
+      const BOOT_CRITICAL_PART1 = new Set([
+        'MiniMaxAssetTool.exe',
+        'resources.pak',
+        'snapshot_blob.bin',
+        'v8_context_snapshot.bin',
+        'chrome_100_percent.pak',
+        'chrome_200_percent.pak',
+        'icudtl.dat',
+        'd3dcompiler_47.dll',
+        'ffmpeg.dll',
+        'libEGL.dll',
+        'libGLESv2.dll',
+        'dxcompiler.dll',
+        'dxil.dll',
+        'vk_swiftshader.dll',
+        'vk_swiftshader_icd.json',
+        'vulkan-1.dll',
+        'resources/app.asar',
+        'FILES.sha256',
+        'verify-install.cmd',
+        'verify-install.ps1',
+      ].map((r) => r.split('/').join(path.sep)));
+      const relOf = (f) => path.relative(STAGE, f);
+      files.sort((a, b) => {
+        const pa = BOOT_CRITICAL_PART1.has(relOf(a)) ? 0 : 1;
+        const pb = BOOT_CRITICAL_PART1.has(relOf(b)) ? 0 : 1;
+        return pa - pb;
+      });
       const partitions = [[]];
       let partSize = 0;
       for (const f of files) {
@@ -484,6 +521,16 @@ function printPrivilegeFix() {
         }
         partitions[partitions.length - 1].push(f);
         partSize += size;
+      }
+      // A-028: fail-closed proof that the boot-critical files really live
+      // in part1. Without this assertion a future layout change could
+      // silently reintroduce the silent-crash extraction trap.
+      const part1Rels = new Set(partitions[0].map(relOf));
+      for (const must of ['MiniMaxAssetTool.exe', 'snapshot_blob.bin', 'v8_context_snapshot.bin', 'resources.pak']) {
+        if (fs.existsSync(path.join(STAGE, must)) && !part1Rels.has(must)) {
+          try { fs.renameSync(STAGE, UNPACKED); } catch (_) { /* best-effort */ }
+          fail(`boot-critical file ${must} was not placed in part1 — refusing to ship a silent-crash extraction trap (A-028).`);
+        }
       }
       for (let i = 0; i < partitions.length; i++) {
         const partPath = path.join(DIST, `${BASE_NAME}.part${i + 1}.zip`);
