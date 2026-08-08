@@ -293,6 +293,7 @@ function printPrivilegeFix() {
   // binary fails to start on a clean machine.
   const SHIP_ENTRIES = [
     'models',
+    'ffprobe.exe',
     'realesrgan-ncnn-vulkan.exe',
     'realesrgan-ncnn-vulkan',
     'vcomp140.dll',
