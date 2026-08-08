@@ -1,0 +1,453 @@
+# .github/workflows/release-108.yml
+# ============================================================================
+# One-time hotfix workflow (ABWEICHUNG A-028): release 1.0.8, the packaging
+# fix over 1.0.7 after the split-archive extraction incident (silent
+# "Error loading V8 startup snapshot file" crash when part2 was not
+# extracted).
+#
+# Properties:
+#   - workflow_dispatch ONLY — no tag trigger, no automatic publication.
+#   - Version input is locked to 1.0.8; any other value refuses to run.
+#   - Qualification and candidate creation are SEPARATE jobs.
+#   - The candidate is published as an immutable workflow artifact; the
+#     publication job ships EXACTLY that tested artifact — nothing else.
+#   - Publication is gated on the protected `legacy-publication`
+#     environment (required reviewer).
+#   - Built DIRECTLY FROM SOURCE (electron-builder), no shell composition.
+#   - Integrity = SHA-256 inventory manifest + detached Minisign signature +
+#     provenance + SBOM. This workflow makes NO Authenticode claim.
+#   - A-028 extra gates: part1 boot-file invariant and a clean-extract boot
+#     test that exercises the EXACT end-user path (extract every part into
+#     one folder, run the shipped self-check, start the EXE).
+#   - All actions are pinned to full commit SHAs; minimal token permissions.
+# ============================================================================
+
+name: release-108-hotfix
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Release version — locked to 1.0.8 for this one-time workflow'
+        required: true
+        type: string
+        default: '1.0.8'
+
+permissions: {}
+
+concurrency:
+  group: release-108-hotfix
+  cancel-in-progress: false
+
+env:
+  LOCKED_VERSION: '1.0.8'
+
+jobs:
+  # --------------------------------------------------------------------------
+  # Job 1: full qualification gate inventory (parity with the v1.0.7 run).
+  # --------------------------------------------------------------------------
+  qualify:
+    name: Qualification gates
+    if: inputs.version == '1.0.8'
+    runs-on: windows-latest
+    timeout-minutes: 420
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c08 # v6
+        with:
+          node-version: '22'
+          cache: 'npm'
+
+      - name: Version lock (input AND package.json must be 1.0.8)
+        run: |
+          node -e "const v=require('./package.json').version; if(v!=='${{ env.LOCKED_VERSION }}'){console.error('package.json version '+v+' != ${{ env.LOCKED_VERSION }}');process.exit(1)}"
+
+      # The pathUtils symlink tests require the Windows symlink privilege.
+      # Hosted runners ship WITHOUT Developer Mode; enable it via registry
+      # (runners run as admin). Nothing is weakened: the next step
+      # fail-closes if the capability is still absent.
+      - name: Enable Windows Developer Mode (grants symlink privilege)
+        run: |
+          $key = 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\AppModelUnlock'
+          if (-not (Test-Path $key)) { New-Item -Path $key -Force | Out-Null }
+          New-ItemProperty -Path $key -Name AllowDevelopmentWithoutDevLicense -Value 1 -PropertyType DWord -Force | Out-Null
+          Write-Host 'Developer Mode registry value set.'
+
+      - name: Assert symlink capability (fail-closed — no silent test skips)
+        run: |
+          node -e "const fs=require('fs'),os=require('os'),p=require('path');const t=fs.mkdtempSync(p.join(os.tmpdir(),'ci-symlink-'));try{fs.symlinkSync(t,p.join(t,'l'),'dir');console.log('symlink capability present')}catch(e){console.error('symlink capability ABSENT: '+e.message);process.exit(1)}finally{try{fs.rmSync(t,{recursive:true,force:true})}catch{}}"
+
+      - name: Clean tree guard
+        run: git status --short; if ((git status --porcelain | Measure-Object -Line).Lines -ne 0) { throw 'Worktree is not clean.' }
+
+      - name: Install dependencies
+        run: npm ci
+
+      # A-020: npm ci can leave node_modules/electron INCOMPLETE. Fail-closed
+      # probe with ONE deterministic repair.
+      - name: Assert Electron install integrity (A-020)
+        run: |
+          $probe = { node -e "require('electron')" 2>&1 }
+          $out = & $probe
+          if ($LASTEXITCODE -eq 0) { exit 0 }
+          Write-Host 'Electron install probe failed - running one deterministic repair:'
+          Write-Host $out
+          node node_modules/electron/install.js
+          if ($LASTEXITCODE -ne 0) { throw 'Electron repair install failed.' }
+          node -e "require('electron')"
+          if ($LASTEXITCODE -ne 0) { throw 'Electron is still broken after the repair attempt - refusing to run the gates on a damaged dependency install.' }
+          Write-Host 'Electron install repaired successfully.'
+
+      # Q-002: provision the curated, lock-file-pinned ffprobe.exe and
+      # re-verify it against the independent runtime-assets.json SHA-256 pin.
+      - name: Provision curated ffprobe.exe (hash-pinned)
+        run: |
+          $src = Join-Path 'node_modules' '@ffprobe-installer/win32-x64/ffprobe.exe'
+          if (-not (Test-Path -LiteralPath $src)) { throw 'lock-pinned @ffprobe-installer binary not found after npm ci' }
+          $expected = (Get-Content scripts/runtime-assets.json -Raw | ConvertFrom-Json).assets | Where-Object { $_.path -eq 'ffprobe.exe' } | Select-Object -First 1
+          if (-not $expected) { throw 'ffprobe.exe pin missing from scripts/runtime-assets.json' }
+          $actual = Get-FileHash -Algorithm SHA256 -LiteralPath $src
+          if ($actual.Hash.ToLowerInvariant() -ne $expected.sha256.ToLowerInvariant()) {
+            throw ('ffprobe.exe SHA-256 mismatch: expected ' + $expected.sha256 + ', got ' + $actual.Hash)
+          }
+          if ((Get-Item -LiteralPath $src).Length -ne $expected.bytes) {
+            throw 'ffprobe.exe byte-size mismatch against scripts/runtime-assets.json'
+          }
+          New-Item -ItemType Directory -Path bin -Force | Out-Null
+          Copy-Item -LiteralPath $src -Destination (Join-Path 'bin' 'ffprobe.exe') -Force
+          Write-Host ('curated ffprobe.exe provisioned, sha256=' + $actual.Hash)
+
+      - name: Setup offline runtime (downloads, staged activation)
+        run: npm run setup
+
+      - name: Verify offline runtime (size + SHA-256)
+        run: npm run check
+
+      - name: Dependency drift check
+        run: npm run check:deps
+
+      - name: Architecture lint
+        run: npm run lint
+
+      - name: Unit tests (with line coverage)
+        run: npm run test:coverage
+
+      - name: Unit coverage gate
+        run: npm run test:coverage:gate -- --threshold=50
+
+      - name: Contract gate (sanctioned skip — see ABWEICHUNG.md A-003)
+        env:
+          MMX_CONTRACT_OPTIONAL: '1'
+        run: npm run test:contract
+
+      - name: IPC coverage gate
+        run: npm run test:ipc-coverage -- --threshold=95
+
+      - name: Mutation battery
+        run: npm run test:mutation
+
+      - name: Flakiness qualification (no release present yet — acceptance phase opted out)
+        env:
+          MMX_CONTRACT_OPTIONAL: '1'
+          FLAKY_SKIP_ACCEPTANCE: '1'
+        run: npm run test:flaky
+
+  # --------------------------------------------------------------------------
+  # Job 2: build the candidate FROM SOURCE, sign, verify, acceptance-test.
+  # --------------------------------------------------------------------------
+  candidate:
+    name: Build + sign + verify candidate
+    needs: qualify
+    if: inputs.version == '1.0.8'
+    runs-on: windows-latest
+    timeout-minutes: 180
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c08 # v6
+        with:
+          node-version: '22'
+          cache: 'npm'
+
+      - name: Enable Windows Developer Mode (grants symlink privilege)
+        run: |
+          $key = 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\AppModelUnlock'
+          if (-not (Test-Path $key)) { New-Item -Path $key -Force | Out-Null }
+          New-ItemProperty -Path $key -Name AllowDevelopmentWithoutDevLicense -Value 1 -PropertyType DWord -Force | Out-Null
+          Write-Host 'Developer Mode registry value set.'
+
+      - name: Assert symlink capability (fail-closed)
+        run: |
+          node -e "const fs=require('fs'),os=require('os'),p=require('path');const t=fs.mkdtempSync(p.join(os.tmpdir(),'ci-symlink-'));try{fs.symlinkSync(t,p.join(t,'l'),'dir');console.log('symlink capability present')}catch(e){console.error('symlink capability ABSENT: '+e.message);process.exit(1)}finally{try{fs.rmSync(t,{recursive:true,force:true})}catch{}}"
+
+      - name: Clean tree guard
+        run: git status --short; if ((git status --porcelain | Measure-Object -Line).Lines -ne 0) { throw 'Worktree is not clean.' }
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Assert Electron install integrity (A-020)
+        run: |
+          $probe = { node -e "require('electron')" 2>&1 }
+          $out = & $probe
+          if ($LASTEXITCODE -eq 0) { exit 0 }
+          Write-Host 'Electron install probe failed - running one deterministic repair:'
+          Write-Host $out
+          node node_modules/electron/install.js
+          if ($LASTEXITCODE -ne 0) { throw 'Electron repair install failed.' }
+          node -e "require('electron')"
+          if ($LASTEXITCODE -ne 0) { throw 'Electron is still broken after the repair attempt.' }
+          Write-Host 'Electron install repaired successfully.'
+
+      # Same hash-pinned provisioning as the qualify job (see comment there).
+      - name: Provision curated ffprobe.exe (hash-pinned)
+        run: |
+          $src = Join-Path 'node_modules' '@ffprobe-installer/win32-x64/ffprobe.exe'
+          if (-not (Test-Path -LiteralPath $src)) { throw 'lock-pinned @ffprobe-installer binary not found after npm ci' }
+          $expected = (Get-Content scripts/runtime-assets.json -Raw | ConvertFrom-Json).assets | Where-Object { $_.path -eq 'ffprobe.exe' } | Select-Object -First 1
+          if (-not $expected) { throw 'ffprobe.exe pin missing from scripts/runtime-assets.json' }
+          $actual = Get-FileHash -Algorithm SHA256 -LiteralPath $src
+          if ($actual.Hash.ToLowerInvariant() -ne $expected.sha256.ToLowerInvariant()) {
+            throw ('ffprobe.exe SHA-256 mismatch: expected ' + $expected.sha256 + ', got ' + $actual.Hash)
+          }
+          if ((Get-Item -LiteralPath $src).Length -ne $expected.bytes) {
+            throw 'ffprobe.exe byte-size mismatch against scripts/runtime-assets.json'
+          }
+          New-Item -ItemType Directory -Path bin -Force | Out-Null
+          Copy-Item -LiteralPath $src -Destination (Join-Path 'bin' 'ffprobe.exe') -Force
+          Write-Host ('curated ffprobe.exe provisioned, sha256=' + $actual.Hash)
+
+      - name: Setup offline runtime
+        run: npm run setup
+
+      # Clean-tree re-assertion immediately before the build: anything that
+      # touched the worktree since checkout must stop the release instead of
+      # recording commitDirty=true provenance.
+      - name: Re-assert clean tree before build
+        run: |
+          $dirty = git status --porcelain
+          if ($dirty) { Write-Host $dirty; throw 'Working tree became dirty before the build.' }
+          Write-Host "Clean tree confirmed at $(git rev-parse HEAD)"
+
+      - name: Build the portable release from source
+        run: node scripts/zip-portable.js
+
+      - name: Assert provenance matches the triggering SHA
+        run: |
+          $prov = Get-ChildItem dist-out -Filter *.provenance.json | Select-Object -First 1
+          if (-not $prov) { throw 'Build produced no provenance file.' }
+          $p = Get-Content $prov.FullName -Raw | ConvertFrom-Json
+          if ($p.commitDirty -ne $false) {
+            throw "Provenance records a dirty or unknown build tree (commitDirty=$($p.commitDirty)). Rebuild from a clean worktree."
+          }
+          if ($env:GITHUB_SHA -and $p.commit -and -not ($env:GITHUB_SHA.StartsWith($p.commit))) {
+            throw "Provenance commit ($($p.commit)) does not identify the triggering SHA ($env:GITHUB_SHA)."
+          }
+          Write-Host "Provenance verified: clean build at $($p.commit)"
+
+      # A-028 gate 1 — independent proof (outside zip-portable.js itself)
+      # that the boot-critical Chromium files really live in part1. A future
+      # layout change that reintroduces the silent-crash trap fails here.
+      - name: A-028 part1 boot-file invariant
+        run: |
+          $part1 = Get-ChildItem dist-out -File | Where-Object { $_.Name -match '^MiniMaxAssetTool-.*\.part1\.zip$' } | Select-Object -First 1
+          if (-not $part1) { throw 'part1 archive not found.' }
+          $entries = tar -tf $part1.FullName
+          $prefix = "MiniMaxAssetTool-$env:LOCKED_VERSION-x64/"
+          foreach ($must in @('MiniMaxAssetTool.exe', 'snapshot_blob.bin', 'v8_context_snapshot.bin', 'resources.pak', 'verify-install.cmd', 'verify-install.ps1', 'FILES.sha256')) {
+            if ($entries -notcontains ($prefix + $must)) { throw "A-028 violated: $must is not stored in part1 — a part1-only extraction would silently fail to start." }
+          }
+          Write-Host 'A-028 part1 boot-file invariant holds.'
+
+      # A-028 gate 2 — the EXACT end-user path that failed with v1.0.7:
+      # extract EVERY part into one folder, run the shipped self-check,
+      # start the executable, and prove it stays alive with no fatal crash.
+      - name: A-028 clean-extract boot test (end-user path)
+        run: |
+          $stage = Join-Path $env:RUNNER_TEMP 'a028-boot'
+          if (Test-Path $stage) { Remove-Item $stage -Recurse -Force }
+          New-Item -ItemType Directory -Path $stage -Force | Out-Null
+          $parts = Get-ChildItem dist-out -File | Where-Object { $_.Name -match '^MiniMaxAssetTool-.*\.part\d+\.zip$' } | Sort-Object Name
+          if ($parts.Count -lt 1) { throw 'No part archives found.' }
+          foreach ($p in $parts) {
+            Write-Host ("Extracting " + $p.Name)
+            Expand-Archive -LiteralPath $p.FullName -DestinationPath $stage -Force
+          }
+          $tree = Join-Path $stage ("MiniMaxAssetTool-$env:LOCKED_VERSION-x64")
+          if (-not (Test-Path $tree)) { throw "Expected extracted tree not found: $tree" }
+          # Run the SHIPPED self-check (dogfooding the end-user tooling).
+          powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $tree 'verify-install.ps1')
+          if ($LASTEXITCODE -ne 0) { throw 'The shipped verify-install self-check FAILED on the freshly extracted tree.' }
+          $exe = Join-Path $tree 'MiniMaxAssetTool.exe'
+          $proc = Start-Process -FilePath $exe -WorkingDirectory $tree -PassThru
+          Start-Sleep -Seconds 30
+          $alive = Get-Process -Id $proc.Id -ErrorAction SilentlyContinue
+          $crashLog = Join-Path $tree 'debug.log'
+          $fatals = 0
+          if (Test-Path $crashLog) { $fatals = (Select-String -LiteralPath $crashLog -Pattern 'FATAL' -SimpleMatch | Measure-Object).Count }
+          Stop-Process -Name MiniMaxAssetTool -Force -ErrorAction SilentlyContinue
+          if (-not $alive) { throw 'A-028 boot test FAILED: the freshly extracted executable exited within 30 seconds.' }
+          if ($fatals -gt 0) { throw "A-028 boot test FAILED: debug.log contains $fatals FATAL line(s)." }
+          Write-Host 'A-028 clean-extract boot test passed: executable stayed alive, no FATAL in debug.log.'
+
+      - name: SBOM
+        run: npm run sbom
+
+      - name: Prepare pinned Minisign toolchain
+        env:
+          MINISIGN_KEY_B64: ${{ secrets.MINISIGN_KEY_B64 }}
+          MINISIGN_PUB_KEY: ${{ secrets.MINISIGN_PUB_KEY }}
+        run: .\scripts\prepare-minisign.ps1
+
+      # finalize must run AFTER the toolchain preparation: it fail-closes
+      # without MINISIGN_PUB_PATH and only embeds the verifier SHA-256 pin
+      # when MINISIGN_TOOL_PATH points at the pinned minisign.exe.
+      - name: Finalize release inventory
+        run: npm run finalize:release
+
+      - name: Sign the release inventory (Minisign — integrity only)
+        run: npm run sign:release
+
+      - name: Verify the release (no Authenticode requirement)
+        run: npm run verify:release:legacy
+
+      - name: Acceptance — packaged release boot
+        run: npm run test:packaged:release
+
+      - name: Acceptance — installer
+        run: npm run test:installer
+
+      - name: Acceptance — acceptance suite
+        run: npm run test:acceptance
+
+      - name: Stage the publication inventory
+        run: npm run stage:publication
+
+      - name: Upload the immutable candidate artifact
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: MiniMaxAssetTool-1.0.8-candidate
+          path: dist-out/publication/*
+          if-no-files-found: error
+          retention-days: 90
+
+  # --------------------------------------------------------------------------
+  # Job 3: publication — manual approval via the protected environment, then
+  # ships EXACTLY the tested candidate artifact as release v1.0.8.
+  # --------------------------------------------------------------------------
+  publish:
+    name: Publish v1.0.8 (environment-gated)
+    needs: candidate
+    if: inputs.version == '1.0.8'
+    runs-on: windows-latest
+    timeout-minutes: 90
+    environment: legacy-publication
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c08 # v6
+        with:
+          node-version: '22'
+          cache: 'npm'
+
+      - name: Download EXACTLY the tested candidate artifact
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
+        with:
+          name: MiniMaxAssetTool-1.0.8-candidate
+          path: dist-out
+
+      - name: Prepare pinned Minisign toolchain (verification only)
+        env:
+          MINISIGN_KEY_B64: ${{ secrets.MINISIGN_KEY_B64 }}
+          MINISIGN_PUB_KEY: ${{ secrets.MINISIGN_PUB_KEY }}
+        run: .\scripts\prepare-minisign.ps1
+
+      # A-026 pattern: reconstruct dist-out/win-unpacked from the EXACT
+      # shipped archives so verify:release:legacy checks the tree that users
+      # will actually receive (exe, app.asar hash vs provenance).
+      - name: Reconstruct the tested tree from the shipped archives
+        run: |
+          $stage = Join-Path $env:RUNNER_TEMP 'publish-extract'
+          New-Item -ItemType Directory -Path $stage -Force | Out-Null
+          $parts = Get-ChildItem dist-out -File | Where-Object { $_.Name -match '^MiniMaxAssetTool-.*\.part\d+\.zip$' } | Sort-Object Name
+          if ($parts.Count -eq 0) { throw 'No .partN.zip archives found in the downloaded candidate artifact.' }
+          foreach ($p in $parts) {
+            Write-Host ("Extracting " + $p.Name)
+            Expand-Archive -LiteralPath $p.FullName -DestinationPath $stage -Force
+          }
+          $tree = Join-Path $stage ("MiniMaxAssetTool-" + $env:LOCKED_VERSION + "-x64")
+          if (-not (Test-Path $tree)) { throw "Expected extracted tree not found: $tree" }
+          $dest = Join-Path (Get-Location) 'dist-out\win-unpacked'
+          if (Test-Path $dest) { Remove-Item $dest -Recurse -Force }
+          Move-Item -LiteralPath $tree -Destination $dest
+          $exe = Join-Path $dest 'MiniMaxAssetTool.exe'
+          $asar = Join-Path $dest 'resources\app.asar'
+          if (-not (Test-Path $exe)) { throw 'Reconstruction failed: MiniMaxAssetTool.exe missing from the shipped archives.' }
+          if (-not (Test-Path $asar)) { throw 'Reconstruction failed: resources/app.asar missing from the shipped archives.' }
+          Write-Host 'Reconstructed dist-out\win-unpacked from the exact shipped archives.'
+
+      - name: Verify the staged publication before shipping
+        run: npm run verify:release:legacy
+
+      - name: Write the release notes
+        run: |
+          @'
+          # MiniMax Asset Tool 1.0.8 — packaging hotfix over 1.0.7
+
+          Same application as 1.0.7. This release fixes the split-archive
+          packaging problem that made some v1.0.7 installations fail to start
+          silently: if the second archive (part2.zip) was not extracted, the
+          executable died at startup with no error dialog.
+
+          ## Download and install (please read carefully)
+
+          1. Download ALL files of this release: every part archive
+             (.part1.zip, .part2.zip), the .sha256 manifest, the
+             .sha256.minisig signature, minisign.pub, minisign.exe, and
+             Install-MiniMax-Asset-Tool.cmd.
+          2. Option A (recommended): run Install-MiniMax-Asset-Tool.cmd.
+             It verifies the signature and every file before installing.
+          3. Option B (portable): extract EVERY part archive into the SAME
+             folder, open the resulting MiniMaxAssetTool-1.0.8-x64 folder,
+             and run verify-install.cmd. Only when it reports OK, start
+             MiniMaxAssetTool.exe.
+
+          If the application does not start and shows no error, run
+          verify-install.cmd — it names exactly which files are missing
+          (almost always a part archive that was not extracted).
+
+          ## Signing status
+
+          This release is NOT Authenticode-signed. Integrity is protected by
+          SHA-256 inventory manifests, a detached Minisign signature, build
+          provenance, and an SBOM. Do not disable Microsoft Defender,
+          SmartScreen, Smart App Control, or add antivirus exclusions.
+          Download only from this repository and verify the published files.
+          '@ | Set-Content -Path release-notes.md -Encoding utf8
+
+      - name: Create the immutable release v1.0.8 with the exact tested files
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create v${{ env.LOCKED_VERSION }} --repo ${{ github.repository }} `
+            --target ${{ github.sha }} `
+            --title 'MiniMax Asset Tool v1.0.8 — split-archive packaging hotfix' `
+            --notes-file release-notes.md `
+            (Get-ChildItem dist-out -File | ForEach-Object { $_.FullName })
+
+      - name: Post-publication verification (re-download + Minisign)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          New-Item -ItemType Directory -Path redownload | Out-Null
+          gh release download v${{ env.LOCKED_VERSION }} --repo ${{ github.repository }} --dir redownload
+          & $env:MINISIGN_TOOL_PATH -V -m redownload/MiniMaxAssetTool-1.0.8-x64.sha256 -p $env:MINISIGN_PUB_PATH -x redownload/MiniMaxAssetTool-1.0.8-x64.sha256.minisig
+          if ($LASTEXITCODE -ne 0) { throw 'Re-downloaded manifest failed Minisign verification.' }
+          Write-Host 'Post-publication verification passed: manifest signature valid against the pinned key.'
